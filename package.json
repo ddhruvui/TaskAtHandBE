@@ -1,0 +1,34 @@
+{
+  "name": "taskathandbe",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "USE_TEST_DB=true NODE_ENV=test jest --runInBand --detectOpenHandles --forceExit",
+    "test:watch": "USE_TEST_DB=true NODE_ENV=test jest --watch --runInBand"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ddhruvui/TaskAtHandBE.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ddhruvui/TaskAtHandBE/issues"
+  },
+  "homepage": "https://github.com/ddhruvui/TaskAtHandBE#readme",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "mongodb": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.3.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
+  }
+}
