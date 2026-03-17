@@ -7,6 +7,7 @@ const {
   updateTask,
   deleteTask,
   getTaskCount,
+  deleteAllDoneTasks,
 } = require("../controllers/taskController");
 
 /**
@@ -22,6 +23,13 @@ router.get("/", getAllTasks);
  * @access  Public
  */
 router.get("/count", getTaskCount);
+
+/**
+ * @route   DELETE /api/tasks/chron
+ * @desc    Delete all done tasks (for cron job cleanup)
+ * @access  Public
+ */
+router.delete("/chron", deleteAllDoneTasks);
 
 /**
  * @route   GET /api/tasks/:id

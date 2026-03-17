@@ -221,6 +221,29 @@ const getTaskCount = async (req, res) => {
   }
 };
 
+/**
+ * Delete all done tasks (for cron job)
+ * @route DELETE /api/tasks/chron
+ */
+const deleteAllDoneTasks = async (req, res) => {
+  try {
+    const result = await Task.deleteAllDone();
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      movedCount: result.movedCount,
+      message: `Successfully deleted ${result.deletedCount} done task(s) and moved ${result.movedCount} overdue task(s) to lowest priority`,
+    });
+  } catch (error) {
+    console.error("Error deleting done tasks:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete done tasks",
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllTasks,
   getTaskById,
@@ -228,4 +251,5 @@ module.exports = {
   updateTask,
   deleteTask,
   getTaskCount,
+  deleteAllDoneTasks,
 };

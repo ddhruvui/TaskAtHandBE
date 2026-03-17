@@ -198,6 +198,70 @@ class Task {
     const collection = await this.getCollection();
     return await collection.countDocuments();
   }
+
+  /**
+   * Delete all done tasks and reorder priorities
+   * Also moves tasks with ECD = today to lowest priority
+   * @returns {Promise<Object>} Object containing deletedCount and movedCount
+   */
+  static async deleteAllDone() {
+    const collection = await this.getCollection();
+
+    // Delete all tasks where done is true
+    const result = await collection.deleteMany({ done: true });
+
+    // Get all remaining tasks
+    const remainingTasks = await collection
+      .find({})
+      .sort({ priority: 1 })
+      .toArray();
+
+    if (remainingTasks.length > 0) {
+      // Get today's date as a string in YYYY-MM-DD format
+      const today = new Date();
+      const todayStr = today.toISOString().split("T")[0];
+
+      // Separate tasks: tasks with ecd = today go to the end
+      const normalTasks = [];
+      const overdueToday = [];
+
+      remainingTasks.forEach((task) => {
+        if (task.ecd && !task.done) {
+          const taskEcd = new Date(task.ecd);
+          const taskEcdStr = taskEcd.toISOString().split("T")[0];
+
+          // Check if ecd is today
+          if (taskEcdStr === todayStr) {
+            overdueToday.push(task);
+          } else {
+            normalTasks.push(task);
+          }
+        } else {
+          normalTasks.push(task);
+        }
+      });
+
+      // Combine: normal tasks first, then tasks with ecd = today
+      const reorderedTasks = [...normalTasks, ...overdueToday];
+
+      // Update priorities to be sequential
+      const bulkOps = reorderedTasks.map((task, index) => ({
+        updateOne: {
+          filter: { _id: task._id },
+          update: { $set: { priority: index } },
+        },
+      }));
+
+      await collection.bulkWrite(bulkOps);
+
+      return {
+        deletedCount: result.deletedCount,
+        movedCount: overdueToday.length,
+      };
+    }
+
+    return { deletedCount: result.deletedCount, movedCount: 0 };
+  }
 }
 
 module.exports = Task;
