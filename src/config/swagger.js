@@ -7,7 +7,7 @@ const options = {
       title: "TaskAtHand API",
       version: "1.0.0",
       description:
-        "A comprehensive task management API supporting todos, habits, and office tasks with priority management.",
+        "A comprehensive task management API supporting todos, habits, office tasks, dreams, and work on dreams with priority management.",
       contact: {
         name: "TaskAtHand Team",
       },
@@ -34,6 +34,14 @@ const options = {
       {
         name: "Office",
         description: "Office task management endpoints",
+      },
+      {
+        name: "Dreams",
+        description: "Dream tracking and management endpoints",
+      },
+      {
+        name: "WorkOnDreams",
+        description: "Work on dreams tracking and management endpoints",
       },
       {
         name: "System",
@@ -156,6 +164,102 @@ const options = {
               type: "string",
               description: "Additional notes or details",
               example: "Include sales data from Q1",
+            },
+            priority: {
+              type: "number",
+              description: "Priority order (0-based, lower is higher priority)",
+              example: 0,
+            },
+            done: {
+              type: "boolean",
+              description: "Completion status",
+              example: false,
+            },
+            ecd: {
+              type: "string",
+              format: "date-time",
+              description: "Expected Completion Date",
+              example: "2026-03-20T00:00:00.000Z",
+              nullable: true,
+            },
+            createdAt: {
+              type: "string",
+              format: "date-time",
+              description: "Creation timestamp",
+            },
+            updatedAt: {
+              type: "string",
+              format: "date-time",
+              description: "Last update timestamp",
+            },
+          },
+        },
+        Dream: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            _id: {
+              type: "string",
+              description: "MongoDB ObjectId",
+              example: "507f1f77bcf86cd799439011",
+            },
+            name: {
+              type: "string",
+              description: "Dream name/title",
+              example: "Build a startup",
+            },
+            notes: {
+              type: "string",
+              description: "Additional notes or details",
+              example: "Focus on AI-powered productivity tools",
+            },
+            priority: {
+              type: "number",
+              description: "Priority order (0-based, lower is higher priority)",
+              example: 0,
+            },
+            done: {
+              type: "boolean",
+              description: "Completion status",
+              example: false,
+            },
+            ecd: {
+              type: "string",
+              format: "date-time",
+              description: "Expected Completion Date",
+              example: "2026-03-20T00:00:00.000Z",
+              nullable: true,
+            },
+            createdAt: {
+              type: "string",
+              format: "date-time",
+              description: "Creation timestamp",
+            },
+            updatedAt: {
+              type: "string",
+              format: "date-time",
+              description: "Last update timestamp",
+            },
+          },
+        },
+        WorkOnDream: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            _id: {
+              type: "string",
+              description: "MongoDB ObjectId",
+              example: "507f1f77bcf86cd799439011",
+            },
+            name: {
+              type: "string",
+              description: "Work on dream name/title",
+              example: "Research market opportunities",
+            },
+            notes: {
+              type: "string",
+              description: "Additional notes or details",
+              example: "Analyze competitor landscape",
             },
             priority: {
               type: "number",

@@ -11,11 +11,13 @@ describe("Collections Independence Tests", () => {
     await db.collection("Office-Test").deleteMany({});
     await db.collection("Habbit-Test").deleteMany({});
     await db.collection("Todo-Test").deleteMany({});
+    await db.collection("Dream-Test").deleteMany({});
+    await db.collection("WorkOnDream-Test").deleteMany({});
     console.log("Collections Test: All test collections cleared");
   });
 
   describe("Collection Isolation", () => {
-    let taskId, habbitId, todoId;
+    let taskId, habbitId, todoId, dreamId, workOnDreamId;
 
     test("should create a task in Office collection", async () => {
       const response = await request(app)
@@ -50,6 +52,28 @@ describe("Collections Independence Tests", () => {
       todoId = response.body.data._id;
     });
 
+    test("should create a dream in Dream collection", async () => {
+      const response = await request(app)
+        .post("/api/dreams")
+        .send({ name: "Dream Item" })
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.name).toBe("Dream Item");
+      dreamId = response.body.data._id;
+    });
+
+    test("should create a work on dream in WorkOnDream collection", async () => {
+      const response = await request(app)
+        .post("/api/workondreams")
+        .send({ name: "WorkOnDream Item" })
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.name).toBe("WorkOnDream Item");
+      workOnDreamId = response.body.data._id;
+    });
+
     test("should have only 1 task in Office collection", async () => {
       const response = await request(app).get("/api/office").expect(200);
 
@@ -74,16 +98,38 @@ describe("Collections Independence Tests", () => {
       expect(response.body.data[0].name).toBe("Todo Item");
     });
 
+    test("should have only 1 dream in Dream collection", async () => {
+      const response = await request(app).get("/api/dreams").expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.count).toBe(1);
+      expect(response.body.data[0].name).toBe("Dream Item");
+    });
+
+    test("should have only 1 work on dream in WorkOnDream collection", async () => {
+      const response = await request(app).get("/api/workondreams").expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.count).toBe(1);
+      expect(response.body.data[0].name).toBe("WorkOnDream Item");
+    });
+
     test("should verify test collection names are being used", async () => {
       const db = await getDatabase();
 
       const taskCount = await db.collection("Office-Test").countDocuments();
       const habbitCount = await db.collection("Habbit-Test").countDocuments();
       const todoCount = await db.collection("Todo-Test").countDocuments();
+      const dreamCount = await db.collection("Dream-Test").countDocuments();
+      const workOnDreamCount = await db
+        .collection("WorkOnDream-Test")
+        .countDocuments();
 
       expect(taskCount).toBe(1);
       expect(habbitCount).toBe(1);
       expect(todoCount).toBe(1);
+      expect(dreamCount).toBe(1);
+      expect(workOnDreamCount).toBe(1);
     });
   });
 
@@ -94,6 +140,8 @@ describe("Collections Independence Tests", () => {
       await db.collection("Office-Test").deleteMany({});
       await db.collection("Habbit-Test").deleteMany({});
       await db.collection("Todo-Test").deleteMany({});
+      await db.collection("Dream-Test").deleteMany({});
+      await db.collection("WorkOnDream-Test").deleteMany({});
     });
 
     describe("Tasks CRUD", () => {
@@ -154,6 +202,70 @@ describe("Collections Independence Tests", () => {
 
         // Verify deletion
         const allRes = await request(app).get("/api/habbits").expect(200);
+        expect(allRes.body.count).toBe(0);
+      });
+    });
+
+    describe("Dreams CRUD", () => {
+      test("should perform full CRUD cycle on dreams", async () => {
+        // Create
+        const createRes = await request(app)
+          .post("/api/dreams")
+          .send({ name: "Test Dream", notes: "Notes" })
+          .expect(201);
+        const dreamId = createRes.body.data._id;
+
+        // Read
+        const readRes = await request(app)
+          .get(`/api/dreams/${dreamId}`)
+          .expect(200);
+        expect(readRes.body.data.name).toBe("Test Dream");
+
+        // Update
+        const updateRes = await request(app)
+          .put(`/api/dreams/${dreamId}`)
+          .send({ name: "Updated Dream" })
+          .expect(200);
+        expect(updateRes.body.data.name).toBe("Updated Dream");
+
+        // Delete
+        await request(app).delete(`/api/dreams/${dreamId}`).expect(200);
+
+        // Verify deletion
+        const allRes = await request(app).get("/api/dreams").expect(200);
+        expect(allRes.body.count).toBe(0);
+      });
+    });
+
+    describe("WorkOnDreams CRUD", () => {
+      test("should perform full CRUD cycle on work on dreams", async () => {
+        // Create
+        const createRes = await request(app)
+          .post("/api/workondreams")
+          .send({ name: "Test WorkOnDream", notes: "Notes" })
+          .expect(201);
+        const workOnDreamId = createRes.body.data._id;
+
+        // Read
+        const readRes = await request(app)
+          .get(`/api/workondreams/${workOnDreamId}`)
+          .expect(200);
+        expect(readRes.body.data.name).toBe("Test WorkOnDream");
+
+        // Update
+        const updateRes = await request(app)
+          .put(`/api/workondreams/${workOnDreamId}`)
+          .send({ name: "Updated WorkOnDream" })
+          .expect(200);
+        expect(updateRes.body.data.name).toBe("Updated WorkOnDream");
+
+        // Delete
+        await request(app)
+          .delete(`/api/workondreams/${workOnDreamId}`)
+          .expect(200);
+
+        // Verify deletion
+        const allRes = await request(app).get("/api/workondreams").expect(200);
         expect(allRes.body.count).toBe(0);
       });
     });
