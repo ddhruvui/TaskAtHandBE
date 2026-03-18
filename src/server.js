@@ -40,6 +40,8 @@ app.get("/health", (req, res) => {
 
 // Import and use routes
 app.use("/api/tasks", require("./routes/taskRoutes"));
+app.use("/api/habbits", require("./routes/habbitRoutes"));
+app.use("/api/todos", require("./routes/todoRoutes"));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

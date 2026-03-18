@@ -1,17 +1,17 @@
 const { getDatabase } = require("../config/db");
 
-class Task {
+class Todo {
   /**
-   * Get the tasks collection for the current environment
+   * Get the todos collection for the current environment
    * @returns {Promise<Collection>} MongoDB collection
    */
   static async getCollection() {
     // Get the TaskAtHand database
     const db = await getDatabase();
 
-    // Use 'Office-Test' collection for tests, 'Office' for production
+    // Use 'Todo-Test' collection for tests, 'Todo' for production
     const useTestDB = process.env.USE_TEST_DB === "true";
-    const collectionName = useTestDB ? "Office-Test" : "Office";
+    const collectionName = useTestDB ? "Todo-Test" : "Todo";
 
     console.log(
       `Using collection: ${collectionName} (USE_TEST_DB=${process.env.USE_TEST_DB})`,
@@ -20,8 +20,8 @@ class Task {
   }
 
   /**
-   * Get all tasks sorted by priority
-   * @returns {Promise<Array>} Array of tasks
+   * Get all todos sorted by priority
+   * @returns {Promise<Array>} Array of todos
    */
   static async findAll() {
     const collection = await this.getCollection();
@@ -29,9 +29,9 @@ class Task {
   }
 
   /**
-   * Find a task by ID
-   * @param {ObjectId} id - Task ID
-   * @returns {Promise<Object|null>} Task object or null
+   * Find a todo by ID
+   * @param {ObjectId} id - Todo ID
+   * @returns {Promise<Object|null>} Todo object or null
    */
   static async findById(id) {
     const collection = await this.getCollection();
@@ -40,57 +40,57 @@ class Task {
   }
 
   /**
-   * Create a new task
-   * @param {Object} taskData - Task data (name, notes, done, ecd)
-   * @returns {Promise<Object>} Created task
+   * Create a new todo
+   * @param {Object} todoData - Todo data (name, notes, done, ecd)
+   * @returns {Promise<Object>} Created todo
    */
-  static async create(taskData) {
+  static async create(todoData) {
     const collection = await this.getCollection();
 
-    // Count undone tasks to insert new task before done tasks
+    // Count undone todos to insert new todo before done todos
     const undoneCount = await collection.countDocuments({ done: false });
 
-    // Shift all done tasks down by 1 to make room for the new task
+    // Shift all done todos down by 1 to make room for the new todo
     await collection.updateMany({ done: true }, { $inc: { priority: 1 } });
 
-    const newTask = {
-      name: taskData.name,
-      notes: taskData.notes || "",
-      priority: undoneCount, // New task gets inserted before done tasks
-      done: taskData.done || false,
-      ecd: taskData.ecd ? new Date(taskData.ecd) : null, // Expected Completion Date
+    const newTodo = {
+      name: todoData.name,
+      notes: todoData.notes || "",
+      priority: undoneCount, // New todo gets inserted before done todos
+      done: todoData.done || false,
+      ecd: todoData.ecd ? new Date(todoData.ecd) : null, // Expected Completion Date
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
-    const result = await collection.insertOne(newTask);
-    return { _id: result.insertedId, ...newTask };
+    const result = await collection.insertOne(newTodo);
+    return { _id: result.insertedId, ...newTodo };
   }
 
   /**
-   * Update a task
-   * @param {ObjectId} id - Task ID
+   * Update a todo
+   * @param {ObjectId} id - Todo ID
    * @param {Object} updateData - Data to update
-   * @returns {Promise<Object|null>} Updated task or null
+   * @returns {Promise<Object|null>} Updated todo or null
    */
   static async update(id, updateData) {
     const collection = await this.getCollection();
     const { ObjectId } = require("mongodb");
 
-    const currentTask = await this.findById(id);
-    if (!currentTask) return null;
+    const currentTodo = await this.findById(id);
+    if (!currentTodo) return null;
 
     const count = await collection.countDocuments();
 
-    // If task is being marked as done and it wasn't done before
-    if (updateData.done === true && currentTask.done === false) {
-      const oldPriority = currentTask.priority;
+    // If todo is being marked as done and it wasn't done before
+    if (updateData.done === true && currentTodo.done === false) {
+      const oldPriority = currentTodo.priority;
       const newPriority = count - 1;
 
-      // Set the task's priority to the last position
+      // Set the todo's priority to the last position
       updateData.priority = newPriority;
 
-      // Reduce priority of all tasks with priority greater than the current task
+      // Reduce priority of all todos with priority greater than the current todo
       // (i.e., shift them up in the list)
       await collection.updateMany(
         {
@@ -99,15 +99,15 @@ class Task {
         { $inc: { priority: -1 } },
       );
     }
-    // If task is being marked as undone and it was done before
-    else if (updateData.done === false && currentTask.done === true) {
-      const oldPriority = currentTask.priority;
+    // If todo is being marked as undone and it was done before
+    else if (updateData.done === false && currentTodo.done === true) {
+      const oldPriority = currentTodo.priority;
       const newPriority = 0;
 
-      // Set the task's priority to the first position
+      // Set the todo's priority to the first position
       updateData.priority = newPriority;
 
-      // Increase priority of all tasks with priority less than the current task
+      // Increase priority of all todos with priority less than the current todo
       // (i.e., shift them down in the list)
       await collection.updateMany(
         {
@@ -116,9 +116,9 @@ class Task {
         { $inc: { priority: 1 } },
       );
     }
-    // If priority is being updated manually, we need to reorder tasks
+    // If priority is being updated manually, we need to reorder todos
     else if (updateData.priority !== undefined) {
-      const oldPriority = currentTask.priority;
+      const oldPriority = currentTodo.priority;
       const newPriority = updateData.priority;
 
       // Validate new priority is within bounds
@@ -126,10 +126,10 @@ class Task {
         throw new Error(`Priority must be between 0 and ${count - 1}`);
       }
 
-      // Reorder other tasks
+      // Reorder other todos
       if (oldPriority !== newPriority) {
         if (newPriority < oldPriority) {
-          // Moving up: shift tasks down
+          // Moving up: shift todos down
           await collection.updateMany(
             {
               priority: { $gte: newPriority, $lt: oldPriority },
@@ -137,7 +137,7 @@ class Task {
             { $inc: { priority: 1 } },
           );
         } else {
-          // Moving down: shift tasks up
+          // Moving down: shift todos up
           await collection.updateMany(
             {
               priority: { $gt: oldPriority, $lte: newPriority },
@@ -163,25 +163,25 @@ class Task {
   }
 
   /**
-   * Delete a task and reorder priorities
-   * @param {ObjectId} id - Task ID
+   * Delete a todo and reorder priorities
+   * @param {ObjectId} id - Todo ID
    * @returns {Promise<boolean>} Success status
    */
   static async delete(id) {
     const collection = await this.getCollection();
     const { ObjectId } = require("mongodb");
 
-    // Get the task to be deleted
-    const task = await this.findById(id);
-    if (!task) return false;
+    // Get the todo to be deleted
+    const todo = await this.findById(id);
+    if (!todo) return false;
 
-    // Delete the task
+    // Delete the todo
     const result = await collection.deleteOne({ _id: new ObjectId(id) });
 
     if (result.deletedCount > 0) {
-      // Reorder priorities: decrement all tasks with priority > deleted task's priority
+      // Reorder priorities: decrement all todos with priority > deleted todo's priority
       await collection.updateMany(
-        { priority: { $gt: task.priority } },
+        { priority: { $gt: todo.priority } },
         { $inc: { priority: -1 } },
       );
       return true;
@@ -191,8 +191,8 @@ class Task {
   }
 
   /**
-   * Get task count
-   * @returns {Promise<number>} Count of tasks
+   * Get todo count
+   * @returns {Promise<number>} Count of todos
    */
   static async count() {
     const collection = await this.getCollection();
@@ -200,57 +200,54 @@ class Task {
   }
 
   /**
-   * Delete all done tasks and reorder priorities
-   * Also moves tasks with ECD = today to lowest priority
+   * Delete all done todos and reorder priorities
+   * Also moves todos with ECD = today to lowest priority
    * @returns {Promise<Object>} Object containing deletedCount and movedCount
    */
   static async deleteAllDone() {
     const collection = await this.getCollection();
 
-    // Delete all tasks where done is true
+    // Delete all todos where done is true
     const result = await collection.deleteMany({ done: true });
 
-    // Get all remaining tasks
-    const remainingTasks = await collection
+    // Get all remaining todos
+    const remainingTodos = await collection
       .find({})
       .sort({ priority: 1 })
       .toArray();
 
-    if (remainingTasks.length > 0) {
-      // Get today's date as a string in YYYY-MM-DD format (local timezone)
+    if (remainingTodos.length > 0) {
+      // Get today's date as a string in YYYY-MM-DD format
       const today = new Date();
-      const year = today.getFullYear();
-      const month = String(today.getMonth() + 1).padStart(2, "0");
-      const day = String(today.getDate()).padStart(2, "0");
-      const todayStr = `${year}-${month}-${day}`;
+      const todayStr = today.toISOString().split("T")[0];
 
-      // Separate tasks: tasks with ecd = today go to the end
-      const normalTasks = [];
+      // Separate todos: todos with ecd = today go to the end
+      const normalTodos = [];
       const overdueToday = [];
 
-      remainingTasks.forEach((task) => {
-        if (task.ecd && !task.done) {
-          const taskEcd = new Date(task.ecd);
-          const taskEcdStr = taskEcd.toISOString().split("T")[0];
+      remainingTodos.forEach((todo) => {
+        if (todo.ecd && !todo.done) {
+          const todoEcd = new Date(todo.ecd);
+          const todoEcdStr = todoEcd.toISOString().split("T")[0];
 
           // Check if ecd is today
-          if (taskEcdStr === todayStr) {
-            overdueToday.push(task);
+          if (todoEcdStr === todayStr) {
+            overdueToday.push(todo);
           } else {
-            normalTasks.push(task);
+            normalTodos.push(todo);
           }
         } else {
-          normalTasks.push(task);
+          normalTodos.push(todo);
         }
       });
 
-      // Combine: normal tasks first, then tasks with ecd = today
-      const reorderedTasks = [...normalTasks, ...overdueToday];
+      // Combine: normal todos first, then todos with ecd = today
+      const reorderedTodos = [...normalTodos, ...overdueToday];
 
       // Update priorities to be sequential
-      const bulkOps = reorderedTasks.map((task, index) => ({
+      const bulkOps = reorderedTodos.map((todo, index) => ({
         updateOne: {
-          filter: { _id: task._id },
+          filter: { _id: todo._id },
           update: { $set: { priority: index } },
         },
       }));
@@ -267,4 +264,4 @@ class Task {
   }
 }
 
-module.exports = Task;
+module.exports = Todo;
