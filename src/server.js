@@ -1,6 +1,8 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const { connectDB } = require("./config/db");
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
 
 // Load environment variables
 dotenv.config();
@@ -25,15 +27,70 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes
+// Swagger Documentation
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customCss: ".swagger-ui .topbar { display: none }",
+    customSiteTitle: "TaskAtHand API Documentation",
+  }),
+);
+
+/**
+ * @openapi
+ * /:
+ *   get:
+ *     tags:
+ *       - System
+ *     summary: API root endpoint
+ *     description: Returns basic API information and status
+ *     responses:
+ *       200:
+ *         description: API is running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: TaskAtHand API is running
+ *                 environment:
+ *                   type: string
+ *                   example: development
+ */
 app.get("/", (req, res) => {
   res.json({
     message: "TaskAtHand API is running",
     environment: process.env.NODE_ENV || "development",
+    docs: "/api-docs",
   });
 });
 
-// Health check endpoint
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags:
+ *       - System
+ *     summary: Health check endpoint
+ *     description: Returns the health status of the API
+ *     responses:
+ *       200:
+ *         description: API is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: ok
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ */
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });

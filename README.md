@@ -76,8 +76,60 @@ npm test
 
 ## API Endpoints
 
-- `GET /` - API welcome message
+### System Endpoints
+
+- `GET /` - API welcome message with documentation link
 - `GET /health` - Health check endpoint
+- `GET /api-docs` - **Interactive Swagger API Documentation**
+
+### Todos
+
+- `GET /api/todos` - Get all todos
+- `GET /api/todos/count` - Get todo count
+- `GET /api/todos/:id` - Get todo by ID
+- `POST /api/todos` - Create new todo
+- `PUT /api/todos/:id` - Update todo
+- `DELETE /api/todos/:id` - Delete todo
+- `DELETE /api/todos/chron` - Delete all done todos
+
+### Habits
+
+- `GET /api/habbits` - Get all habits
+- `GET /api/habbits/count` - Get habit count
+- `GET /api/habbits/:id` - Get habit by ID
+- `POST /api/habbits` - Create new habit
+- `PUT /api/habbits/:id` - Update habit
+- `DELETE /api/habbits/:id` - Delete habit
+- `DELETE /api/habbits/chron` - Delete all done habits
+
+### Office Tasks
+
+- `GET /api/office` - Get all office tasks
+- `GET /api/office/count` - Get office task count
+- `GET /api/office/:id` - Get office task by ID
+- `POST /api/office` - Create new office task
+- `PUT /api/office/:id` - Update office task
+- `DELETE /api/office/:id` - Delete office task
+- `DELETE /api/office/chron` - Delete all done office tasks
+
+## API Documentation
+
+### Interactive Swagger Documentation
+
+Once the server is running, access the interactive API documentation at:
+
+**http://localhost:5000/api-docs**
+
+The Swagger UI provides:
+
+- Complete API reference with request/response schemas
+- Interactive testing interface (try endpoints directly from browser)
+- Request examples and response samples
+- OpenAPI 3.0 specification
+
+### Quick Reference Guide
+
+For a detailed markdown reference with cURL examples, see [API.md](API.md)
 
 ## Database Usage Example
 
