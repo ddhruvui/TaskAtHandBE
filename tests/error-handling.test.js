@@ -15,7 +15,7 @@ describe("Error Handling & Robustness", () => {
   describe("Malformed Request Bodies", () => {
     test("should handle completely empty request body", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({})
         .expect(400);
 
@@ -25,7 +25,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle request with only whitespace in required field", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "   " })
         .expect(400);
 
@@ -42,7 +42,7 @@ describe("Error Handling & Robustness", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -64,7 +64,7 @@ describe("Error Handling & Robustness", () => {
         },
       };
 
-      const response = await request(app).post("/api/tasks").send(taskData);
+      const response = await request(app).post("/api/office").send(taskData);
 
       // Should handle gracefully (either ignore or reject)
       expect([201, 400, 500]).toContain(response.status);
@@ -74,21 +74,21 @@ describe("Error Handling & Robustness", () => {
   describe("Invalid MongoDB ObjectId Formats", () => {
     test("should return 500 for invalid ObjectId format", async () => {
       const response = await request(app)
-        .get("/api/tasks/invalid-id-format")
+        .get("/api/office/invalid-id-format")
         .expect(500);
 
       expect(response.body.success).toBe(false);
     });
 
     test("should return 500 for too short ObjectId", async () => {
-      const response = await request(app).get("/api/tasks/123").expect(500);
+      const response = await request(app).get("/api/office/123").expect(500);
 
       expect(response.body.success).toBe(false);
     });
 
     test("should return 500 for ObjectId with invalid characters", async () => {
       const response = await request(app)
-        .get("/api/tasks/zzzzzzzzzzzzzzzzzzzzzzz")
+        .get("/api/office/zzzzzzzzzzzzzzzzzzzzzzz")
         .expect(500);
 
       expect(response.body.success).toBe(false);
@@ -96,7 +96,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should return 404 for valid format but non-existent task", async () => {
       const response = await request(app)
-        .get("/api/tasks/507f1f77bcf86cd799439011")
+        .get("/api/office/507f1f77bcf86cd799439011")
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -105,7 +105,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle invalid ObjectId in UPDATE", async () => {
       const response = await request(app)
-        .put("/api/tasks/invalid-id")
+        .put("/api/office/invalid-id")
         .send({ name: "Updated" })
         .expect(500);
 
@@ -114,7 +114,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle invalid ObjectId in DELETE", async () => {
       const response = await request(app)
-        .delete("/api/tasks/invalid-id")
+        .delete("/api/office/invalid-id")
         .expect(500);
 
       expect(response.body.success).toBe(false);
@@ -126,14 +126,14 @@ describe("Error Handling & Robustness", () => {
 
     beforeAll(async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task for error tests" });
       taskId = response.body.data._id;
     });
 
     test("should reject empty update (no fields)", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({})
         .expect(400);
 
@@ -143,7 +143,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should reject update with only invalid fields", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ invalidField: "value" })
         .expect(400);
 
@@ -152,7 +152,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should reject negative priority", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ priority: -1 })
         .expect(400);
 
@@ -164,7 +164,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should reject non-numeric priority", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ priority: "high" })
         .expect(400);
 
@@ -173,7 +173,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should reject priority out of bounds", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ priority: 9999 })
         .expect(400);
 
@@ -185,7 +185,7 @@ describe("Error Handling & Robustness", () => {
   describe("Content-Type Handling", () => {
     test("should handle missing Content-Type header", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .set("Content-Type", "")
         .send({ name: "Test" });
 
@@ -195,7 +195,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should accept application/json content type", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .set("Content-Type", "application/json")
         .send({ name: "JSON Test" })
         .expect(201);
@@ -207,7 +207,7 @@ describe("Error Handling & Robustness", () => {
   describe("Error Message Consistency", () => {
     test("should return consistent error format for validation errors", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "" })
         .expect(400);
 
@@ -219,7 +219,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should return consistent error format for not found errors", async () => {
       const response = await request(app)
-        .get("/api/tasks/507f1f77bcf86cd799439011")
+        .get("/api/office/507f1f77bcf86cd799439011")
         .expect(404);
 
       expect(response.body).toHaveProperty("success");
@@ -229,7 +229,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should return consistent error format for server errors", async () => {
       const response = await request(app)
-        .get("/api/tasks/invalid-id")
+        .get("/api/office/invalid-id")
         .expect(500);
 
       expect(response.body).toHaveProperty("success");
@@ -247,7 +247,7 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle GET on non-existent task route", async () => {
       const response = await request(app)
-        .get("/api/tasks/random/extra/path")
+        .get("/api/office/random/extra/path")
         .expect(404);
 
       expect(response.body.error).toBe("Route not found");
@@ -259,12 +259,12 @@ describe("Error Handling & Robustness", () => {
       const taskData = { name: "Duplicate Name" };
 
       const response1 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
       const response2 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -274,23 +274,23 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle updating same task multiple times", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Original" });
 
       const taskId = createResponse.body.data._id;
 
       await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Update 1" })
         .expect(200);
 
       await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Update 2" })
         .expect(200);
 
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Final Update" })
         .expect(200);
 
@@ -306,7 +306,7 @@ describe("Error Handling & Robustness", () => {
         notes: largeNotes,
       };
 
-      const response = await request(app).post("/api/tasks").send(taskData);
+      const response = await request(app).post("/api/office").send(taskData);
 
       // Should either accept or reject based on limits
       expect([201, 413, 500]).toContain(response.status);
@@ -316,17 +316,17 @@ describe("Error Handling & Robustness", () => {
   describe("Edge Case Operations", () => {
     test("should handle deleting already deleted task", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "To be deleted" });
 
       const taskId = createResponse.body.data._id;
 
       // First deletion
-      await request(app).delete(`/api/tasks/${taskId}`).expect(200);
+      await request(app).delete(`/api/office/${taskId}`).expect(200);
 
       // Second deletion attempt
       const response = await request(app)
-        .delete(`/api/tasks/${taskId}`)
+        .delete(`/api/office/${taskId}`)
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -334,15 +334,15 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle updating deleted task", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "To be deleted then updated" });
 
       const taskId = createResponse.body.data._id;
 
-      await request(app).delete(`/api/tasks/${taskId}`).expect(200);
+      await request(app).delete(`/api/office/${taskId}`).expect(200);
 
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Updated" })
         .expect(404);
 
@@ -351,15 +351,15 @@ describe("Error Handling & Robustness", () => {
 
     test("should handle getting deleted task", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "To be deleted then fetched" });
 
       const taskId = createResponse.body.data._id;
 
-      await request(app).delete(`/api/tasks/${taskId}`).expect(200);
+      await request(app).delete(`/api/office/${taskId}`).expect(200);
 
       const response = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(404);
 
       expect(response.body.success).toBe(false);

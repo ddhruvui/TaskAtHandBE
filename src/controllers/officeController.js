@@ -1,12 +1,12 @@
-const Task = require("../models/Task");
+const Office = require("../models/Office");
 
 /**
  * Get all tasks
- * @route GET /api/tasks
+ * @route GET /api/office
  */
 const getAllTasks = async (req, res) => {
   try {
-    const tasks = await Task.findAll();
+    const tasks = await Office.findAll();
     res.json({
       success: true,
       count: tasks.length,
@@ -24,11 +24,11 @@ const getAllTasks = async (req, res) => {
 
 /**
  * Get a single task by ID
- * @route GET /api/tasks/:id
+ * @route GET /api/office/:id
  */
 const getTaskById = async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const task = await Office.findById(req.params.id);
 
     if (!task) {
       return res.status(404).json({
@@ -53,7 +53,7 @@ const getTaskById = async (req, res) => {
 
 /**
  * Create a new task
- * @route POST /api/tasks
+ * @route POST /api/office
  */
 const createTask = async (req, res) => {
   try {
@@ -88,7 +88,7 @@ const createTask = async (req, res) => {
       ecd: ecd || null,
     };
 
-    const newTask = await Task.create(taskData);
+    const newTask = await Office.create(taskData);
 
     res.status(201).json({
       success: true,
@@ -107,7 +107,7 @@ const createTask = async (req, res) => {
 
 /**
  * Update a task
- * @route PUT /api/tasks/:id
+ * @route PUT /api/office/:id
  */
 const updateTask = async (req, res) => {
   try {
@@ -138,7 +138,7 @@ const updateTask = async (req, res) => {
       });
     }
 
-    const updatedTask = await Task.update(req.params.id, updateData);
+    const updatedTask = await Office.update(req.params.id, updateData);
 
     if (!updatedTask) {
       return res.status(404).json({
@@ -173,11 +173,11 @@ const updateTask = async (req, res) => {
 
 /**
  * Delete a task
- * @route DELETE /api/tasks/:id
+ * @route DELETE /api/office/:id
  */
 const deleteTask = async (req, res) => {
   try {
-    const success = await Task.delete(req.params.id);
+    const success = await Office.delete(req.params.id);
 
     if (!success) {
       return res.status(404).json({
@@ -202,11 +202,11 @@ const deleteTask = async (req, res) => {
 
 /**
  * Get task count
- * @route GET /api/tasks/count
+ * @route GET /api/office/count
  */
 const getTaskCount = async (req, res) => {
   try {
-    const count = await Task.count();
+    const count = await Office.count();
     res.json({
       success: true,
       count: count,
@@ -223,11 +223,11 @@ const getTaskCount = async (req, res) => {
 
 /**
  * Delete all done tasks (for cron job)
- * @route DELETE /api/tasks/chron
+ * @route DELETE /api/office/chron
  */
 const deleteAllDoneTasks = async (req, res) => {
   try {
-    const result = await Task.deleteAllDone();
+    const result = await Office.deleteAllDone();
     res.json({
       success: true,
       deletedCount: result.deletedCount,

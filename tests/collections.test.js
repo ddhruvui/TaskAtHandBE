@@ -19,7 +19,7 @@ describe("Collections Independence Tests", () => {
 
     test("should create a task in Office collection", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task Item" })
         .expect(201);
 
@@ -51,7 +51,7 @@ describe("Collections Independence Tests", () => {
     });
 
     test("should have only 1 task in Office collection", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.count).toBe(1);
@@ -100,29 +100,29 @@ describe("Collections Independence Tests", () => {
       test("should perform full CRUD cycle on tasks", async () => {
         // Create
         const createRes = await request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({ name: "Test Task", notes: "Notes" })
           .expect(201);
         const taskId = createRes.body.data._id;
 
         // Read
         const readRes = await request(app)
-          .get(`/api/tasks/${taskId}`)
+          .get(`/api/office/${taskId}`)
           .expect(200);
         expect(readRes.body.data.name).toBe("Test Task");
 
         // Update
         const updateRes = await request(app)
-          .put(`/api/tasks/${taskId}`)
+          .put(`/api/office/${taskId}`)
           .send({ name: "Updated Task" })
           .expect(200);
         expect(updateRes.body.data.name).toBe("Updated Task");
 
         // Delete
-        await request(app).delete(`/api/tasks/${taskId}`).expect(200);
+        await request(app).delete(`/api/office/${taskId}`).expect(200);
 
         // Verify deletion
-        const allRes = await request(app).get("/api/tasks").expect(200);
+        const allRes = await request(app).get("/api/office").expect(200);
         expect(allRes.body.count).toBe(0);
       });
     });
@@ -201,11 +201,11 @@ describe("Collections Independence Tests", () => {
     test("should manage priorities independently in each collection", async () => {
       // Create multiple items in each collection
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 1" })
         .expect(201);
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 2" })
         .expect(201);
 
@@ -228,7 +228,7 @@ describe("Collections Independence Tests", () => {
         .expect(201);
 
       // Verify each collection has 2 items
-      const tasksRes = await request(app).get("/api/tasks").expect(200);
+      const tasksRes = await request(app).get("/api/office").expect(200);
       const habbitsRes = await request(app).get("/api/habbits").expect(200);
       const todosRes = await request(app).get("/api/todos").expect(200);
 
@@ -254,10 +254,10 @@ describe("Collections Independence Tests", () => {
     test("should delete done tasks/todos and mark done habbits as undone independently in each collection", async () => {
       // Create done and undone items in each collection
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task Done", done: true });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task Undone", done: false });
 
       await request(app)
@@ -276,7 +276,7 @@ describe("Collections Independence Tests", () => {
 
       // Run chron endpoints
       const taskChron = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
       const habbitChron = await request(app)
         .delete("/api/habbits/chron")
@@ -292,7 +292,7 @@ describe("Collections Independence Tests", () => {
       expect(habbitChron.body.markedUndoneCount).toBe(1);
 
       // Verify results
-      const tasksRes = await request(app).get("/api/tasks").expect(200);
+      const tasksRes = await request(app).get("/api/office").expect(200);
       const habbitsRes = await request(app).get("/api/habbits").expect(200);
       const todosRes = await request(app).get("/api/todos").expect(200);
 

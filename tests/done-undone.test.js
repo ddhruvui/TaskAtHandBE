@@ -12,17 +12,17 @@ describe("Done/Undone Priority Adjustment", () => {
     // Step 1: Create 3 test tasks
     console.log("\n🔨 Creating 3 test tasks...");
     const task1 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 1", notes: "First task" })
       .expect(201);
 
     const task2 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 2", notes: "Second task" })
       .expect(201);
 
     const task3 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 3", notes: "Third task" })
       .expect(201);
 
@@ -31,7 +31,7 @@ describe("Done/Undone Priority Adjustment", () => {
     const taskId3 = task3.body.data._id;
 
     // Get initial priorities
-    const allTasks = await request(app).get("/api/tasks").expect(200);
+    const allTasks = await request(app).get("/api/office").expect(200);
     const totalTasks = allTasks.body.count;
 
     console.log(`✓ Created 3 tasks (Total in DB: ${totalTasks})`);
@@ -48,7 +48,7 @@ describe("Done/Undone Priority Adjustment", () => {
     // Step 2: Mark Task 2 as done (middle task)
     console.log("\n🎯 Marking Task 2 as done...");
     const updatedTask2 = await request(app)
-      .put(`/api/tasks/${taskId2}`)
+      .put(`/api/office/${taskId2}`)
       .send({ done: true })
       .expect(200);
 
@@ -61,7 +61,7 @@ describe("Done/Undone Priority Adjustment", () => {
     );
 
     // Step 3: Verify priority adjustments
-    const updatedTasks = await request(app).get("/api/tasks").expect(200);
+    const updatedTasks = await request(app).get("/api/office").expect(200);
 
     const finalTask1 = updatedTasks.body.data.find((t) => t._id === taskId1);
     const finalTask2 = updatedTasks.body.data.find((t) => t._id === taskId2);
@@ -87,17 +87,17 @@ describe("Done/Undone Priority Adjustment", () => {
     // Step 1: Create 3 test tasks (all initially not done)
     console.log("\n🔨 Creating 3 test tasks...");
     const task1 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task A", notes: "First task" })
       .expect(201);
 
     const task2 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task B", notes: "Second task" })
       .expect(201);
 
     const task3 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task C", notes: "Third task" })
       .expect(201);
 
@@ -110,14 +110,14 @@ describe("Done/Undone Priority Adjustment", () => {
     // Step 2: Mark Task B as done first
     console.log("\n🎯 Marking Task B as done...");
     await request(app)
-      .put(`/api/tasks/${taskIdB}`)
+      .put(`/api/office/${taskIdB}`)
       .send({ done: true })
       .expect(200);
 
     console.log("✓ Task B marked as done");
 
     // Get current state
-    const tasksAfterDone = await request(app).get("/api/tasks").expect(200);
+    const tasksAfterDone = await request(app).get("/api/office").expect(200);
     const totalTasks = tasksAfterDone.body.count;
 
     const taskAAfterDone = tasksAfterDone.body.data.find(
@@ -141,7 +141,7 @@ describe("Done/Undone Priority Adjustment", () => {
     // Step 3: Mark Task B as undone
     console.log("\n🔄 Marking Task B as undone...");
     const updatedTaskB = await request(app)
-      .put(`/api/tasks/${taskIdB}`)
+      .put(`/api/office/${taskIdB}`)
       .send({ done: false })
       .expect(200);
 
@@ -154,7 +154,7 @@ describe("Done/Undone Priority Adjustment", () => {
     );
 
     // Step 4: Verify priority adjustments
-    const finalTasks = await request(app).get("/api/tasks").expect(200);
+    const finalTasks = await request(app).get("/api/office").expect(200);
 
     const finalTaskA = finalTasks.body.data.find((t) => t._id === taskIdA);
     const finalTaskB = finalTasks.body.data.find((t) => t._id === taskIdB);
@@ -180,12 +180,12 @@ describe("Done/Undone Priority Adjustment", () => {
   test("should insert new tasks before done tasks", async () => {
     console.log("\n🔨 Creating 2 initial tasks...");
     const task1 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 1", notes: "First task" })
       .expect(201);
 
     const task2 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 2", notes: "Second task" })
       .expect(201);
 
@@ -197,14 +197,14 @@ describe("Done/Undone Priority Adjustment", () => {
     // Mark Task 2 as done
     console.log("\n🎯 Marking Task 2 as done...");
     await request(app)
-      .put(`/api/tasks/${taskId2}`)
+      .put(`/api/office/${taskId2}`)
       .send({ done: true })
       .expect(200);
 
     console.log("✓ Task 2 marked as done");
 
     // Get current state
-    const beforeNewTask = await request(app).get("/api/tasks").expect(200);
+    const beforeNewTask = await request(app).get("/api/office").expect(200);
     const task1Before = beforeNewTask.body.data.find((t) => t._id === taskId1);
     const task2Before = beforeNewTask.body.data.find((t) => t._id === taskId2);
 
@@ -215,7 +215,7 @@ describe("Done/Undone Priority Adjustment", () => {
     // Create a new task
     console.log("\n➕ Creating new Task 3...");
     const task3 = await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Task 3", notes: "New task" })
       .expect(201);
 
@@ -223,7 +223,7 @@ describe("Done/Undone Priority Adjustment", () => {
     console.log(`✓ Task 3 created with priority: ${task3.body.data.priority}`);
 
     // Get final state
-    const finalTasks = await request(app).get("/api/tasks").expect(200);
+    const finalTasks = await request(app).get("/api/office").expect(200);
     const finalTask1 = finalTasks.body.data.find((t) => t._id === taskId1);
     const finalTask2 = finalTasks.body.data.find((t) => t._id === taskId2);
     const finalTask3 = finalTasks.body.data.find((t) => t._id === taskId3);

@@ -17,35 +17,35 @@ describe("Business Logic Tests", () => {
   describe("Task Counts and Statistics", () => {
     beforeAll(async () => {
       // Create test data: mix of done and undone tasks
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Completed Task 1",
         notes: "This is done",
         done: true,
         ecd: "2026-03-15",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Pending Task 1",
         notes: "Not done yet",
         done: false,
         ecd: "2026-03-25",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Completed Task 2",
         notes: "Also done",
         done: true,
         ecd: "2026-03-10",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Pending Task 2",
         notes: "Still pending",
         done: false,
         ecd: "2026-04-01",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "No ECD Task",
         notes: "Task without deadline",
         done: false,
@@ -53,7 +53,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should get total task count", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.count).toBeGreaterThanOrEqual(5);
@@ -61,7 +61,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should count done vs undone tasks", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const doneTasks = response.body.data.filter((task) => task.done === true);
       const undoneTasks = response.body.data.filter(
@@ -74,7 +74,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should count tasks with and without ECD", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const tasksWithECD = response.body.data.filter(
         (task) => task.ecd !== null,
@@ -102,14 +102,14 @@ describe("Business Logic Tests", () => {
       nextWeek.setDate(nextWeek.getDate() + 7);
 
       // Create overdue tasks (past dates)
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Overdue Task 1",
         ecd: "2026-01-15",
         done: false,
       });
 
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({
           name: "Overdue Task 2",
           ecd: yesterday.toISOString().split("T")[0],
@@ -118,7 +118,7 @@ describe("Business Logic Tests", () => {
 
       // Create upcoming tasks (future dates)
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({
           name: "Due Tomorrow",
           ecd: tomorrow.toISOString().split("T")[0],
@@ -126,7 +126,7 @@ describe("Business Logic Tests", () => {
         });
 
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({
           name: "Due Next Week",
           ecd: nextWeek.toISOString().split("T")[0],
@@ -134,21 +134,21 @@ describe("Business Logic Tests", () => {
         });
 
       // Create completed overdue task (should not count as overdue)
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Completed Overdue",
         ecd: "2026-02-01",
         done: true,
       });
 
       // Create task without ECD
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "No Deadline",
         done: false,
       });
     });
 
     test("should identify overdue tasks (ECD in past and not done)", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -168,7 +168,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should identify upcoming tasks (ECD in future)", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -184,7 +184,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should not count completed tasks as overdue", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -209,25 +209,25 @@ describe("Business Logic Tests", () => {
       await db.collection("Office-Test").deleteMany({});
 
       // Create tasks with different priorities
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Task A",
         notes: "First task",
         ecd: "2026-04-15",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Task B",
         notes: "Second task",
         ecd: "2026-03-20",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Task C",
         notes: "Third task",
         ecd: "2026-05-01",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Task D",
         notes: "Fourth task",
         ecd: "2026-03-18",
@@ -235,7 +235,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should return tasks sorted by priority", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.data.length).toBeGreaterThan(0);
 
@@ -248,7 +248,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should verify priority values are sequential", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const priorities = response.body.data
         .map((task) => task.priority)
@@ -261,7 +261,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should sort tasks by ECD manually", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const tasksWithECD = response.body.data.filter(
         (task) => task.ecd !== null,
@@ -281,7 +281,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should sort tasks by name alphabetically", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const sortedByName = [...response.body.data].sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -302,31 +302,31 @@ describe("Business Logic Tests", () => {
       await db.collection("Office-Test").deleteMany({});
 
       // Create diverse set of tasks
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Done High Priority",
         done: true,
         ecd: "2026-03-20",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Undone High Priority",
         done: false,
         ecd: "2026-03-25",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Done No ECD",
         done: true,
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Undone No ECD",
         done: false,
       });
     });
 
     test("should filter done tasks", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const doneTasks = response.body.data.filter((task) => task.done === true);
 
@@ -337,7 +337,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should filter undone tasks", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const undoneTasks = response.body.data.filter(
         (task) => task.done === false,
@@ -350,7 +350,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should filter tasks with ECD", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const tasksWithECD = response.body.data.filter(
         (task) => task.ecd !== null,
@@ -363,7 +363,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should filter tasks without ECD", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const tasksWithoutECD = response.body.data.filter(
         (task) => task.ecd === null,
@@ -376,7 +376,7 @@ describe("Business Logic Tests", () => {
     });
 
     test("should filter complex condition: undone tasks with ECD", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const undoneWithECD = response.body.data.filter(
         (task) => task.done === false && task.ecd !== null,
@@ -400,7 +400,7 @@ describe("Business Logic Tests", () => {
 
       for (let i = 0; i < 5; i++) {
         const response = await request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({ name: `Sequential Task ${i}` })
           .expect(201);
 
@@ -419,22 +419,22 @@ describe("Business Logic Tests", () => {
 
       // Create 3 tasks
       const task1 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 1" });
       const task2 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 2" });
       const task3 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 3" });
 
       // Mark middle task as done
       await request(app)
-        .put(`/api/tasks/${task2.body.data._id}`)
+        .put(`/api/office/${task2.body.data._id}`)
         .send({ done: true });
 
       // Get all tasks
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       // Verify priorities still make sense
       const priorities = response.body.data
@@ -451,18 +451,18 @@ describe("Business Logic Tests", () => {
       const tasks = [];
       for (let i = 0; i < 4; i++) {
         const response = await request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({ name: `Priority Task ${i}` });
         tasks.push(response.body.data);
       }
 
       // Move last task to first position
       await request(app)
-        .put(`/api/tasks/${tasks[3]._id}`)
+        .put(`/api/office/${tasks[3]._id}`)
         .send({ priority: 0 });
 
       // Get all tasks and verify reordering
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const priorities = response.body.data
         .map((t) => t.priority)
@@ -472,11 +472,11 @@ describe("Business Logic Tests", () => {
   });
 
   describe("Empty Database Scenarios", () => {
-    test("should handle GET /api/tasks when database is empty", async () => {
+    test("should handle GET /api/office when database is empty", async () => {
       const db = await getDatabase();
       await db.collection("Office-Test").deleteMany({});
 
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.count).toBe(0);
@@ -488,7 +488,7 @@ describe("Business Logic Tests", () => {
       await db.collection("Office-Test").deleteMany({});
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "First Ever Task" })
         .expect(201);
 
@@ -505,14 +505,14 @@ describe("Business Logic Tests", () => {
       await db.collection("Office-Test").deleteMany({});
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "State Transition Task", done: false });
       taskId = response.body.data._id;
     });
 
     test("should transition task from undone to done", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ done: true })
         .expect(200);
 
@@ -522,7 +522,7 @@ describe("Business Logic Tests", () => {
 
     test("should transition task from done back to undone", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ done: false })
         .expect(200);
 
@@ -532,10 +532,10 @@ describe("Business Logic Tests", () => {
 
     test("should allow multiple state transitions", async () => {
       // Done -> Undone -> Done
-      await request(app).put(`/api/tasks/${taskId}`).send({ done: true });
-      await request(app).put(`/api/tasks/${taskId}`).send({ done: false });
+      await request(app).put(`/api/office/${taskId}`).send({ done: true });
+      await request(app).put(`/api/office/${taskId}`).send({ done: false });
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ done: true })
         .expect(200);
 

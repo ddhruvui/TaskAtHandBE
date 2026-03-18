@@ -14,7 +14,7 @@ describe("Task CRUD Operations", () => {
     console.log(`CRUD Tests: ${collectionName} collection cleared`);
   });
 
-  describe("CREATE - POST /api/tasks", () => {
+  describe("CREATE - POST /api/office", () => {
     test("should create a task with all fields", async () => {
       const taskData = {
         name: "Test Task",
@@ -24,7 +24,7 @@ describe("Task CRUD Operations", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -41,7 +41,7 @@ describe("Task CRUD Operations", () => {
       const taskData = { name: "Minimal Task" };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -56,7 +56,7 @@ describe("Task CRUD Operations", () => {
       const taskData = { notes: "No name provided" };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(400);
 
@@ -68,7 +68,7 @@ describe("Task CRUD Operations", () => {
       const taskData = { name: "   " };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(400);
 
@@ -80,7 +80,7 @@ describe("Task CRUD Operations", () => {
       const taskData = { name: "  Trimmed Task  " };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -88,9 +88,9 @@ describe("Task CRUD Operations", () => {
     });
   });
 
-  describe("READ - GET /api/tasks", () => {
+  describe("READ - GET /api/office", () => {
     test("should retrieve all tasks", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.count).toBeGreaterThan(0);
@@ -100,7 +100,7 @@ describe("Task CRUD Operations", () => {
     test("should retrieve task by valid ID", async () => {
       // First create a task
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task to retrieve" })
         .expect(201);
 
@@ -108,7 +108,7 @@ describe("Task CRUD Operations", () => {
 
       // Then retrieve it
       const response = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -120,7 +120,7 @@ describe("Task CRUD Operations", () => {
       const fakeId = "507f1f77bcf86cd799439011"; // Valid ObjectId format
 
       const response = await request(app)
-        .get(`/api/tasks/${fakeId}`)
+        .get(`/api/office/${fakeId}`)
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -131,27 +131,27 @@ describe("Task CRUD Operations", () => {
       const invalidId = "invalid-id";
 
       const response = await request(app)
-        .get(`/api/tasks/${invalidId}`)
+        .get(`/api/office/${invalidId}`)
         .expect(500);
 
       expect(response.body.success).toBe(false);
     });
   });
 
-  describe("UPDATE - PUT /api/tasks/:id", () => {
+  describe("UPDATE - PUT /api/office/:id", () => {
     let taskId;
 
     beforeAll(async () => {
       // Create a task to update
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task to update", notes: "Original notes" });
       taskId = response.body.data._id;
     });
 
     test("should update task name", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Updated task name" })
         .expect(200);
 
@@ -161,7 +161,7 @@ describe("Task CRUD Operations", () => {
 
     test("should update task notes", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ notes: "Updated notes" })
         .expect(200);
 
@@ -171,7 +171,7 @@ describe("Task CRUD Operations", () => {
 
     test("should update task done status", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ done: true })
         .expect(200);
 
@@ -187,7 +187,7 @@ describe("Task CRUD Operations", () => {
       };
 
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send(updateData)
         .expect(200);
 
@@ -201,7 +201,7 @@ describe("Task CRUD Operations", () => {
       const fakeId = "507f1f77bcf86cd799439011";
 
       const response = await request(app)
-        .put(`/api/tasks/${fakeId}`)
+        .put(`/api/office/${fakeId}`)
         .send({ name: "Updated name" })
         .expect(404);
 
@@ -211,7 +211,7 @@ describe("Task CRUD Operations", () => {
 
     test("should return 400 when no fields provided", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({})
         .expect(400);
 
@@ -221,7 +221,7 @@ describe("Task CRUD Operations", () => {
 
     test("should return 400 for invalid priority", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ priority: -1 })
         .expect(400);
 
@@ -232,11 +232,11 @@ describe("Task CRUD Operations", () => {
     });
   });
 
-  describe("DELETE - DELETE /api/tasks/:id", () => {
+  describe("DELETE - DELETE /api/office/:id", () => {
     test("should delete an existing task", async () => {
       // Create a task to delete
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task to delete" })
         .expect(201);
 
@@ -244,21 +244,21 @@ describe("Task CRUD Operations", () => {
 
       // Delete the task
       const deleteResponse = await request(app)
-        .delete(`/api/tasks/${taskId}`)
+        .delete(`/api/office/${taskId}`)
         .expect(200);
 
       expect(deleteResponse.body.success).toBe(true);
       expect(deleteResponse.body.message).toContain("deleted successfully");
 
       // Verify task is deleted
-      await request(app).get(`/api/tasks/${taskId}`).expect(404);
+      await request(app).get(`/api/office/${taskId}`).expect(404);
     });
 
     test("should return 404 when deleting non-existent task", async () => {
       const fakeId = "507f1f77bcf86cd799439011";
 
       const response = await request(app)
-        .delete(`/api/tasks/${fakeId}`)
+        .delete(`/api/office/${fakeId}`)
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -268,22 +268,22 @@ describe("Task CRUD Operations", () => {
     test("should reorder priorities after deletion", async () => {
       // Create 3 tasks
       const task1 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Priority Test 1" });
       const task2 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Priority Test 2" });
       const task3 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Priority Test 3" });
 
       // Delete the middle task
       await request(app)
-        .delete(`/api/tasks/${task2.body.data._id}`)
+        .delete(`/api/office/${task2.body.data._id}`)
         .expect(200);
 
       // Get all tasks and verify priorities
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       const priorities = response.body.data.map((task) => task.priority);
       const uniquePriorities = [...new Set(priorities)];
@@ -297,7 +297,7 @@ describe("Task CRUD Operations", () => {
     test("should perform complete CRUD operations on a task", async () => {
       // CREATE
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({
           name: "Workflow Task",
           notes: "Testing complete workflow",
@@ -310,7 +310,7 @@ describe("Task CRUD Operations", () => {
 
       // READ
       const readResponse = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(readResponse.body.data._id).toBe(taskId);
@@ -318,7 +318,7 @@ describe("Task CRUD Operations", () => {
 
       // UPDATE
       const updateResponse = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({
           name: "Updated Workflow Task",
           done: true,
@@ -330,13 +330,13 @@ describe("Task CRUD Operations", () => {
 
       // DELETE
       const deleteResponse = await request(app)
-        .delete(`/api/tasks/${taskId}`)
+        .delete(`/api/office/${taskId}`)
         .expect(200);
 
       expect(deleteResponse.body.success).toBe(true);
 
       // VERIFY DELETION
-      await request(app).get(`/api/tasks/${taskId}`).expect(404);
+      await request(app).get(`/api/office/${taskId}`).expect(404);
     });
   });
 });

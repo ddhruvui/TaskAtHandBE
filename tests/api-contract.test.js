@@ -13,20 +13,20 @@ describe("API Contract & Response Consistency", () => {
 
     // Create some test tasks
     await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Test Task 1", done: false });
     await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Test Task 2", done: true });
     await request(app)
-      .post("/api/tasks")
+      .post("/api/office")
       .send({ name: "Test Task 3", done: false });
   });
 
   describe("Response Structure Consistency", () => {
-    test("POST /api/tasks should return consistent structure", async () => {
+    test("POST /api/office should return consistent structure", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Consistency Test" })
         .expect(201);
 
@@ -49,8 +49,8 @@ describe("API Contract & Response Consistency", () => {
       expect(response.body.data).toHaveProperty("updatedAt");
     });
 
-    test("GET /api/tasks should return consistent structure", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+    test("GET /api/office should return consistent structure", async () => {
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body).toHaveProperty("success");
       expect(response.body).toHaveProperty("count");
@@ -72,15 +72,15 @@ describe("API Contract & Response Consistency", () => {
       }
     });
 
-    test("GET /api/tasks/:id should return consistent structure", async () => {
+    test("GET /api/office/:id should return consistent structure", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Get by ID test" });
 
       const taskId = createResponse.body.data._id;
 
       const response = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(response.body).toHaveProperty("success");
@@ -91,15 +91,15 @@ describe("API Contract & Response Consistency", () => {
       expect(response.body.data._id).toBe(taskId);
     });
 
-    test("PUT /api/tasks/:id should return consistent structure", async () => {
+    test("PUT /api/office/:id should return consistent structure", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Update test" });
 
       const taskId = createResponse.body.data._id;
 
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Updated name" })
         .expect(200);
 
@@ -112,15 +112,15 @@ describe("API Contract & Response Consistency", () => {
       expect(response.body.data.name).toBe("Updated name");
     });
 
-    test("DELETE /api/tasks/:id should return consistent structure", async () => {
+    test("DELETE /api/office/:id should return consistent structure", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Delete test" });
 
       const taskId = createResponse.body.data._id;
 
       const response = await request(app)
-        .delete(`/api/tasks/${taskId}`)
+        .delete(`/api/office/${taskId}`)
         .expect(200);
 
       expect(response.body).toHaveProperty("success");
@@ -133,43 +133,43 @@ describe("API Contract & Response Consistency", () => {
 
   describe("HTTP Status Codes", () => {
     test("should return 200 for successful GET", async () => {
-      await request(app).get("/api/tasks").expect(200);
+      await request(app).get("/api/office").expect(200);
     });
 
     test("should return 201 for successful POST", async () => {
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Status code test" })
         .expect(201);
     });
 
     test("should return 200 for successful PUT", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "For PUT" });
 
       await request(app)
-        .put(`/api/tasks/${createResponse.body.data._id}`)
+        .put(`/api/office/${createResponse.body.data._id}`)
         .send({ name: "Updated" })
         .expect(200);
     });
 
     test("should return 200 for successful DELETE", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "For DELETE" });
 
       await request(app)
-        .delete(`/api/tasks/${createResponse.body.data._id}`)
+        .delete(`/api/office/${createResponse.body.data._id}`)
         .expect(200);
     });
 
     test("should return 400 for invalid request (missing name)", async () => {
-      await request(app).post("/api/tasks").send({}).expect(400);
+      await request(app).post("/api/office").send({}).expect(400);
     });
 
     test("should return 404 for non-existent task", async () => {
-      await request(app).get("/api/tasks/507f1f77bcf86cd799439011").expect(404);
+      await request(app).get("/api/office/507f1f77bcf86cd799439011").expect(404);
     });
 
     test("should return 404 for non-existent route", async () => {
@@ -177,33 +177,33 @@ describe("API Contract & Response Consistency", () => {
     });
 
     test("should return 500 for invalid ObjectId", async () => {
-      await request(app).get("/api/tasks/invalid-id").expect(500);
+      await request(app).get("/api/office/invalid-id").expect(500);
     });
   });
 
   describe("Content-Type Headers", () => {
-    test("GET /api/tasks should return JSON", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+    test("GET /api/office should return JSON", async () => {
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.headers["content-type"]).toMatch(/application\/json/);
     });
 
-    test("POST /api/tasks should return JSON", async () => {
+    test("POST /api/office should return JSON", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Header test" })
         .expect(201);
 
       expect(response.headers["content-type"]).toMatch(/application\/json/);
     });
 
-    test("PUT /api/tasks/:id should return JSON", async () => {
+    test("PUT /api/office/:id should return JSON", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "For PUT header test" });
 
       const response = await request(app)
-        .put(`/api/tasks/${createResponse.body.data._id}`)
+        .put(`/api/office/${createResponse.body.data._id}`)
         .send({ name: "Updated" })
         .expect(200);
 
@@ -212,7 +212,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("Error responses should return JSON", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({})
         .expect(400);
 
@@ -221,7 +221,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("404 responses should return JSON", async () => {
       const response = await request(app)
-        .get("/api/tasks/507f1f77bcf86cd799439011")
+        .get("/api/office/507f1f77bcf86cd799439011")
         .expect(404);
 
       expect(response.headers["content-type"]).toMatch(/application\/json/);
@@ -231,7 +231,7 @@ describe("API Contract & Response Consistency", () => {
   describe("Error Response Format", () => {
     test("400 errors should have consistent format", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "" })
         .expect(400);
 
@@ -242,7 +242,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("404 errors should have consistent format", async () => {
       const response = await request(app)
-        .get("/api/tasks/507f1f77bcf86cd799439011")
+        .get("/api/office/507f1f77bcf86cd799439011")
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -252,7 +252,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("500 errors should have consistent format", async () => {
       const response = await request(app)
-        .get("/api/tasks/invalid-id")
+        .get("/api/office/invalid-id")
         .expect(500);
 
       expect(response.body.success).toBe(false);
@@ -263,7 +263,7 @@ describe("API Contract & Response Consistency", () => {
   describe("Data Type Consistency", () => {
     test("_id should always be a string", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Type test" });
 
       expect(typeof response.body.data._id).toBe("string");
@@ -271,7 +271,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("name should always be a string", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "String test" });
 
       expect(typeof response.body.data.name).toBe("string");
@@ -279,7 +279,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("notes should always be a string", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Notes test", notes: "Test notes" });
 
       expect(typeof response.body.data.notes).toBe("string");
@@ -287,7 +287,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("done should always be a boolean", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Boolean test", done: true });
 
       expect(typeof response.body.data.done).toBe("boolean");
@@ -295,20 +295,20 @@ describe("API Contract & Response Consistency", () => {
 
     test("priority should always be a number", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Priority test" });
 
       expect(typeof response.body.data.priority).toBe("number");
     });
 
     test("count in GET all should always be a number", async () => {
-      const response = await request(app).get("/api/tasks");
+      const response = await request(app).get("/api/office");
 
       expect(typeof response.body.count).toBe("number");
     });
 
     test("data in GET all should always be an array", async () => {
-      const response = await request(app).get("/api/tasks");
+      const response = await request(app).get("/api/office");
 
       expect(Array.isArray(response.body.data)).toBe(true);
     });
@@ -316,7 +316,7 @@ describe("API Contract & Response Consistency", () => {
 
   describe("Field Presence Consistency", () => {
     test("All tasks should have required fields", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       response.body.data.forEach((task) => {
         // Required fields
@@ -332,7 +332,7 @@ describe("API Contract & Response Consistency", () => {
 
     test("Created tasks should have timestamp fields", async () => {
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Timestamp test" })
         .expect(201);
 
@@ -352,47 +352,47 @@ describe("API Contract & Response Consistency", () => {
   describe("Success Flag Consistency", () => {
     test("success should be true for successful operations", async () => {
       const createRes = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Success test" });
       expect(createRes.body.success).toBe(true);
 
-      const getRes = await request(app).get("/api/tasks");
+      const getRes = await request(app).get("/api/office");
       expect(getRes.body.success).toBe(true);
 
       const updateRes = await request(app)
-        .put(`/api/tasks/${createRes.body.data._id}`)
+        .put(`/api/office/${createRes.body.data._id}`)
         .send({ name: "Updated" });
       expect(updateRes.body.success).toBe(true);
 
       const deleteRes = await request(app).delete(
-        `/api/tasks/${createRes.body.data._id}`,
+        `/api/office/${createRes.body.data._id}`,
       );
       expect(deleteRes.body.success).toBe(true);
     });
 
     test("success should be false for failed operations", async () => {
-      const invalidCreate = await request(app).post("/api/tasks").send({});
+      const invalidCreate = await request(app).post("/api/office").send({});
       expect(invalidCreate.body.success).toBe(false);
 
       const notFound = await request(app).get(
-        "/api/tasks/507f1f77bcf86cd799439011",
+        "/api/office/507f1f77bcf86cd799439011",
       );
       expect(notFound.body.success).toBe(false);
 
-      const invalidId = await request(app).get("/api/tasks/invalid");
+      const invalidId = await request(app).get("/api/office/invalid");
       expect(invalidId.body.success).toBe(false);
     });
   });
 
   describe("CORS Headers", () => {
     test("should include CORS headers in response", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.headers["access-control-allow-origin"]).toBe("*");
     });
 
     test("should handle OPTIONS preflight request", async () => {
-      const response = await request(app).options("/api/tasks");
+      const response = await request(app).options("/api/office");
 
       expect(response.headers["access-control-allow-origin"]).toBe("*");
       expect(response.headers["access-control-allow-methods"]).toContain("GET");

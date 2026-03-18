@@ -23,7 +23,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -40,7 +40,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -58,7 +58,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -73,7 +73,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -89,7 +89,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -105,7 +105,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -121,7 +121,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -136,7 +136,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
         ecd: "invalid-date",
       };
 
-      const response = await request(app).post("/api/tasks").send(taskData);
+      const response = await request(app).post("/api/office").send(taskData);
 
       // Should either reject or set to null, depending on your implementation
       // Current implementation creates it with Invalid Date, which might not be ideal
@@ -150,7 +150,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
         ecd: "2026-13-45", // Invalid month and day
       };
 
-      const response = await request(app).post("/api/tasks").send(taskData);
+      const response = await request(app).post("/api/office").send(taskData);
 
       expect(response.body.success).toBe(true);
     });
@@ -163,7 +163,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -178,14 +178,14 @@ describe("ECD (Expected Completion Date) Validation", () => {
     beforeAll(async () => {
       // Create a task to update
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task for ECD updates", notes: "Original ECD test" });
       taskId = response.body.data._id;
     });
 
     test("should update task with new ECD", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Updated with ECD", ecd: "2026-05-15" });
 
       // Note: Your current controller doesn't support updating ECD
@@ -195,7 +195,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
 
     test("should update task to remove ECD (set to null)", async () => {
       const response = await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "ECD removed", ecd: null });
 
       expect(response.body.success).toBe(true);
@@ -203,7 +203,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
 
     test("should update task ECD from past to future", async () => {
       // First create task with past ECD
-      const createResponse = await request(app).post("/api/tasks").send({
+      const createResponse = await request(app).post("/api/office").send({
         name: "Update ECD test",
         ecd: "2026-01-01",
       });
@@ -212,7 +212,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
 
       // Try to update to future date
       const updateResponse = await request(app)
-        .put(`/api/tasks/${newTaskId}`)
+        .put(`/api/office/${newTaskId}`)
         .send({ name: "Updated name", ecd: "2026-12-31" });
 
       // Note: Current implementation doesn't support ECD updates
@@ -229,29 +229,29 @@ describe("ECD (Expected Completion Date) Validation", () => {
       await db.collection("Office-Test").deleteMany({});
 
       // Create tasks with various ECDs
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Overdue 1",
         ecd: "2026-01-15",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Due soon",
         ecd: "2026-03-20",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "Future task",
         ecd: "2026-12-01",
       });
 
-      await request(app).post("/api/tasks").send({
+      await request(app).post("/api/office").send({
         name: "No ECD",
         ecd: null,
       });
     });
 
     test("should retrieve all tasks including those with and without ECD", async () => {
-      const response = await request(app).get("/api/tasks").expect(200);
+      const response = await request(app).get("/api/office").expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.count).toBeGreaterThanOrEqual(4);
@@ -270,7 +270,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
 
     test("should retrieve task by ID and verify ECD format", async () => {
       // Create a task with known ECD
-      const createResponse = await request(app).post("/api/tasks").send({
+      const createResponse = await request(app).post("/api/office").send({
         name: "ECD format verification",
         ecd: "2026-07-15",
       });
@@ -279,7 +279,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
 
       // Retrieve it
       const response = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -302,7 +302,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -316,7 +316,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
         ecd: "2027-02-29", // 2027 is not a leap year
       };
 
-      const response = await request(app).post("/api/tasks").send(taskData);
+      const response = await request(app).post("/api/office").send(taskData);
 
       // JavaScript Date will adjust this to March 1st
       expect(response.body.success).toBe(true);
@@ -329,7 +329,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -344,7 +344,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -359,7 +359,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -374,7 +374,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 
@@ -389,7 +389,7 @@ describe("ECD (Expected Completion Date) Validation", () => {
       };
 
       const response = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send(taskData)
         .expect(201);
 

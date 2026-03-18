@@ -1,6 +1,6 @@
 const { getDatabase } = require("../config/db");
 
-class Task {
+class Office {
   /**
    * Get the tasks collection for the current environment
    * @returns {Promise<Collection>} MongoDB collection
@@ -267,4 +267,4 @@ class Task {
   }
 }
 
-module.exports = Task;
+module.exports = Office;

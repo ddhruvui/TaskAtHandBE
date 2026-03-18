@@ -21,7 +21,7 @@ describe("Concurrency & Race Conditions", () => {
       for (let i = 0; i < 10; i++) {
         promises.push(
           request(app)
-            .post("/api/tasks")
+            .post("/api/office")
             .send({ name: `Concurrent Task ${i}` }),
         );
       }
@@ -52,7 +52,7 @@ describe("Concurrency & Race Conditions", () => {
 
       const promises = Array.from({ length: 20 }, (_, i) =>
         request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({
             name: `Task ${i}`,
             notes: `Notes ${i}`,
@@ -63,7 +63,7 @@ describe("Concurrency & Race Conditions", () => {
       await Promise.all(promises);
 
       // Verify all tasks were created
-      const response = await request(app).get("/api/tasks");
+      const response = await request(app).get("/api/office");
       expect(response.body.count).toBe(20);
 
       // NOTE: Priority collisions may occur in concurrent scenarios
@@ -76,7 +76,7 @@ describe("Concurrency & Race Conditions", () => {
   describe("Simultaneous Updates to Same Task", () => {
     test("should handle concurrent updates to same task", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Concurrent Update Test" });
 
       const taskId = createResponse.body.data._id;
@@ -86,7 +86,7 @@ describe("Concurrency & Race Conditions", () => {
       for (let i = 0; i < 5; i++) {
         updatePromises.push(
           request(app)
-            .put(`/api/tasks/${taskId}`)
+            .put(`/api/office/${taskId}`)
             .send({ name: `Update ${i}` }),
         );
       }
@@ -100,13 +100,13 @@ describe("Concurrency & Race Conditions", () => {
       });
 
       // Final state should be one of the updates
-      const finalResponse = await request(app).get(`/api/tasks/${taskId}`);
+      const finalResponse = await request(app).get(`/api/office/${taskId}`);
       expect(finalResponse.body.data.name).toMatch(/^Update \d$/);
     });
 
     test("should handle concurrent done/undone toggles", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Toggle Test", done: false });
 
       const taskId = createResponse.body.data._id;
@@ -116,7 +116,7 @@ describe("Concurrency & Race Conditions", () => {
       for (let i = 0; i < 10; i++) {
         togglePromises.push(
           request(app)
-            .put(`/api/tasks/${taskId}`)
+            .put(`/api/office/${taskId}`)
             .send({ done: i % 2 === 0 }),
         );
       }
@@ -129,7 +129,7 @@ describe("Concurrency & Race Conditions", () => {
       });
 
       // Final state should be consistent
-      const finalResponse = await request(app).get(`/api/tasks/${taskId}`);
+      const finalResponse = await request(app).get(`/api/office/${taskId}`);
       expect(typeof finalResponse.body.data.done).toBe("boolean");
     });
   });
@@ -140,19 +140,19 @@ describe("Concurrency & Race Conditions", () => {
       await db.collection("Office-Test").deleteMany({});
 
       // Create initial tasks
-      await request(app).post("/api/tasks").send({ name: "Task 1" });
-      await request(app).post("/api/tasks").send({ name: "Task 2" });
+      await request(app).post("/api/office").send({ name: "Task 1" });
+      await request(app).post("/api/office").send({ name: "Task 2" });
 
       const operations = [];
 
       // Mix of reads and writes
       for (let i = 0; i < 10; i++) {
         if (i % 2 === 0) {
-          operations.push(request(app).get("/api/tasks"));
+          operations.push(request(app).get("/api/office"));
         } else {
           operations.push(
             request(app)
-              .post("/api/tasks")
+              .post("/api/office")
               .send({ name: `Concurrent Task ${i}` }),
           );
         }
@@ -176,7 +176,7 @@ describe("Concurrency & Race Conditions", () => {
       // Create tasks to delete
       const createPromises = Array.from({ length: 10 }, (_, i) =>
         request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({ name: `Delete Task ${i}` }),
       );
 
@@ -185,7 +185,7 @@ describe("Concurrency & Race Conditions", () => {
 
       // Delete all simultaneously
       const deletePromises = taskIds.map((id) =>
-        request(app).delete(`/api/tasks/${id}`),
+        request(app).delete(`/api/office/${id}`),
       );
 
       const responses = await Promise.all(deletePromises);
@@ -197,22 +197,22 @@ describe("Concurrency & Race Conditions", () => {
       });
 
       // Verify all are deleted
-      const finalResponse = await request(app).get("/api/tasks");
+      const finalResponse = await request(app).get("/api/office");
       expect(finalResponse.body.count).toBe(0);
     });
 
     test("should handle attempted double delete", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Double Delete Test" });
 
       const taskId = createResponse.body.data._id;
 
       // Attempt to delete simultaneously
       const deletePromises = [
-        request(app).delete(`/api/tasks/${taskId}`),
-        request(app).delete(`/api/tasks/${taskId}`),
-        request(app).delete(`/api/tasks/${taskId}`),
+        request(app).delete(`/api/office/${taskId}`),
+        request(app).delete(`/api/office/${taskId}`),
+        request(app).delete(`/api/office/${taskId}`),
       ];
 
       const responses = await Promise.all(deletePromises);
@@ -236,7 +236,7 @@ describe("Concurrency & Race Conditions", () => {
       const tasks = [];
       for (let i = 0; i < 5; i++) {
         const response = await request(app)
-          .post("/api/tasks")
+          .post("/api/office")
           .send({ name: `Priority Task ${i}` });
         tasks.push(response.body.data);
       }
@@ -245,7 +245,7 @@ describe("Concurrency & Race Conditions", () => {
       const updatePromises = tasks.map(
         (task, index) =>
           request(app)
-            .put(`/api/tasks/${task._id}`)
+            .put(`/api/office/${task._id}`)
             .send({ priority: tasks.length - 1 - index }), // Reverse order
       );
 
@@ -257,7 +257,7 @@ describe("Concurrency & Race Conditions", () => {
       });
 
       // Final state should have valid priorities (collisions may occur)
-      const finalResponse = await request(app).get("/api/tasks");
+      const finalResponse = await request(app).get("/api/office");
       const priorities = finalResponse.body.data.map((t) => t.priority);
 
       // All priorities should be numeric
@@ -272,26 +272,26 @@ describe("Concurrency & Race Conditions", () => {
 
       // Create initial task
       const initialTask = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Initial Task" });
 
       const taskId = initialTask.body.data._id;
 
       const operations = [
         // Create operations
-        request(app).post("/api/tasks").send({ name: "Create 1" }),
-        request(app).post("/api/tasks").send({ name: "Create 2" }),
+        request(app).post("/api/office").send({ name: "Create 1" }),
+        request(app).post("/api/office").send({ name: "Create 2" }),
 
         // Read operations
-        request(app).get("/api/tasks"),
-        request(app).get(`/api/tasks/${taskId}`),
+        request(app).get("/api/office"),
+        request(app).get(`/api/office/${taskId}`),
 
         // Update operations
-        request(app).put(`/api/tasks/${taskId}`).send({ name: "Updated" }),
-        request(app).put(`/api/tasks/${taskId}`).send({ done: true }),
+        request(app).put(`/api/office/${taskId}`).send({ name: "Updated" }),
+        request(app).put(`/api/office/${taskId}`).send({ done: true }),
 
         // More reads
-        request(app).get("/api/tasks"),
+        request(app).get("/api/office"),
       ];
 
       const responses = await Promise.all(operations);
@@ -313,7 +313,7 @@ describe("Concurrency & Race Conditions", () => {
       for (let i = 0; i < 20; i++) {
         operations.push(
           request(app)
-            .post("/api/tasks")
+            .post("/api/office")
             .send({ name: `Load Test ${i}` }),
         );
       }
@@ -322,7 +322,7 @@ describe("Concurrency & Race Conditions", () => {
       await Promise.all(operations);
 
       // Verify database consistency
-      const response = await request(app).get("/api/tasks");
+      const response = await request(app).get("/api/office");
 
       expect(response.body.count).toBe(20);
 
@@ -343,14 +343,14 @@ describe("Concurrency & Race Conditions", () => {
   describe("Read-After-Write Consistency", () => {
     test("should read newly created task immediately", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Immediate Read Test" });
 
       const taskId = createResponse.body.data._id;
 
       // Immediately try to read
       const readResponse = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(readResponse.body.success).toBe(true);
@@ -360,18 +360,18 @@ describe("Concurrency & Race Conditions", () => {
 
     test("should read updated task immediately", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Original Name" });
 
       const taskId = createResponse.body.data._id;
 
       await request(app)
-        .put(`/api/tasks/${taskId}`)
+        .put(`/api/office/${taskId}`)
         .send({ name: "Updated Name" });
 
       // Immediately read
       const readResponse = await request(app)
-        .get(`/api/tasks/${taskId}`)
+        .get(`/api/office/${taskId}`)
         .expect(200);
 
       expect(readResponse.body.data.name).toBe("Updated Name");
@@ -379,15 +379,15 @@ describe("Concurrency & Race Conditions", () => {
 
     test("should not find deleted task immediately", async () => {
       const createResponse = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "To Be Deleted" });
 
       const taskId = createResponse.body.data._id;
 
-      await request(app).delete(`/api/tasks/${taskId}`).expect(200);
+      await request(app).delete(`/api/office/${taskId}`).expect(200);
 
       // Immediately try to read
-      await request(app).get(`/api/tasks/${taskId}`).expect(404);
+      await request(app).get(`/api/office/${taskId}`).expect(404);
     });
   });
 });

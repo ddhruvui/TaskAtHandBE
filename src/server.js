@@ -39,7 +39,7 @@ app.get("/health", (req, res) => {
 });
 
 // Import and use routes
-app.use("/api/tasks", require("./routes/taskRoutes"));
+app.use("/api/office", require("./routes/officeRoutes"));
 app.use("/api/habbits", require("./routes/habbitRoutes"));
 app.use("/api/todos", require("./routes/todoRoutes"));
 

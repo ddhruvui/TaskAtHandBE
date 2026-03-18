@@ -2,7 +2,7 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
-describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
+describe("Chron Endpoint - DELETE /api/office/chron", () => {
   let taskIds = {};
 
   beforeAll(async () => {
@@ -27,28 +27,28 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
     test("should delete all done tasks", async () => {
       // Create mix of done and undone tasks
       const task1 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Undone Task 1", done: false });
       const task2 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Task 1", done: true });
       const task3 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Task 2", done: true });
       const task4 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Undone Task 2", done: false });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.deletedCount).toBe(2);
 
       // Verify only undone tasks remain
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       expect(remainingTasks.body.count).toBe(2);
       expect(remainingTasks.body.data.every((task) => !task.done)).toBe(true);
     });
@@ -56,27 +56,27 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
     test("should return deletedCount = 0 when no done tasks exist", async () => {
       // Create only undone tasks
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Undone Task 1", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Undone Task 2", done: false });
 
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.deletedCount).toBe(0);
 
       // All tasks should still exist
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       expect(remainingTasks.body.count).toBe(2);
     });
 
     test("should handle empty database gracefully", async () => {
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -93,25 +93,25 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks
       const task1 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 1", done: false });
       const task2 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Today ECD Task", done: false, ecd: todayStr });
       const task3 = await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 2", done: false });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.movedCount).toBe(1);
 
       // Verify task order - task with ECD = today should be last
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       const tasks = remainingTasks.body.data;
 
       expect(tasks.length).toBe(3);
@@ -128,28 +128,28 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 1", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Today ECD Task 1", done: false, ecd: todayStr });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 2", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Today ECD Task 2", done: false, ecd: todayStr });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.movedCount).toBe(2);
 
       // Verify task order - tasks with ECD = today should be at the end
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       const tasks = remainingTasks.body.data;
 
       expect(tasks.length).toBe(4);
@@ -166,15 +166,15 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks - one done with today's ECD
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Today ECD Task", done: true, ecd: todayStr });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -182,7 +182,7 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
       expect(response.body.movedCount).toBe(0); // No tasks moved
 
       // Verify only normal task remains
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       expect(remainingTasks.body.count).toBe(1);
       expect(remainingTasks.body.data[0].name).toBe("Normal Task");
     });
@@ -196,22 +196,22 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Tomorrow ECD Task", done: false, ecd: tomorrowStr });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.movedCount).toBe(0); // Tomorrow's task should not be moved
 
       // Verify order unchanged
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       const tasks = remainingTasks.body.data;
       expect(tasks.length).toBe(2);
       expect(tasks[0].name).toBe("Normal Task");
@@ -227,22 +227,22 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Yesterday ECD Task", done: false, ecd: yesterdayStr });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.movedCount).toBe(0); // Yesterday's task should not be moved
 
       // Verify order unchanged
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       expect(remainingTasks.body.count).toBe(2);
     });
   });
@@ -255,24 +255,24 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create a mix of tasks
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 1", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Task 1", done: true });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Today ECD Task", done: false, ecd: todayStr });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task 2", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Task 2", done: true });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -280,7 +280,7 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
       expect(response.body.movedCount).toBe(1); // 1 task with today's ECD moved
 
       // Verify final state
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       const tasks = remainingTasks.body.data;
 
       expect(tasks.length).toBe(3);
@@ -297,30 +297,30 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
 
       // Create tasks with gaps in priority
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 1", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 2", done: true });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 3", done: false, ecd: todayStr });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 4", done: true });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Task 5", done: false });
 
       // Call chron endpoint
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body.success).toBe(true);
 
       // Verify priorities are sequential (0, 1, 2)
-      const remainingTasks = await request(app).get("/api/tasks");
+      const remainingTasks = await request(app).get("/api/office");
       const tasks = remainingTasks.body.data;
 
       expect(tasks.length).toBe(3);
@@ -337,17 +337,17 @@ describe("Chron Endpoint - DELETE /api/tasks/chron", () => {
       const todayStr = today.toISOString().split("T")[0];
 
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Normal Task", done: false });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Done Task", done: true });
       await request(app)
-        .post("/api/tasks")
+        .post("/api/office")
         .send({ name: "Today Task", done: false, ecd: todayStr });
 
       const response = await request(app)
-        .delete("/api/tasks/chron")
+        .delete("/api/office/chron")
         .expect(200);
 
       expect(response.body).toHaveProperty("success");
