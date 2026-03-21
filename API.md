@@ -4,7 +4,7 @@
 
 Your API now has **interactive Swagger documentation** available at:
 
-**http://localhost:5000/api-docs**
+**http://localhost:3002/api-docs**
 
 The Swagger UI allows you to:
 
@@ -20,7 +20,7 @@ The Swagger UI allows you to:
 ### Base URL
 
 ```
-http://localhost:5000
+http://localhost:3002
 ```
 
 ### Response Format
@@ -527,7 +527,7 @@ DELETE /api/office/chron
 ### Create a Todo
 
 ```bash
-curl -X POST http://localhost:5000/api/todos \
+curl -X POST http://localhost:3002/api/todos \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Buy groceries",
@@ -539,13 +539,13 @@ curl -X POST http://localhost:5000/api/todos \
 ### Get All Todos
 
 ```bash
-curl http://localhost:5000/api/todos
+curl http://localhost:3002/api/todos
 ```
 
 ### Update a Todo (Mark as Done)
 
 ```bash
-curl -X PUT http://localhost:5000/api/todos/507f1f77bcf86cd799439011 \
+curl -X PUT http://localhost:3002/api/todos/507f1f77bcf86cd799439011 \
   -H "Content-Type: application/json" \
   -d '{"done": true}'
 ```
@@ -553,7 +553,7 @@ curl -X PUT http://localhost:5000/api/todos/507f1f77bcf86cd799439011 \
 ### Delete a Todo
 
 ```bash
-curl -X DELETE http://localhost:5000/api/todos/507f1f77bcf86cd799439011
+curl -X DELETE http://localhost:3002/api/todos/507f1f77bcf86cd799439011
 ```
 
 ---
@@ -577,7 +577,7 @@ npm test
 
 Once the server is running, visit:
 
-**http://localhost:5000/api-docs**
+**http://localhost:3002/api-docs**
 
 The Swagger UI provides:
 

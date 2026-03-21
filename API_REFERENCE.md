@@ -1,6 +1,6 @@
 # TaskAtHand API Reference
 
-**Base URL:** `http://localhost:5000`
+**Base URL:** `http://localhost:3002`
 
 This document provides a complete reference for all API endpoints. Each collection (Office, Todos, Habits, Dreams, WorkOnDreams) follows the same pattern.
 
@@ -506,7 +506,7 @@ All endpoints follow the same pattern as Office Tasks.
 
 ```typescript
 async function getTodos() {
-  const response = await fetch("http://localhost:5000/api/todos");
+  const response = await fetch("http://localhost:3002/api/todos");
   const data = await response.json();
 
   if (data.success) {
@@ -521,7 +521,7 @@ async function getTodos() {
 
 ```typescript
 async function createTodo(name: string, notes?: string, ecd?: string) {
-  const response = await fetch("http://localhost:5000/api/todos", {
+  const response = await fetch("http://localhost:3002/api/todos", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -543,7 +543,7 @@ async function createTodo(name: string, notes?: string, ecd?: string) {
 
 ```typescript
 async function updateTodo(id: string, updates: Partial<Item>) {
-  const response = await fetch(`http://localhost:5000/api/todos/${id}`, {
+  const response = await fetch(`http://localhost:3002/api/todos/${id}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -565,7 +565,7 @@ async function updateTodo(id: string, updates: Partial<Item>) {
 
 ```typescript
 async function deleteTodo(id: string) {
-  const response = await fetch(`http://localhost:5000/api/todos/${id}`, {
+  const response = await fetch(`http://localhost:3002/api/todos/${id}`, {
     method: "DELETE",
   });
 
@@ -590,6 +590,6 @@ async function markTodoAsDone(id: string) {
 
 ## Swagger Documentation
 
-Interactive API documentation is available at: `http://localhost:5000/api-docs`
+Interactive API documentation is available at: `http://localhost:3002/api-docs`
 
 This provides a user-friendly interface to test all endpoints directly in the browser.

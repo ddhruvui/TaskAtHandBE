@@ -14,11 +14,11 @@ const options = {
     },
     servers: [
       {
-        url: "http://localhost:5000",
+        url: "http://localhost:3002",
         description: "Development server",
       },
       {
-        url: "http://localhost:5000",
+        url: "http://localhost:3002",
         description: "Production server",
       },
     ],

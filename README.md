@@ -70,7 +70,7 @@ npm test
 
 - `DB_PASSWORD`: MongoDB password
 - `MONGO_URI`: MongoDB connection string
-- `PORT`: Server port (default: 5000)
+- `PORT`: Server port (default: 3002)
 - `NODE_ENV`: Environment mode (development/production/test)
 - `USE_TEST_DB`: Set to `true` to use test databases (adds -Test suffix), `false` for production databases
 
@@ -118,7 +118,7 @@ npm test
 
 Once the server is running, access the interactive API documentation at:
 
-**http://localhost:5000/api-docs**
+**http://localhost:3002/api-docs**
 
 The Swagger UI provides:
 

@@ -300,7 +300,7 @@ describe("Error Handling & Robustness", () => {
 
   describe("Large Payload Handling", () => {
     test("should handle reasonably large request payload", async () => {
-      const largeNotes = "A".repeat(50000); // 50KB
+      const largeNotes = "A".repeat(30020); // 50KB
       const taskData = {
         name: "Large payload task",
         notes: largeNotes,

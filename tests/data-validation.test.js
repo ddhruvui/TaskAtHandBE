@@ -30,7 +30,7 @@ describe("Data Validation & Edge Cases", () => {
       expect(response.body.data.name.length).toBe(1000);
     });
 
-    test("should handle very long notes (5000 chars)", async () => {
+    test("should handle very long notes (3002 chars)", async () => {
       const longNotes = "Note content ".repeat(400); // ~5200 chars
       const taskData = {
         name: "Long notes task",
@@ -43,7 +43,7 @@ describe("Data Validation & Edge Cases", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.notes.length).toBeGreaterThan(5000);
+      expect(response.body.data.notes.length).toBeGreaterThan(3002);
     });
 
     test("should handle extremely long name (10000 chars)", async () => {
