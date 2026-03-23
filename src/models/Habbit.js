@@ -58,7 +58,8 @@ class Habbit {
       notes: habbitData.notes || "",
       priority: undoneCount, // New habbit gets inserted before done habbits
       done: habbitData.done || false,
-      ecd: habbitData.ecd, // ECD is required: day of week (1-7) or day of month (1-31)
+      ecdDayOfWeek: habbitData.ecdDayOfWeek ?? null, // Day of week: 1 (Mon) – 7 (Sun)
+      ecdDayOfMonth: habbitData.ecdDayOfMonth ?? null, // Day of month: 1 – 31
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -231,8 +232,13 @@ class Habbit {
       const overdueToday = [];
 
       allHabbits.forEach((habbit) => {
-        // Check if ecd matches today (day of week or day of month)
-        if (habbit.ecd === todayDayOfWeek || habbit.ecd === todayDayOfMonth) {
+        // Check if ecdDayOfWeek matches today's day of week, or ecdDayOfMonth matches today's date
+        const matchesWeek =
+          habbit.ecdDayOfWeek != null && habbit.ecdDayOfWeek === todayDayOfWeek;
+        const matchesMonth =
+          habbit.ecdDayOfMonth != null &&
+          habbit.ecdDayOfMonth === todayDayOfMonth;
+        if (matchesWeek || matchesMonth) {
           overdueToday.push(habbit);
         } else {
           normalHabbits.push(habbit);

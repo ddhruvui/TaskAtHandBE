@@ -20,11 +20,11 @@ describe("Habbit ECD Validation", () => {
   });
 
   describe("CREATE with ECD", () => {
-    test("should create habbit with valid day of week (1-7)", async () => {
+    test("should create habbit with valid ecdDayOfWeek (1-7)", async () => {
       const habbitData = {
         name: "Weekly Habbit",
         notes: "Runs on Monday",
-        ecd: 1, // Monday
+        ecdDayOfWeek: 1, // Monday
       };
 
       const response = await request(app)
@@ -33,15 +33,16 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-      expect(response.body.data.ecd).toBe(1);
+      expect(response.body.data).toHaveProperty("ecdDayOfWeek");
+      expect(response.body.data.ecdDayOfWeek).toBe(1);
+      expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
 
-    test("should create habbit with valid day of month (1-31)", async () => {
+    test("should create habbit with valid ecdDayOfMonth (1-31)", async () => {
       const habbitData = {
         name: "Monthly Habbit",
         notes: "Runs on the 15th",
-        ecd: 15,
+        ecdDayOfMonth: 15,
       };
 
       const response = await request(app)
@@ -50,14 +51,31 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-      expect(response.body.data.ecd).toBe(15);
+      expect(response.body.data).toHaveProperty("ecdDayOfMonth");
+      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
 
-    test("should create habbit with ecd = 7 (Sunday)", async () => {
+    test("should create habbit with ecdDayOfMonth = 5 (5th of month, not day-of-week)", async () => {
+      const habbitData = {
+        name: "5th of Month Habbit",
+        ecdDayOfMonth: 5,
+      };
+
+      const response = await request(app)
+        .post("/api/habbits")
+        .send(habbitData)
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfMonth).toBe(5);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
+    });
+
+    test("should create habbit with ecdDayOfWeek = 7 (Sunday)", async () => {
       const habbitData = {
         name: "Sunday Habbit",
-        ecd: 7,
+        ecdDayOfWeek: 7,
       };
 
       const response = await request(app)
@@ -66,13 +84,13 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(7);
+      expect(response.body.data.ecdDayOfWeek).toBe(7);
     });
 
-    test("should create habbit with ecd = 31 (last day of month)", async () => {
+    test("should create habbit with ecdDayOfMonth = 31 (last day of month)", async () => {
       const habbitData = {
         name: "End of Month Habbit",
-        ecd: 31,
+        ecdDayOfMonth: 31,
       };
 
       const response = await request(app)
@@ -81,7 +99,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(31);
+      expect(response.body.data.ecdDayOfMonth).toBe(31);
     });
 
     test("should fail to create habbit without ECD", async () => {
@@ -99,10 +117,26 @@ describe("Habbit ECD Validation", () => {
       expect(response.body.error).toContain("ECD is required");
     });
 
-    test("should fail to create habbit with null ECD", async () => {
+    test("should fail to create habbit when both ecdDayOfWeek and ecdDayOfMonth are provided", async () => {
+      const habbitData = {
+        name: "Both ECD Habbit",
+        ecdDayOfWeek: 3,
+        ecdDayOfMonth: 15,
+      };
+
+      const response = await request(app)
+        .post("/api/habbits")
+        .send(habbitData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("only one");
+    });
+
+    test("should fail to create habbit with null ECD fields", async () => {
       const habbitData = {
         name: "Null ECD Habbit",
-        ecd: null,
+        ecdDayOfWeek: null,
       };
 
       const response = await request(app)
@@ -114,10 +148,10 @@ describe("Habbit ECD Validation", () => {
       expect(response.body.error).toContain("ECD is required");
     });
 
-    test("should fail to create habbit with ecd = 0", async () => {
+    test("should fail to create habbit with ecdDayOfWeek = 0", async () => {
       const habbitData = {
         name: "Invalid ECD Zero",
-        ecd: 0,
+        ecdDayOfWeek: 0,
       };
 
       const response = await request(app)
@@ -129,10 +163,10 @@ describe("Habbit ECD Validation", () => {
       expect(response.body.error).toContain("ECD must be a valid");
     });
 
-    test("should fail to create habbit with ecd > 31", async () => {
+    test("should fail to create habbit with ecdDayOfWeek > 7", async () => {
       const habbitData = {
-        name: "Invalid ECD Too High",
-        ecd: 32,
+        name: "Invalid ECD Week Too High",
+        ecdDayOfWeek: 8,
       };
 
       const response = await request(app)
@@ -144,10 +178,25 @@ describe("Habbit ECD Validation", () => {
       expect(response.body.error).toContain("ECD must be a valid");
     });
 
-    test("should fail to create habbit with negative ecd", async () => {
+    test("should fail to create habbit with ecdDayOfMonth > 31", async () => {
+      const habbitData = {
+        name: "Invalid ECD Month Too High",
+        ecdDayOfMonth: 32,
+      };
+
+      const response = await request(app)
+        .post("/api/habbits")
+        .send(habbitData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
+    });
+
+    test("should fail to create habbit with negative ecdDayOfWeek", async () => {
       const habbitData = {
         name: "Invalid ECD Negative",
-        ecd: -1,
+        ecdDayOfWeek: -1,
       };
 
       const response = await request(app)
@@ -159,10 +208,10 @@ describe("Habbit ECD Validation", () => {
       expect(response.body.error).toContain("ECD must be a valid");
     });
 
-    test("should handle ecd as string number", async () => {
+    test("should handle ecdDayOfWeek as string number", async () => {
       const habbitData = {
         name: "String ECD Habbit",
-        ecd: "5",
+        ecdDayOfWeek: "5",
       };
 
       const response = await request(app)
@@ -171,18 +220,59 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(5);
+      expect(response.body.data.ecdDayOfWeek).toBe(5);
     });
 
-    test("should fail with invalid string ecd", async () => {
+    test("should fail with invalid string ecdDayOfWeek", async () => {
       const habbitData = {
         name: "Invalid String ECD",
-        ecd: "invalid",
+        ecdDayOfWeek: "invalid",
       };
 
       const response = await request(app)
         .post("/api/habbits")
         .send(habbitData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
+    });
+
+    test("should fail to create habbit with ecdDayOfMonth = 0", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Invalid Month Zero", ecdDayOfMonth: 0 })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
+    });
+
+    test("should fail to create habbit with negative ecdDayOfMonth", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Invalid Month Negative", ecdDayOfMonth: -5 })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
+    });
+
+    test("should handle ecdDayOfMonth as string number", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "String Month ECD Habbit", ecdDayOfMonth: "15" })
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
+    });
+
+    test("should fail with invalid string ecdDayOfMonth", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Invalid String Month ECD", ecdDayOfMonth: "invalid" })
         .expect(400);
 
       expect(response.body.success).toBe(false);
@@ -194,44 +284,74 @@ describe("Habbit ECD Validation", () => {
     let habbitId;
 
     beforeEach(async () => {
-      // Create a habbit before each update test
+      // Create a habbit before each update test (day of week)
       const response = await request(app)
         .post("/api/habbits")
-        .send({ name: "Test Habbit", ecd: 5 });
+        .send({ name: "Test Habbit", ecdDayOfWeek: 5 }); // Friday
       habbitId = response.body.data._id;
     });
 
-    test("should update habbit with valid ecd", async () => {
+    test("should update habbit to a different ecdDayOfWeek", async () => {
       const response = await request(app)
         .put(`/api/habbits/${habbitId}`)
-        .send({ ecd: 10 })
+        .send({ ecdDayOfWeek: 3 })
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(10);
+      expect(response.body.data.ecdDayOfWeek).toBe(3);
+      expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
 
-    test("should fail to update habbit with invalid ecd (0)", async () => {
+    test("should update habbit from ecdDayOfWeek to ecdDayOfMonth", async () => {
       const response = await request(app)
         .put(`/api/habbits/${habbitId}`)
-        .send({ ecd: 0 })
+        .send({ ecdDayOfMonth: 10 })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfMonth).toBe(10);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
+    });
+
+    test("should fail to update habbit with invalid ecdDayOfWeek (0)", async () => {
+      const response = await request(app)
+        .put(`/api/habbits/${habbitId}`)
+        .send({ ecdDayOfWeek: 0 })
         .expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body.error).toContain("ECD must be a valid");
     });
 
-    test("should fail to update habbit with invalid ecd (32)", async () => {
+    test("should fail to update habbit with invalid ecdDayOfMonth (32)", async () => {
       const response = await request(app)
         .put(`/api/habbits/${habbitId}`)
-        .send({ ecd: 32 })
+        .send({ ecdDayOfMonth: 32 })
         .expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body.error).toContain("ECD must be a valid");
     });
 
-    test("should update habbit name without changing ecd", async () => {
+    test("should update habbit from ecdDayOfMonth to ecdDayOfWeek", async () => {
+      // First switch to ecdDayOfMonth
+      await request(app)
+        .put(`/api/habbits/${habbitId}`)
+        .send({ ecdDayOfMonth: 10 })
+        .expect(200);
+
+      // Now switch back to ecdDayOfWeek — ecdDayOfMonth should be cleared
+      const response = await request(app)
+        .put(`/api/habbits/${habbitId}`)
+        .send({ ecdDayOfWeek: 2 })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfWeek).toBe(2);
+      expect(response.body.data.ecdDayOfMonth).toBeNull();
+    });
+
+    test("should update habbit name without changing ecd fields", async () => {
       const response = await request(app)
         .put(`/api/habbits/${habbitId}`)
         .send({ name: "Updated Habbit Name" })
@@ -239,20 +359,21 @@ describe("Habbit ECD Validation", () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.data.name).toBe("Updated Habbit Name");
-      expect(response.body.data.ecd).toBe(5); // Should remain unchanged
+      expect(response.body.data.ecdDayOfWeek).toBe(5); // Should remain unchanged
+      expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
   });
 
   describe("ECD Interpretation", () => {
-    test("should interpret ecd 1-7 as day of week", async () => {
+    test("should store all ecdDayOfWeek values 1-7 correctly", async () => {
       const days = [
-        { ecd: 1, name: "Monday Habbit" },
-        { ecd: 2, name: "Tuesday Habbit" },
-        { ecd: 3, name: "Wednesday Habbit" },
-        { ecd: 4, name: "Thursday Habbit" },
-        { ecd: 5, name: "Friday Habbit" },
-        { ecd: 6, name: "Saturday Habbit" },
-        { ecd: 7, name: "Sunday Habbit" },
+        { ecdDayOfWeek: 1, name: "Monday Habbit" },
+        { ecdDayOfWeek: 2, name: "Tuesday Habbit" },
+        { ecdDayOfWeek: 3, name: "Wednesday Habbit" },
+        { ecdDayOfWeek: 4, name: "Thursday Habbit" },
+        { ecdDayOfWeek: 5, name: "Friday Habbit" },
+        { ecdDayOfWeek: 6, name: "Saturday Habbit" },
+        { ecdDayOfWeek: 7, name: "Sunday Habbit" },
       ];
 
       for (const day of days) {
@@ -262,18 +383,34 @@ describe("Habbit ECD Validation", () => {
           .expect(201);
 
         expect(response.body.success).toBe(true);
-        expect(response.body.data.ecd).toBe(day.ecd);
+        expect(response.body.data.ecdDayOfWeek).toBe(day.ecdDayOfWeek);
+        expect(response.body.data.ecdDayOfMonth).toBeNull();
       }
     });
 
-    test("should interpret ecd 8-31 as day of month", async () => {
+    test("should treat ecdDayOfMonth 1-7 as day of month (not day of week)", async () => {
+      // This is the key fix: values 1-7 can now be stored as day of month
+      for (const dom of [1, 2, 3, 4, 5, 6, 7]) {
+        const response = await request(app)
+          .post("/api/habbits")
+          .send({ name: `Day ${dom} of Month Habbit`, ecdDayOfMonth: dom })
+          .expect(201);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.ecdDayOfMonth).toBe(dom);
+        expect(response.body.data.ecdDayOfWeek).toBeNull();
+      }
+    });
+
+    test("should store ecdDayOfMonth values 8-31 correctly", async () => {
       const response = await request(app)
         .post("/api/habbits")
-        .send({ name: "Mid-month Habbit", ecd: 15 })
+        .send({ name: "Mid-month Habbit", ecdDayOfMonth: 15 })
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(15);
+      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
   });
 });

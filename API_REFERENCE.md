@@ -8,7 +8,7 @@ This document provides a complete reference for all API endpoints. Each collecti
 
 ## Common Data Model
 
-All collections share the same data structure:
+Office, Todos, Dreams, and WorkOnDreams share this structure:
 
 ```typescript
 interface Item {
@@ -22,6 +22,8 @@ interface Item {
   updatedAt: string; // ISO 8601 timestamp
 }
 ```
+
+**Habits use a different ECD structure** — see [Habits API](#habits-api) below.
 
 ## Standard Response Format
 
@@ -288,7 +290,35 @@ All endpoints follow the same pattern as Office Tasks (see above).
 
 Base path: `/api/habbits`
 
-**Note:** Habits behave differently from other collections in the chron endpoint.
+**Note:** Habits differ from other collections in two ways:
+
+1. The chron endpoint marks habits as **undone** instead of deleting them.
+2. ECD is expressed as **two separate fields** instead of a single `ecd` date.
+
+### Habit Data Model
+
+```typescript
+interface Habit {
+  _id: string; // MongoDB ObjectId
+  name: string; // Habit name (required)
+  notes: string; // Additional notes (optional, default: "")
+  priority: number; // 0-based priority (0 = highest)
+  done: boolean; // Completion status (default: false)
+  ecdDayOfWeek: number | null; // Day of week: 1 (Mon) – 7 (Sun). Null if using ecdDayOfMonth.
+  ecdDayOfMonth: number | null; // Day of month: 1 – 31. Null if using ecdDayOfWeek.
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+> **Exactly one** of `ecdDayOfWeek` or `ecdDayOfMonth` must be supplied on create. Setting one on update automatically clears the other.
+
+### ECD Field Rules
+
+| Field           | Values | Meaning                                                 |
+| --------------- | ------ | ------------------------------------------------------- |
+| `ecdDayOfWeek`  | 1 – 7  | 1 = Monday, 7 = Sunday                                  |
+| `ecdDayOfMonth` | 1 – 31 | Day of the calendar month (e.g. 5 = 5th of every month) |
 
 ### Endpoints:
 
@@ -315,20 +345,71 @@ Base path: `/api/habbits`
 }
 ```
 
-**Note:** Unlike Office/Todos, habits are NOT deleted when marked as done. The chron endpoint marks them as undone for the next day.
+**Note:** Unlike Office/Todos, habits are NOT deleted when marked as done. The chron endpoint marks them as undone for the next day. Any habit whose `ecdDayOfWeek` matches today's day of week, or whose `ecdDayOfMonth` matches today's date, is also moved to the lowest priority.
 
-### Example Create Request:
+### Create Habit
+
+**Endpoint:** `POST /api/habbits`
+
+**Repeats every Friday (day of week):**
 
 ```json
 {
   "name": "Morning exercise",
   "notes": "30 minutes cardio",
-  "done": false,
-  "ecd": 1
+  "ecdDayOfWeek": 5
 }
 ```
 
-**Note:** For habits, `ecd` can be a number (days from now) or a date string.
+**Repeats on the 5th of every month (day of month):**
+
+```json
+{
+  "name": "Pay bills",
+  "ecdDayOfMonth": 5
+}
+```
+
+**Validation errors (400):**
+
+- Neither field provided → `"ECD is required. Provide either ecdDayOfWeek (1-7) or ecdDayOfMonth (1-31)"`
+- Both fields provided → `"Provide only one of ecdDayOfWeek or ecdDayOfMonth, not both"`
+- `ecdDayOfWeek` outside 1–7 → `"ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)"`
+- `ecdDayOfMonth` outside 1–31 → `"ECD must be a valid ecdDayOfMonth (1-31)"`
+
+### Update Habit
+
+**Endpoint:** `PUT /api/habbits/:id`
+
+Send only the fields you want to change. Providing `ecdDayOfWeek` clears `ecdDayOfMonth` (and vice versa).
+
+**Switch from day-of-week to day-of-month:**
+
+```json
+{
+  "ecdDayOfMonth": 5
+}
+```
+
+**Response includes both fields (one will be `null`):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Pay bills",
+    "notes": "",
+    "priority": 0,
+    "done": false,
+    "ecdDayOfWeek": null,
+    "ecdDayOfMonth": 5,
+    "createdAt": "2026-03-21T10:00:00.000Z",
+    "updatedAt": "2026-03-21T10:05:00.000Z"
+  },
+  "message": "Habbit updated successfully"
+}
+```
 
 ---
 
@@ -465,8 +546,8 @@ All endpoints follow the same pattern as Office Tasks.
 ### 2. Date Handling
 
 - All dates are in ISO 8601 format: `"2026-03-20T00:00:00.000Z"`
-- `ecd` (Expected Completion Date) can be `null`
-- For habits, `ecd` can also be a number (representing days)
+- `ecd` (Expected Completion Date) can be `null` for Office, Todos, Dreams, and WorkOnDreams
+- **Habits do not use `ecd`.** They use `ecdDayOfWeek` (1–7) and `ecdDayOfMonth` (1–31) instead — exactly one must be set
 
 ### 3. Data Validation
 

@@ -57,7 +57,7 @@ const getHabbitById = async (req, res) => {
  */
 const createHabbit = async (req, res) => {
   try {
-    const { name, notes, done, ecd } = req.body;
+    const { name, notes, done, ecdDayOfWeek, ecdDayOfMonth } = req.body;
 
     // Validation for name - must be a non-empty string
     if (!name || typeof name !== "string" || name.trim() === "") {
@@ -67,21 +67,55 @@ const createHabbit = async (req, res) => {
       });
     }
 
-    // Validation for ecd - must be provided and valid
-    if (ecd === undefined || ecd === null) {
+    // Validation for ecd - exactly one of ecdDayOfWeek or ecdDayOfMonth must be provided
+    const hasWeek = ecdDayOfWeek !== undefined && ecdDayOfWeek !== null;
+    const hasMonth = ecdDayOfMonth !== undefined && ecdDayOfMonth !== null;
+
+    if (!hasWeek && !hasMonth) {
       return res.status(400).json({
         success: false,
         error:
-          "ECD is required. It should be day of week (1-7) or day of month (1-31)",
+          "ECD is required. Provide either ecdDayOfWeek (1-7) or ecdDayOfMonth (1-31)",
       });
     }
 
-    const ecdNum = parseInt(ecd);
-    if (isNaN(ecdNum) || ecdNum < 1 || ecdNum > 31) {
+    if (hasWeek && hasMonth) {
       return res.status(400).json({
         success: false,
-        error: "ECD must be a valid day of week (1-7) or day of month (1-31)",
+        error: "Provide only one of ecdDayOfWeek or ecdDayOfMonth, not both",
       });
+    }
+
+    let ecdDayOfWeekNum = null;
+    let ecdDayOfMonthNum = null;
+
+    if (hasWeek) {
+      ecdDayOfWeekNum = parseInt(ecdDayOfWeek);
+      if (
+        isNaN(ecdDayOfWeekNum) ||
+        ecdDayOfWeekNum < 1 ||
+        ecdDayOfWeekNum > 7
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)",
+        });
+      }
+    }
+
+    if (hasMonth) {
+      ecdDayOfMonthNum = parseInt(ecdDayOfMonth);
+      if (
+        isNaN(ecdDayOfMonthNum) ||
+        ecdDayOfMonthNum < 1 ||
+        ecdDayOfMonthNum > 31
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "ECD must be a valid ecdDayOfMonth (1-31)",
+        });
+      }
     }
 
     // Convert and validate done field
@@ -102,7 +136,8 @@ const createHabbit = async (req, res) => {
       name: name.trim(),
       notes: notes || "",
       done: doneValue,
-      ecd: ecdNum,
+      ecdDayOfWeek: ecdDayOfWeekNum,
+      ecdDayOfMonth: ecdDayOfMonthNum,
     };
 
     const newHabbit = await Habbit.create(habbitData);
@@ -128,7 +163,8 @@ const createHabbit = async (req, res) => {
  */
 const updateHabbit = async (req, res) => {
   try {
-    const { name, notes, priority, done, ecd } = req.body;
+    const { name, notes, priority, done, ecdDayOfWeek, ecdDayOfMonth } =
+      req.body;
     const updateData = {};
 
     // Only include fields that are provided
@@ -146,15 +182,28 @@ const updateHabbit = async (req, res) => {
       updateData.priority = priorityNum;
     }
     if (done !== undefined) updateData.done = done;
-    if (ecd !== undefined) {
-      const ecdNum = parseInt(ecd);
-      if (isNaN(ecdNum) || ecdNum < 1 || ecdNum > 31) {
+    if (ecdDayOfWeek !== undefined) {
+      const num = parseInt(ecdDayOfWeek);
+      if (isNaN(num) || num < 1 || num > 7) {
         return res.status(400).json({
           success: false,
-          error: "ECD must be a valid day of week (1-7) or day of month (1-31)",
+          error:
+            "ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)",
         });
       }
-      updateData.ecd = ecdNum;
+      updateData.ecdDayOfWeek = num;
+      updateData.ecdDayOfMonth = null; // switching to day-of-week clears day-of-month
+    }
+    if (ecdDayOfMonth !== undefined) {
+      const num = parseInt(ecdDayOfMonth);
+      if (isNaN(num) || num < 1 || num > 31) {
+        return res.status(400).json({
+          success: false,
+          error: "ECD must be a valid ecdDayOfMonth (1-31)",
+        });
+      }
+      updateData.ecdDayOfMonth = num;
+      updateData.ecdDayOfWeek = null; // switching to day-of-month clears day-of-week
     }
 
     // Validate at least one field is being updated

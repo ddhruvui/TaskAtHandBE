@@ -33,7 +33,7 @@ describe("Collections Independence Tests", () => {
     test("should create a habbit in Habbit collection", async () => {
       const response = await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit Item", ecd: 1 })
+        .send({ name: "Habbit Item", ecdDayOfWeek: 1 })
         .expect(201);
 
       expect(response.body.success).toBe(true);
@@ -180,7 +180,7 @@ describe("Collections Independence Tests", () => {
         // Create
         const createRes = await request(app)
           .post("/api/habbits")
-          .send({ name: "Test Habbit", notes: "Notes", ecd: 5 })
+          .send({ name: "Test Habbit", notes: "Notes", ecdDayOfWeek: 5 })
           .expect(201);
         const habbitId = createRes.body.data._id;
 
@@ -323,11 +323,11 @@ describe("Collections Independence Tests", () => {
 
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 1", ecd: 1 })
+        .send({ name: "Habbit 1", ecdDayOfWeek: 1 })
         .expect(201);
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 2", ecd: 2 })
+        .send({ name: "Habbit 2", ecdDayOfWeek: 2 })
         .expect(201);
 
       await request(app)
@@ -374,10 +374,10 @@ describe("Collections Independence Tests", () => {
 
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit Done", done: true, ecd: 1 });
+        .send({ name: "Habbit Done", done: true, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit Undone", done: false, ecd: 2 });
+        .send({ name: "Habbit Undone", done: false, ecdDayOfWeek: 2 });
 
       await request(app)
         .post("/api/todos")

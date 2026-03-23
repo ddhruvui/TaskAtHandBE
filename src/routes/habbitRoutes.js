@@ -161,10 +161,18 @@ router.get("/:id", getHabbitById);
  *               done:
  *                 type: boolean
  *                 example: false
- *               ecd:
- *                 type: string
- *                 format: date-time
- *                 example: "2026-03-20T00:00:00.000Z"
+ *               ecdDayOfWeek:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 7
+ *                 description: Day of week (1=Monday … 7=Sunday). Provide either this or ecdDayOfMonth.
+ *                 example: 1
+ *               ecdDayOfMonth:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 31
+ *                 description: Day of month (1-31). Provide either this or ecdDayOfWeek.
+ *                 example: 5
  *           examples:
  *             basic:
  *               summary: Basic habit
@@ -175,12 +183,17 @@ router.get("/:id", getHabbitById);
  *               value:
  *                 name: Morning exercise
  *                 notes: 30 minutes cardio
- *             withECD:
- *               summary: Habit with expected completion date
+ *             withECDweek:
+ *               summary: Habit repeating on a day of week (e.g. every Monday)
  *               value:
  *                 name: Read daily
  *                 notes: 20 pages minimum
- *                 ecd: "2026-03-20T00:00:00.000Z"
+ *                 ecdDayOfWeek: 1
+ *             withECDmonth:
+ *               summary: Habit repeating on a day of month (e.g. every 5th)
+ *               value:
+ *                 name: Pay bills
+ *                 ecdDayOfMonth: 5
  *     responses:
  *       201:
  *         description: Habit created successfully
@@ -238,10 +251,18 @@ router.post("/", createHabbit);
  *               done:
  *                 type: boolean
  *                 example: true
- *               ecd:
- *                 type: string
- *                 format: date-time
- *                 example: "2026-03-25T00:00:00.000Z"
+ *               ecdDayOfWeek:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 7
+ *                 description: Day of week (1=Monday … 7=Sunday). Setting this clears ecdDayOfMonth.
+ *                 example: 3
+ *               ecdDayOfMonth:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 31
+ *                 description: Day of month (1-31). Setting this clears ecdDayOfWeek.
+ *                 example: 5
  *           examples:
  *             markDone:
  *               summary: Mark habit as done

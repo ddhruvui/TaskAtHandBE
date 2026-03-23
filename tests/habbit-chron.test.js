@@ -25,16 +25,16 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create mix of done and undone habbits
       const habbit1 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Undone Habbit 1", done: false, ecd: 1 });
+        .send({ name: "Undone Habbit 1", done: false, ecdDayOfWeek: 1 });
       const habbit2 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Done Habbit 1", done: true, ecd: 2 });
+        .send({ name: "Done Habbit 1", done: true, ecdDayOfWeek: 2 });
       const habbit3 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Done Habbit 2", done: true, ecd: 3 });
+        .send({ name: "Done Habbit 2", done: true, ecdDayOfWeek: 3 });
       const habbit4 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Undone Habbit 2", done: false, ecd: 4 });
+        .send({ name: "Undone Habbit 2", done: false, ecdDayOfWeek: 4 });
 
       // Call chron endpoint
       const response = await request(app)
@@ -56,10 +56,10 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create only undone habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Undone Habbit 1", done: false, ecd: 1 });
+        .send({ name: "Undone Habbit 1", done: false, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Undone Habbit 2", done: false, ecd: 2 });
+        .send({ name: "Undone Habbit 2", done: false, ecdDayOfWeek: 2 });
 
       const response = await request(app)
         .delete("/api/habbits/chron")
@@ -87,10 +87,10 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Already Undone", done: false, ecd: 1 });
+        .send({ name: "Already Undone", done: false, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Will be Undone", done: true, ecd: 2 });
+        .send({ name: "Will be Undone", done: true, ecdDayOfWeek: 2 });
 
       // Get initial state
       const beforeChron = await request(app).get("/api/habbits");
@@ -131,15 +131,23 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create habbits
       const habbit1 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 1", done: false, ecd: otherDay1 });
+        .send({
+          name: "Normal Habbit 1",
+          done: false,
+          ecdDayOfWeek: otherDay1,
+        });
       const habbit2 = await request(app).post("/api/habbits").send({
         name: "Today ECD Habbit",
         done: false,
-        ecd: todayDayOfWeek,
+        ecdDayOfWeek: todayDayOfWeek,
       });
       const habbit3 = await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 2", done: false, ecd: otherDay2 });
+        .send({
+          name: "Normal Habbit 2",
+          done: false,
+          ecdDayOfWeek: otherDay2,
+        });
 
       // Call chron endpoint
       const response = await request(app)
@@ -168,15 +176,23 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
 
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 1", done: false, ecd: otherDay1 });
+        .send({
+          name: "Normal Habbit 1",
+          done: false,
+          ecdDayOfMonth: otherDay1,
+        });
       await request(app).post("/api/habbits").send({
         name: "Today ECD Habbit",
         done: false,
-        ecd: todayDayOfMonth,
+        ecdDayOfMonth: todayDayOfMonth,
       });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 2", done: false, ecd: otherDay2 });
+        .send({
+          name: "Normal Habbit 2",
+          done: false,
+          ecdDayOfMonth: otherDay2,
+        });
 
       // Call chron endpoint
       const response = await request(app)
@@ -207,19 +223,27 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 1", done: false, ecd: otherDay1 });
+        .send({
+          name: "Normal Habbit 1",
+          done: false,
+          ecdDayOfWeek: otherDay1,
+        });
       await request(app).post("/api/habbits").send({
         name: "Today ECD Habbit 1",
         done: false,
-        ecd: todayDayOfWeek,
+        ecdDayOfWeek: todayDayOfWeek,
       });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 2", done: false, ecd: otherDay2 });
+        .send({
+          name: "Normal Habbit 2",
+          done: false,
+          ecdDayOfWeek: otherDay2,
+        });
       await request(app).post("/api/habbits").send({
         name: "Today ECD Habbit 2",
         done: false,
-        ecd: todayDayOfWeek,
+        ecdDayOfWeek: todayDayOfWeek,
       });
 
       // Call chron endpoint
@@ -254,10 +278,18 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit", done: false, ecd: differentDay });
+        .send({
+          name: "Normal Habbit",
+          done: false,
+          ecdDayOfWeek: differentDay,
+        });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Another Habbit", done: false, ecd: differentDay });
+        .send({
+          name: "Another Habbit",
+          done: false,
+          ecdDayOfWeek: differentDay,
+        });
 
       // Call chron endpoint
       const response = await request(app)
@@ -274,6 +306,86 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       expect(habbits[0].name).toBe("Normal Habbit");
       expect(habbits[1].name).toBe("Another Habbit");
     });
+
+    test("should move habits matched by ecdDayOfWeek AND ecdDayOfMonth in the same run", async () => {
+      const today = new Date();
+      const todayDayOfWeek = today.getDay() === 0 ? 7 : today.getDay();
+      const todayDayOfMonth = today.getDate();
+
+      const otherWeekDay = todayDayOfWeek === 1 ? 2 : 1;
+      const otherMonthDay = todayDayOfMonth === 10 ? 11 : 10;
+
+      await request(app)
+        .post("/api/habbits")
+        .send({ name: "Normal Week Habbit", ecdDayOfWeek: otherWeekDay });
+      await request(app)
+        .post("/api/habbits")
+        .send({ name: "Matches Week Today", ecdDayOfWeek: todayDayOfWeek });
+      await request(app)
+        .post("/api/habbits")
+        .send({ name: "Normal Month Habbit", ecdDayOfMonth: otherMonthDay });
+      await request(app)
+        .post("/api/habbits")
+        .send({ name: "Matches Month Today", ecdDayOfMonth: todayDayOfMonth });
+
+      const response = await request(app)
+        .delete("/api/habbits/chron")
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.movedCount).toBe(2);
+
+      const allHabbits = (await request(app).get("/api/habbits")).body.data;
+      expect(allHabbits.length).toBe(4);
+      const lastTwo = allHabbits.slice(2).map((h) => h.name);
+      expect(lastTwo).toContain("Matches Week Today");
+      expect(lastTwo).toContain("Matches Month Today");
+    });
+
+    test("should NOT move habbit whose ecdDayOfMonth equals today's day-of-week (disambiguation)", async () => {
+      const today = new Date();
+      const todayDayOfWeek = today.getDay() === 0 ? 7 : today.getDay(); // 1-7
+      const todayDayOfMonth = today.getDate(); // 1-31
+
+      // Skip if today's date equals today's day-of-week number (e.g., Mon Jan 1)
+      // because the ecdDayOfMonth value would legitimately also match today's date
+      if (todayDayOfMonth === todayDayOfWeek) {
+        console.log(
+          "Skipping disambiguation test: todayDayOfMonth === todayDayOfWeek",
+        );
+        return;
+      }
+
+      // A habit with ecdDayOfMonth = today's day-of-week number.
+      // This should NOT trigger today unless today's date happens to equal that number.
+      // e.g. today is Saturday (dayOfWeek=6) and date=21 → ecdDayOfMonth:6 should NOT match
+      await request(app).post("/api/habbits").send({
+        name: "Month Habbit (same number as today weekday)",
+        ecdDayOfMonth: todayDayOfWeek, // e.g., 6 — only triggers on the 6th of the month
+      });
+
+      // This one SHOULD trigger — ecdDayOfWeek matches today's day of week
+      await request(app).post("/api/habbits").send({
+        name: "Week Habbit today",
+        ecdDayOfWeek: todayDayOfWeek,
+      });
+
+      const response = await request(app)
+        .delete("/api/habbits/chron")
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      // Only the ecdDayOfWeek one should be moved; the ecdDayOfMonth one should not
+      expect(response.body.movedCount).toBe(1);
+
+      const allHabbits = (await request(app).get("/api/habbits")).body.data;
+      expect(allHabbits.length).toBe(2);
+      // The week habbit should be last (lower priority)
+      expect(allHabbits[1].name).toBe("Week Habbit today");
+      expect(allHabbits[0].name).toBe(
+        "Month Habbit (same number as today weekday)",
+      );
+    });
   });
 
   describe("Combined functionality", () => {
@@ -284,21 +396,21 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create a mix of habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 1", done: false, ecd: 1 });
+        .send({ name: "Normal Habbit 1", done: false, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Done Habbit 1", done: true, ecd: 2 });
+        .send({ name: "Done Habbit 1", done: true, ecdDayOfWeek: 2 });
       await request(app).post("/api/habbits").send({
         name: "Today ECD Habbit",
         done: false,
-        ecd: todayDayOfWeek,
+        ecdDayOfWeek: todayDayOfWeek,
       });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit 2", done: false, ecd: 3 });
+        .send({ name: "Normal Habbit 2", done: false, ecdDayOfWeek: 3 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Done Habbit 2", done: true, ecd: 4 });
+        .send({ name: "Done Habbit 2", done: true, ecdDayOfWeek: 4 });
 
       // Call chron endpoint
       const response = await request(app)
@@ -328,19 +440,19 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
       // Create habbits
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 1", done: false, ecd: 1 });
+        .send({ name: "Habbit 1", done: false, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 2", done: true, ecd: 2 });
+        .send({ name: "Habbit 2", done: true, ecdDayOfWeek: 2 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 3", done: false, ecd: todayDayOfWeek });
+        .send({ name: "Habbit 3", done: false, ecdDayOfWeek: todayDayOfWeek });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 4", done: true, ecd: 3 });
+        .send({ name: "Habbit 4", done: true, ecdDayOfWeek: 3 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Habbit 5", done: false, ecd: 4 });
+        .send({ name: "Habbit 5", done: false, ecdDayOfWeek: 4 });
 
       // Call chron endpoint
       const response = await request(app)
@@ -369,13 +481,17 @@ describe("Habbit Chron Endpoint - DELETE /api/habbits/chron", () => {
 
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Normal Habbit", done: false, ecd: 1 });
+        .send({ name: "Normal Habbit", done: false, ecdDayOfWeek: 1 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Done Habbit", done: true, ecd: 2 });
+        .send({ name: "Done Habbit", done: true, ecdDayOfWeek: 2 });
       await request(app)
         .post("/api/habbits")
-        .send({ name: "Today Habbit", done: false, ecd: todayDayOfWeek });
+        .send({
+          name: "Today Habbit",
+          done: false,
+          ecdDayOfWeek: todayDayOfWeek,
+        });
 
       const response = await request(app)
         .delete("/api/habbits/chron")
