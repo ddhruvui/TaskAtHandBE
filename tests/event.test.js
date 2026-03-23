@@ -390,13 +390,11 @@ describe("Events", () => {
     });
 
     test("should NOT add 1 year when re-marking an already-done event as done", async () => {
-      const created = await request(app)
-        .post("/api/events")
-        .send({
-          name: "Already Done",
-          ecd: "2026-05-10T00:00:00.000Z",
-          done: true,
-        });
+      const created = await request(app).post("/api/events").send({
+        name: "Already Done",
+        ecd: "2026-05-10T00:00:00.000Z",
+        done: true,
+      });
       const id = created.body.data._id;
 
       const ecdBefore = (await request(app).get(`/api/events/${id}`)).body.data
