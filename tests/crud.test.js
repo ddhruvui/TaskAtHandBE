@@ -38,6 +38,11 @@ describe("Task CRUD Operations", () => {
     });
 
     test("should create a task with only required fields", async () => {
+      // Get current count so we know the expected priority regardless of other
+      // tasks that may have been inserted by parallel test files.
+      const countRes = await request(app).get("/api/office/count");
+      const expectedPriority = countRes.body.count; // new undone task goes here
+
       const taskData = { name: "Minimal Task" };
 
       const response = await request(app)
@@ -49,7 +54,7 @@ describe("Task CRUD Operations", () => {
       expect(response.body.data.name).toBe("Minimal Task");
       expect(response.body.data.notes).toBe("");
       expect(response.body.data.done).toBe(false);
-      expect(response.body.data.priority).toBe(1);
+      expect(response.body.data.priority).toBe(expectedPriority);
     });
 
     test("should reject task without name", async () => {
@@ -127,14 +132,15 @@ describe("Task CRUD Operations", () => {
       expect(response.body.error).toBe("Task not found");
     });
 
-    test("should return 500 for invalid task ID format", async () => {
+    test("should return 400 for invalid task ID format", async () => {
       const invalidId = "invalid-id";
 
       const response = await request(app)
         .get(`/api/office/${invalidId}`)
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
   });
 
@@ -277,19 +283,26 @@ describe("Task CRUD Operations", () => {
         .post("/api/office")
         .send({ name: "Priority Test 3" });
 
+      const p1Before = task1.body.data.priority;
+      const p3Before = task3.body.data.priority;
+
       // Delete the middle task
       await request(app)
         .delete(`/api/office/${task2.body.data._id}`)
         .expect(200);
 
-      // Get all tasks and verify priorities
-      const response = await request(app).get("/api/office").expect(200);
+      // Fetch the specific tasks we created and verify their priorities have no gaps
+      const t1 = (await request(app).get(`/api/office/${task1.body.data._id}`))
+        .body.data;
+      const t3 = (await request(app).get(`/api/office/${task3.body.data._id}`))
+        .body.data;
 
-      const priorities = response.body.data.map((task) => task.priority);
-      const uniquePriorities = [...new Set(priorities)];
-
-      // Priorities should be consecutive (no gaps)
-      expect(uniquePriorities.length).toBe(priorities.length);
+      // After deleting the middle task, task3's priority should decrease by 1
+      expect(t3.priority).toBe(p3Before - 1);
+      // task1 was before task2, so its priority should be unchanged
+      expect(t1.priority).toBe(p1Before);
+      // No gap between them
+      expect(t3.priority).toBe(t1.priority + 1);
     });
   });
 

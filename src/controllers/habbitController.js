@@ -67,9 +67,22 @@ const createHabbit = async (req, res) => {
       });
     }
 
-    // Validation for ecd - exactly one of ecdDayOfWeek or ecdDayOfMonth must be provided
-    const hasWeek = ecdDayOfWeek !== undefined && ecdDayOfWeek !== null;
-    const hasMonth = ecdDayOfMonth !== undefined && ecdDayOfMonth !== null;
+    // Normalize ECD inputs to arrays (accept single value or array)
+    const rawWeek =
+      ecdDayOfWeek !== undefined && ecdDayOfWeek !== null
+        ? Array.isArray(ecdDayOfWeek)
+          ? ecdDayOfWeek
+          : [ecdDayOfWeek]
+        : null;
+    const rawMonth =
+      ecdDayOfMonth !== undefined && ecdDayOfMonth !== null
+        ? Array.isArray(ecdDayOfMonth)
+          ? ecdDayOfMonth
+          : [ecdDayOfMonth]
+        : null;
+
+    const hasWeek = rawWeek !== null && rawWeek.length > 0;
+    const hasMonth = rawMonth !== null && rawMonth.length > 0;
 
     if (!hasWeek && !hasMonth) {
       return res.status(400).json({
@@ -86,16 +99,12 @@ const createHabbit = async (req, res) => {
       });
     }
 
-    let ecdDayOfWeekNum = null;
-    let ecdDayOfMonthNum = null;
+    let ecdDayOfWeekArr = null;
+    let ecdDayOfMonthArr = null;
 
     if (hasWeek) {
-      ecdDayOfWeekNum = parseInt(ecdDayOfWeek);
-      if (
-        isNaN(ecdDayOfWeekNum) ||
-        ecdDayOfWeekNum < 1 ||
-        ecdDayOfWeekNum > 7
-      ) {
+      ecdDayOfWeekArr = rawWeek.map((v) => parseInt(v));
+      if (ecdDayOfWeekArr.some((n) => isNaN(n) || n < 1 || n > 7)) {
         return res.status(400).json({
           success: false,
           error:
@@ -105,12 +114,8 @@ const createHabbit = async (req, res) => {
     }
 
     if (hasMonth) {
-      ecdDayOfMonthNum = parseInt(ecdDayOfMonth);
-      if (
-        isNaN(ecdDayOfMonthNum) ||
-        ecdDayOfMonthNum < 1 ||
-        ecdDayOfMonthNum > 31
-      ) {
+      ecdDayOfMonthArr = rawMonth.map((v) => parseInt(v));
+      if (ecdDayOfMonthArr.some((n) => isNaN(n) || n < 1 || n > 31)) {
         return res.status(400).json({
           success: false,
           error: "ECD must be a valid ecdDayOfMonth (1-31)",
@@ -136,8 +141,8 @@ const createHabbit = async (req, res) => {
       name: name.trim(),
       notes: notes || "",
       done: doneValue,
-      ecdDayOfWeek: ecdDayOfWeekNum,
-      ecdDayOfMonth: ecdDayOfMonthNum,
+      ecdDayOfWeek: ecdDayOfWeekArr,
+      ecdDayOfMonth: ecdDayOfMonthArr,
     };
 
     const newHabbit = await Habbit.create(habbitData);
@@ -183,26 +188,32 @@ const updateHabbit = async (req, res) => {
     }
     if (done !== undefined) updateData.done = done;
     if (ecdDayOfWeek !== undefined) {
-      const num = parseInt(ecdDayOfWeek);
-      if (isNaN(num) || num < 1 || num > 7) {
+      const rawWeek = Array.isArray(ecdDayOfWeek)
+        ? ecdDayOfWeek
+        : [ecdDayOfWeek];
+      const nums = rawWeek.map((v) => parseInt(v));
+      if (nums.some((n) => isNaN(n) || n < 1 || n > 7)) {
         return res.status(400).json({
           success: false,
           error:
             "ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)",
         });
       }
-      updateData.ecdDayOfWeek = num;
+      updateData.ecdDayOfWeek = nums;
       updateData.ecdDayOfMonth = null; // switching to day-of-week clears day-of-month
     }
     if (ecdDayOfMonth !== undefined) {
-      const num = parseInt(ecdDayOfMonth);
-      if (isNaN(num) || num < 1 || num > 31) {
+      const rawMonth = Array.isArray(ecdDayOfMonth)
+        ? ecdDayOfMonth
+        : [ecdDayOfMonth];
+      const nums = rawMonth.map((v) => parseInt(v));
+      if (nums.some((n) => isNaN(n) || n < 1 || n > 31)) {
         return res.status(400).json({
           success: false,
           error: "ECD must be a valid ecdDayOfMonth (1-31)",
         });
       }
-      updateData.ecdDayOfMonth = num;
+      updateData.ecdDayOfMonth = nums;
       updateData.ecdDayOfWeek = null; // switching to day-of-month clears day-of-week
     }
 

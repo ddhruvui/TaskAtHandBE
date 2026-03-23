@@ -15,15 +15,25 @@ beforeAll(async () => {
     // Get the TaskAtHand database
     const db = await getDatabase();
 
-    // Clear the Office-Test collection
-    const collectionName = "Office-Test";
-    await db.collection(collectionName).deleteMany({});
+    // Clear all test collections
+    const testCollections = [
+      "Office-Test",
+      "Habbit-Test",
+      "Todo-Test",
+      "Dream-Test",
+      "WorkOnDream-Test",
+      "Events-Test",
+    ];
+
+    await Promise.all(
+      testCollections.map((col) => db.collection(col).deleteMany({})),
+    );
 
     console.log(
-      `Test collection '${collectionName}' wiped clean (before tests start)`,
+      `Test collections wiped clean (before tests start): ${testCollections.join(", ")}`,
     );
   } catch (error) {
-    console.error("Error cleaning test collection:", error);
+    console.error("Error cleaning test collections:", error);
   }
 });
 

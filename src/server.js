@@ -99,6 +99,7 @@ app.get("/health", (req, res) => {
 app.use("/api/office", require("./routes/officeRoutes"));
 app.use("/api/habbits", require("./routes/habbitRoutes"));
 app.use("/api/todos", require("./routes/todoRoutes"));
+app.use("/api/events", require("./routes/eventRoutes"));
 app.use("/api/dreams", require("./routes/dreamRoutes"));
 app.use("/api/workondreams", require("./routes/workOnDreamRoutes"));
 

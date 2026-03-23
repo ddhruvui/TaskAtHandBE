@@ -34,7 +34,7 @@ describe("Habbit ECD Validation", () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.data).toHaveProperty("ecdDayOfWeek");
-      expect(response.body.data.ecdDayOfWeek).toBe(1);
+      expect(response.body.data.ecdDayOfWeek).toEqual([1]);
       expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
 
@@ -52,7 +52,7 @@ describe("Habbit ECD Validation", () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.data).toHaveProperty("ecdDayOfMonth");
-      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfMonth).toEqual([15]);
       expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
 
@@ -68,7 +68,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfMonth).toBe(5);
+      expect(response.body.data.ecdDayOfMonth).toEqual([5]);
       expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
 
@@ -84,7 +84,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfWeek).toBe(7);
+      expect(response.body.data.ecdDayOfWeek).toEqual([7]);
     });
 
     test("should create habbit with ecdDayOfMonth = 31 (last day of month)", async () => {
@@ -99,7 +99,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfMonth).toBe(31);
+      expect(response.body.data.ecdDayOfMonth).toEqual([31]);
     });
 
     test("should fail to create habbit without ECD", async () => {
@@ -220,7 +220,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfWeek).toBe(5);
+      expect(response.body.data.ecdDayOfWeek).toEqual([5]);
     });
 
     test("should fail with invalid string ecdDayOfWeek", async () => {
@@ -265,7 +265,7 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfMonth).toEqual([15]);
       expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
 
@@ -298,7 +298,7 @@ describe("Habbit ECD Validation", () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfWeek).toBe(3);
+      expect(response.body.data.ecdDayOfWeek).toEqual([3]);
       expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
 
@@ -309,7 +309,7 @@ describe("Habbit ECD Validation", () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfMonth).toBe(10);
+      expect(response.body.data.ecdDayOfMonth).toEqual([10]);
       expect(response.body.data.ecdDayOfWeek).toBeNull();
     });
 
@@ -347,7 +347,7 @@ describe("Habbit ECD Validation", () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfWeek).toBe(2);
+      expect(response.body.data.ecdDayOfWeek).toEqual([2]);
       expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
 
@@ -359,7 +359,7 @@ describe("Habbit ECD Validation", () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.data.name).toBe("Updated Habbit Name");
-      expect(response.body.data.ecdDayOfWeek).toBe(5); // Should remain unchanged
+      expect(response.body.data.ecdDayOfWeek).toEqual([5]); // Should remain unchanged
       expect(response.body.data.ecdDayOfMonth).toBeNull();
     });
   });
@@ -383,7 +383,7 @@ describe("Habbit ECD Validation", () => {
           .expect(201);
 
         expect(response.body.success).toBe(true);
-        expect(response.body.data.ecdDayOfWeek).toBe(day.ecdDayOfWeek);
+        expect(response.body.data.ecdDayOfWeek).toEqual([day.ecdDayOfWeek]);
         expect(response.body.data.ecdDayOfMonth).toBeNull();
       }
     });
@@ -397,7 +397,7 @@ describe("Habbit ECD Validation", () => {
           .expect(201);
 
         expect(response.body.success).toBe(true);
-        expect(response.body.data.ecdDayOfMonth).toBe(dom);
+        expect(response.body.data.ecdDayOfMonth).toEqual([dom]);
         expect(response.body.data.ecdDayOfWeek).toBeNull();
       }
     });
@@ -409,8 +409,50 @@ describe("Habbit ECD Validation", () => {
         .expect(201);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.ecdDayOfMonth).toBe(15);
+      expect(response.body.data.ecdDayOfMonth).toEqual([15]);
       expect(response.body.data.ecdDayOfWeek).toBeNull();
+    });
+
+    test("should create habbit with multiple ecdDayOfWeek values", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Multi-day Week Habbit", ecdDayOfWeek: [1, 3, 5] }) // Mon, Wed, Fri
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfWeek).toEqual([1, 3, 5]);
+      expect(response.body.data.ecdDayOfMonth).toBeNull();
+    });
+
+    test("should create habbit with multiple ecdDayOfMonth values", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Multi-day Month Habbit", ecdDayOfMonth: [1, 15, 31] })
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.ecdDayOfMonth).toEqual([1, 15, 31]);
+      expect(response.body.data.ecdDayOfWeek).toBeNull();
+    });
+
+    test("should fail with invalid value in ecdDayOfWeek array", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Invalid Array Week", ecdDayOfWeek: [1, 8] }) // 8 is out of range
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
+    });
+
+    test("should fail with invalid value in ecdDayOfMonth array", async () => {
+      const response = await request(app)
+        .post("/api/habbits")
+        .send({ name: "Invalid Array Month", ecdDayOfMonth: [10, 32] }) // 32 is out of range
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain("ECD must be a valid");
     });
   });
 });

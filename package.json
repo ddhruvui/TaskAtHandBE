@@ -6,7 +6,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "USE_TEST_DB=true NODE_ENV=test jest --runInBand --detectOpenHandles --forceExit",
-    "test:watch": "USE_TEST_DB=true NODE_ENV=test jest --watch --runInBand"
+    "test:watch": "USE_TEST_DB=true NODE_ENV=test jest --watch --runInBand",
+    "cleartest": "node scripts/cleartest.js"
   },
   "repository": {
     "type": "git",

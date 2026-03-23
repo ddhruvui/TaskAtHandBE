@@ -1,4 +1,9 @@
 const Office = require("../models/Office");
+const { ObjectId } = require("mongodb");
+
+/** Returns true for a valid 24-hex-char MongoDB ObjectId string */
+const isValidObjectId = (id) =>
+  ObjectId.isValid(id) && String(new ObjectId(id)) === id;
 
 /**
  * Get all tasks
@@ -28,6 +33,12 @@ const getAllTasks = async (req, res) => {
  */
 const getTaskById = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid task ID format",
+      });
+    }
     const task = await Office.findById(req.params.id);
 
     if (!task) {
@@ -138,6 +149,13 @@ const updateTask = async (req, res) => {
       });
     }
 
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid task ID format",
+      });
+    }
+
     const updatedTask = await Office.update(req.params.id, updateData);
 
     if (!updatedTask) {
@@ -153,9 +171,7 @@ const updateTask = async (req, res) => {
       message: "Task updated successfully",
     });
   } catch (error) {
-    console.error("Error updating task:", error);
-
-    // Handle specific errors
+    // Handle specific known validation errors (no need to log these)
     if (error.message.includes("Priority must be between")) {
       return res.status(400).json({
         success: false,
@@ -163,6 +179,7 @@ const updateTask = async (req, res) => {
       });
     }
 
+    console.error("Error updating task:", error);
     res.status(500).json({
       success: false,
       error: "Failed to update task",
@@ -177,6 +194,12 @@ const updateTask = async (req, res) => {
  */
 const deleteTask = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid task ID format",
+      });
+    }
     const success = await Office.delete(req.params.id);
 
     if (!success) {

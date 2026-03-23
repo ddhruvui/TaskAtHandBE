@@ -169,15 +169,17 @@ describe("API Contract & Response Consistency", () => {
     });
 
     test("should return 404 for non-existent task", async () => {
-      await request(app).get("/api/office/507f1f77bcf86cd799439011").expect(404);
+      await request(app)
+        .get("/api/office/507f1f77bcf86cd799439011")
+        .expect(404);
     });
 
     test("should return 404 for non-existent route", async () => {
       await request(app).get("/api/nonexistent").expect(404);
     });
 
-    test("should return 500 for invalid ObjectId", async () => {
-      await request(app).get("/api/office/invalid-id").expect(500);
+    test("should return 400 for invalid ObjectId", async () => {
+      await request(app).get("/api/office/invalid-id").expect(400);
     });
   });
 
@@ -250,10 +252,10 @@ describe("API Contract & Response Consistency", () => {
       expect(typeof response.body.error).toBe("string");
     });
 
-    test("500 errors should have consistent format", async () => {
+    test("400 errors should have consistent format", async () => {
       const response = await request(app)
         .get("/api/office/invalid-id")
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body).toHaveProperty("error");

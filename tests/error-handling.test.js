@@ -72,26 +72,29 @@ describe("Error Handling & Robustness", () => {
   });
 
   describe("Invalid MongoDB ObjectId Formats", () => {
-    test("should return 500 for invalid ObjectId format", async () => {
+    test("should return 400 for invalid ObjectId format", async () => {
       const response = await request(app)
         .get("/api/office/invalid-id-format")
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
 
-    test("should return 500 for too short ObjectId", async () => {
-      const response = await request(app).get("/api/office/123").expect(500);
+    test("should return 400 for too short ObjectId", async () => {
+      const response = await request(app).get("/api/office/123").expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
 
-    test("should return 500 for ObjectId with invalid characters", async () => {
+    test("should return 400 for ObjectId with invalid characters", async () => {
       const response = await request(app)
         .get("/api/office/zzzzzzzzzzzzzzzzzzzzzzz")
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
 
     test("should return 404 for valid format but non-existent task", async () => {
@@ -107,17 +110,19 @@ describe("Error Handling & Robustness", () => {
       const response = await request(app)
         .put("/api/office/invalid-id")
         .send({ name: "Updated" })
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
 
     test("should handle invalid ObjectId in DELETE", async () => {
       const response = await request(app)
         .delete("/api/office/invalid-id")
-        .expect(500);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe("Invalid task ID format");
     });
   });
 
@@ -227,10 +232,10 @@ describe("Error Handling & Robustness", () => {
       expect(response.body.success).toBe(false);
     });
 
-    test("should return consistent error format for server errors", async () => {
+    test("should return consistent error format for invalid ID errors", async () => {
       const response = await request(app)
         .get("/api/office/invalid-id")
-        .expect(500);
+        .expect(400);
 
       expect(response.body).toHaveProperty("success");
       expect(response.body).toHaveProperty("error");

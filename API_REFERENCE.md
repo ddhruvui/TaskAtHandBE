@@ -2,7 +2,7 @@
 
 **Base URL:** `http://localhost:3002`
 
-This document provides a complete reference for all API endpoints. Each collection (Office, Todos, Habits, Dreams, WorkOnDreams) follows the same pattern.
+This document provides a complete reference for all API endpoints. Each collection (Office, Todos, Habits, Dreams, WorkOnDreams, Events) follows the same pattern.
 
 ---
 
@@ -45,6 +45,482 @@ interface Item {
   "success": false,
   "error": "Error message",
   "message": "Detailed error (development only)"
+}
+```
+
+---
+
+## Work On Dreams API
+
+Base path: `/api/workondreams`
+
+Follows the same pattern as Office Tasks. Differences from Office are noted below.
+
+### Endpoints:
+
+- `GET /api/workondreams` - Get all work on dreams
+- `GET /api/workondreams/:id` - Get work on dream by ID
+- `POST /api/workondreams` - Create work on dream
+- `PUT /api/workondreams/:id` - Update work on dream
+- `DELETE /api/workondreams/:id` - Delete work on dream
+- `GET /api/workondreams/count` - Get work on dream count
+- `DELETE /api/workondreams/chron` - Delete all done work on dreams
+
+### Create Work On Dream
+
+**Endpoint:** `POST /api/workondreams`
+
+**Request Body:**
+
+```json
+{
+  "name": "Research market opportunities", // Required
+  "notes": "Analyze competitor landscape", // Optional
+  "done": false, // Optional
+  "ecd": "2026-04-15T00:00:00.000Z" // Optional
+}
+```
+
+**Response:** `201 Created` — same structure as Office (with `message: "Work on dream created successfully"`).
+
+**Validation error (400):**
+
+```json
+{ "success": false, "error": "Work on dream name must be a non-empty string" }
+```
+
+### Update Work On Dream
+
+**Endpoint:** `PUT /api/workondreams/:id`
+
+Accepts: `name`, `notes`, `priority`, `done`. `ecd` is **not updatable** (set at creation only, unlike Events).
+
+**Validation error (400):**
+
+```json
+{ "success": false, "error": "No valid fields to update" }
+```
+
+### Chron Endpoint
+
+**Endpoint:** `DELETE /api/workondreams/chron`
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "deletedCount": 2,
+  "movedCount": 1,
+  "message": "Successfully deleted 2 done work on dream(s) and moved 1 overdue work on dream(s) to lowest priority"
+}
+```
+
+**Note:** Deletes all done work on dreams. Any remaining undone item whose `ecd` matches today's date is moved to the lowest priority (`movedCount`).
+
+---
+
+## Events API
+
+Base path: `/api/events`
+
+**Note:** Events have two special behaviours:
+
+1. When an event is marked as **done**, **1 year is automatically added** to its `ecd` date.
+2. The chron endpoint **does not delete** events — it unmarks done events whose `ecd` falls within the current week and moves them to the lowest priority.
+
+### Event Data Model
+
+```typescript
+interface Event {
+  _id: string; // MongoDB ObjectId
+  name: string; // Event name/title (required)
+  notes: string; // Additional notes (optional, default: "")
+  priority: number; // 0-based priority (0 = highest priority)
+  done: boolean; // Completion status (default: false)
+  ecd: string | null; // Expected Completion Date (ISO 8601 format)
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+### Endpoints:
+
+- `GET /api/events` - Get all events
+- `GET /api/events/:id` - Get event by ID
+- `POST /api/events` - Create event
+- `PUT /api/events/:id` - Update event
+- `DELETE /api/events/:id` - Delete event
+- `GET /api/events/count` - Get event count
+- `DELETE /api/events/chron` - Uncheck events due this week (does NOT delete)
+
+### 1. Get All Events
+
+**Endpoint:** `GET /api/events`
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "_id": "507f1f77bcf86cd799439011",
+      "name": "Annual review",
+      "notes": "Performance review with manager",
+      "priority": 0,
+      "done": false,
+      "ecd": "2026-06-15T00:00:00.000Z",
+      "createdAt": "2026-03-18T10:00:00.000Z",
+      "updatedAt": "2026-03-18T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+### 2. Get Event by ID
+
+**Endpoint:** `GET /api/events/:id`
+
+**Parameters:**
+
+- `id` (path) - MongoDB ObjectId
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Annual review",
+    "notes": "Performance review with manager",
+    "priority": 0,
+    "done": false,
+    "ecd": "2026-06-15T00:00:00.000Z",
+    "createdAt": "2026-03-18T10:00:00.000Z",
+    "updatedAt": "2026-03-18T10:00:00.000Z"
+  }
+}
+```
+
+**Error:** `404 Not Found`
+
+```json
+{
+  "success": false,
+  "error": "Event not found"
+}
+```
+
+### 3. Create Event
+
+**Endpoint:** `POST /api/events`
+
+**Request Body:**
+
+```json
+{
+  "name": "Team offsite", // Required
+  "notes": "Book venue", // Optional
+  "done": false, // Optional
+  "ecd": "2026-06-15T00:00:00.000Z" // Optional
+}
+```
+
+**Response:** `201 Created`
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Team offsite",
+    "notes": "Book venue",
+    "priority": 0,
+    "done": false,
+    "ecd": "2026-06-15T00:00:00.000Z",
+    "createdAt": "2026-03-18T10:00:00.000Z",
+    "updatedAt": "2026-03-18T10:00:00.000Z"
+  },
+  "message": "Event created successfully"
+}
+```
+
+**Error:** `400 Bad Request`
+
+```json
+{
+  "success": false,
+  "error": "Event name must be a non-empty string"
+}
+```
+
+### 4. Update Event
+
+**Endpoint:** `PUT /api/events/:id`
+
+**Parameters:**
+
+- `id` (path) - MongoDB ObjectId
+
+**Request Body:** (all fields optional)
+
+```json
+{
+  "name": "Updated event name",
+  "notes": "Updated notes",
+  "priority": 2,
+  "done": true,
+  "ecd": "2026-12-01T00:00:00.000Z"
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Updated event name",
+    "notes": "Updated notes",
+    "priority": 2,
+    "done": true,
+    "ecd": "2027-12-01T00:00:00.000Z",
+    "createdAt": "2026-03-18T10:00:00.000Z",
+    "updatedAt": "2026-03-18T11:30:00.000Z"
+  },
+  "message": "Event updated successfully"
+}
+```
+
+**Notes:**
+
+- When `done` is set to `true`, the item moves to the end of the list and **1 year is added to the `ecd` date**
+- When `done` is set to `false`, the item moves to the top of the list (priority 0)
+- When `priority` is changed, other items are reordered automatically
+
+### 5. Delete Event
+
+**Endpoint:** `DELETE /api/events/:id`
+
+**Parameters:**
+
+- `id` (path) - MongoDB ObjectId
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "Event deleted successfully and priorities reordered"
+}
+```
+
+**Error:** `404 Not Found`
+
+```json
+{
+  "success": false,
+  "error": "Event not found"
+}
+```
+
+### 6. Get Event Count
+
+**Endpoint:** `GET /api/events/count`
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "count": 5
+}
+```
+
+### 7. Chron Endpoint (Special Behavior)
+
+**Endpoint:** `DELETE /api/events/chron`
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "markedUndoneCount": 2,
+  "movedCount": 2,
+  "message": "Successfully unchecked 2 event(s) due this week and moved 2 event(s) to lowest priority"
+}
+```
+
+**Note:** Unlike Office/Todos/Dreams/WorkOnDreams, events are **never deleted** by the chron endpoint. Instead, any done event whose `ecd` falls within the current week (Monday–Sunday UTC) is marked as undone and moved to the lowest priority. This is because when an event was previously marked done, 1 year was already added to its `ecd`, so the event automatically resurfaces in the same week of the following year.
+
+---
+
+## Habits API
+
+Base path: `/api/habbits`
+
+**Note:** Habits differ from other collections in three ways:
+
+1. The chron endpoint marks habits as **undone** instead of deleting them.
+2. ECD is expressed as **two separate fields** instead of a single `ecd` date.
+3. **Must use `allowRecurring=true`** when creating or updating habits to enable recurring scheduling.
+
+### Habit Data Model
+
+```typescript
+interface Habit {
+  _id: string; // MongoDB ObjectId
+  name: string; // Habit name (required)
+  notes: string; // Additional notes (optional, default: "")
+  priority: number; // 0-based priority (0 = highest)
+  done: boolean; // Completion status (default: false)
+  ecdDayOfWeek: number[] | null; // Day(s) of week: 1 (Mon) – 7 (Sun). Null if using ecdDayOfMonth.
+  ecdDayOfMonth: number[] | null; // Day(s) of month: 1 – 31. Null if using ecdDayOfWeek.
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+> **Exactly one** of `ecdDayOfWeek` or `ecdDayOfMonth` must be supplied on create — not both. Each field accepts a **single integer or an array of integers**. Setting one on update automatically clears the other.
+
+### ECD Field Rules
+
+| Field           | Values          | Meaning                                                      |
+| --------------- | --------------- | ------------------------------------------------------------ |
+| `ecdDayOfWeek`  | array of 1 – 7  | 1 = Monday, 7 = Sunday (e.g. `[1, 3, 5]` = Mon, Wed, Fri)    |
+| `ecdDayOfMonth` | array of 1 – 31 | Day(s) of the calendar month (e.g. `[5, 20]` = 5th and 20th) |
+
+### Endpoints:
+
+- `GET /api/habbits` - Get all habits
+- `GET /api/habbits/:id` - Get habit by ID
+- `POST /api/habbits` - Create habit
+- `PUT /api/habbits/:id` - Update habit
+- `DELETE /api/habbits/:id` - Delete habit
+- `GET /api/habbits/count` - Get habit count
+- `DELETE /api/habbits/chron` - Mark all done habits as undone (different from other collections!)
+
+### Chron Endpoint (Special Behavior)
+
+**Endpoint:** `DELETE /api/habbits/chron`
+
+**Response:** `200 OK`
+
+```json
+{
+  "success": true,
+  "markedUndoneCount": 5,
+  "movedCount": 2,
+  "message": "Successfully marked 5 done habbit(s) as undone and moved 2 overdue habbit(s) to lowest priority"
+}
+```
+
+**Note:** Unlike Office/Todos/Dreams/WorkOnDreams, habits are **never deleted** by the chron endpoint. All done habits are marked as undone unconditionally (regardless of their ECD). Additionally, any habit whose `ecdDayOfWeek` array includes today's day of week, or whose `ecdDayOfMonth` array includes today's date, is moved to the lowest priority.
+
+### Create Habit
+
+**Endpoint:** `POST /api/habbits`
+
+> ⚠️ **`allowRecurring: true` is required** on all habit create/update requests to enable recurring scheduling.
+
+**Repeats every Friday (single day, scalar accepted):**
+
+```json
+{
+  "name": "Morning exercise",
+  "notes": "30 minutes cardio",
+  "ecdDayOfWeek": 5,
+  "allowRecurring": true
+}
+```
+
+**Repeats on Mon, Wed, Fri (multiple days, array):**
+
+```json
+{
+  "name": "Morning exercise",
+  "notes": "30 minutes cardio",
+  "ecdDayOfWeek": [1, 3, 5],
+  "allowRecurring": true
+}
+```
+
+**Repeats on the 5th of every month (day of month):**
+
+```json
+{
+  "name": "Pay bills",
+  "ecdDayOfMonth": 5,
+  "allowRecurring": true
+}
+```
+
+**Response:** `201 Created`
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Pay bills",
+    "notes": "",
+    "priority": 0,
+    "done": false,
+    "ecdDayOfWeek": null,
+    "ecdDayOfMonth": [5],
+    "createdAt": "2026-03-21T10:00:00.000Z",
+    "updatedAt": "2026-03-21T10:00:00.000Z"
+  },
+  "message": "Habbit created successfully"
+}
+```
+
+**Validation errors (400):**
+
+- Name missing or blank → `"Habbit name must be a non-empty string"`
+
+- Neither field provided → `"ECD is required. Provide either ecdDayOfWeek (1-7) or ecdDayOfMonth (1-31)"`
+- Both fields provided → `"Provide only one of ecdDayOfWeek or ecdDayOfMonth, not both"`
+- `ecdDayOfWeek` outside 1–7 → `"ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)"`
+- `ecdDayOfMonth` outside 1–31 → `"ECD must be a valid ecdDayOfMonth (1-31)"`
+
+### Update Habit
+
+**Endpoint:** `PUT /api/habbits/:id`
+
+Send only the fields you want to change. Providing `ecdDayOfWeek` clears `ecdDayOfMonth` (and vice versa).
+
+**Switch from day-of-week to day-of-month (scalar or array accepted):**
+
+```json
+{
+  "ecdDayOfMonth": 5,
+  "allowRecurring": true
+}
+```
+
+**Response includes both fields (one will be `null`). ECD fields are always returned as arrays:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Pay bills",
+    "notes": "",
+    "priority": 0,
+    "done": false,
+    "ecdDayOfWeek": null,
+    "ecdDayOfMonth": [5],
+    "createdAt": "2026-03-21T10:00:00.000Z",
+    "updatedAt": "2026-03-21T10:05:00.000Z"
+  },
+  "message": "Habbit updated successfully"
 }
 ```
 
@@ -102,6 +578,15 @@ Base path: `/api/office`
     "createdAt": "2026-03-18T10:00:00.000Z",
     "updatedAt": "2026-03-18T10:00:00.000Z"
   }
+}
+```
+
+**Error:** `400 Bad Request` (invalid ID format)
+
+```json
+{
+  "success": false,
+  "error": "Invalid task ID format"
 }
 ```
 
@@ -195,11 +680,21 @@ Base path: `/api/office`
 }
 ```
 
+**Error:** `400 Bad Request` (invalid ID format)
+
+```json
+{
+  "success": false,
+  "error": "Invalid task ID format"
+}
+```
+
 **Notes:**
 
 - When `done` is set to `true`, the item moves to the end of the list (highest priority number)
 - When `done` is set to `false`, the item moves to the top of the list (priority 0)
 - When `priority` is changed, other items are reordered automatically
+- `ecd` is set at creation only and **cannot be updated** via PUT (unlike Events)
 
 ### 5. Delete Office Task
 
@@ -215,6 +710,15 @@ Base path: `/api/office`
 {
   "success": true,
   "message": "Task deleted successfully and priorities reordered"
+}
+```
+
+**Error:** `400 Bad Request` (invalid ID format)
+
+```json
+{
+  "success": false,
+  "error": "Invalid task ID format"
 }
 ```
 
@@ -255,13 +759,15 @@ Base path: `/api/office`
 }
 ```
 
+**Note:** After deleting done tasks, any remaining undone task whose `ecd` matches **today's date** is moved to the lowest priority (`movedCount`).
+
 ---
 
 ## Todos API
 
 Base path: `/api/todos`
 
-All endpoints follow the same pattern as Office Tasks (see above).
+Follows the same pattern as Office Tasks. Differences from Office are noted below.
 
 ### Endpoints:
 
@@ -273,143 +779,57 @@ All endpoints follow the same pattern as Office Tasks (see above).
 - `GET /api/todos/count` - Get todo count
 - `DELETE /api/todos/chron` - Delete all done todos
 
-### Example Create Request:
+### Create Todo
+
+**Endpoint:** `POST /api/todos`
+
+**Request Body:**
 
 ```json
 {
-  "name": "Buy groceries",
-  "notes": "Milk, eggs, bread",
-  "done": false,
-  "ecd": "2026-03-20T00:00:00.000Z"
+  "name": "Buy groceries", // Required
+  "notes": "Milk, eggs, bread", // Optional
+  "done": false, // Optional
+  "ecd": "2026-03-20T00:00:00.000Z" // Optional
 }
 ```
 
----
+**Response:** `201 Created` — same structure as Office (with `message: "Todo created successfully"`).
 
-## Habits API
+**Validation error (400):**
 
-Base path: `/api/habbits`
-
-**Note:** Habits differ from other collections in two ways:
-
-1. The chron endpoint marks habits as **undone** instead of deleting them.
-2. ECD is expressed as **two separate fields** instead of a single `ecd` date.
-
-### Habit Data Model
-
-```typescript
-interface Habit {
-  _id: string; // MongoDB ObjectId
-  name: string; // Habit name (required)
-  notes: string; // Additional notes (optional, default: "")
-  priority: number; // 0-based priority (0 = highest)
-  done: boolean; // Completion status (default: false)
-  ecdDayOfWeek: number | null; // Day of week: 1 (Mon) – 7 (Sun). Null if using ecdDayOfMonth.
-  ecdDayOfMonth: number | null; // Day of month: 1 – 31. Null if using ecdDayOfWeek.
-  createdAt: string; // ISO 8601 timestamp
-  updatedAt: string; // ISO 8601 timestamp
-}
+```json
+{ "success": false, "error": "Todo name must be a non-empty string" }
 ```
 
-> **Exactly one** of `ecdDayOfWeek` or `ecdDayOfMonth` must be supplied on create. Setting one on update automatically clears the other.
+### Update Todo
 
-### ECD Field Rules
+**Endpoint:** `PUT /api/todos/:id`
 
-| Field           | Values | Meaning                                                 |
-| --------------- | ------ | ------------------------------------------------------- |
-| `ecdDayOfWeek`  | 1 – 7  | 1 = Monday, 7 = Sunday                                  |
-| `ecdDayOfMonth` | 1 – 31 | Day of the calendar month (e.g. 5 = 5th of every month) |
+Accepts: `name`, `notes`, `priority`, `done`. `ecd` is **not updatable** (set at creation only, unlike Events).
 
-### Endpoints:
+**Validation error (400):**
 
-- `GET /api/habbits` - Get all habits
-- `GET /api/habbits/:id` - Get habit by ID
-- `POST /api/habbits` - Create habit
-- `PUT /api/habbits/:id` - Update habit
-- `DELETE /api/habbits/:id` - Delete habit
-- `GET /api/habbits/count` - Get habit count
-- `DELETE /api/habbits/chron` - Mark all done habits as undone (different from other collections!)
+```json
+{ "success": false, "error": "No valid fields to update" }
+```
 
-### Chron Endpoint (Special Behavior)
+### Chron Endpoint
 
-**Endpoint:** `DELETE /api/habbits/chron`
+**Endpoint:** `DELETE /api/todos/chron`
 
 **Response:** `200 OK`
 
 ```json
 {
   "success": true,
-  "markedUndoneCount": 5,
-  "movedCount": 2,
-  "message": "Successfully marked 5 habit(s) as undone and moved 2 overdue habit(s) to lowest priority"
+  "deletedCount": 3,
+  "movedCount": 1,
+  "message": "Successfully deleted 3 done todo(s) and moved 1 overdue todo(s) to lowest priority"
 }
 ```
 
-**Note:** Unlike Office/Todos, habits are NOT deleted when marked as done. The chron endpoint marks them as undone for the next day. Any habit whose `ecdDayOfWeek` matches today's day of week, or whose `ecdDayOfMonth` matches today's date, is also moved to the lowest priority.
-
-### Create Habit
-
-**Endpoint:** `POST /api/habbits`
-
-**Repeats every Friday (day of week):**
-
-```json
-{
-  "name": "Morning exercise",
-  "notes": "30 minutes cardio",
-  "ecdDayOfWeek": 5
-}
-```
-
-**Repeats on the 5th of every month (day of month):**
-
-```json
-{
-  "name": "Pay bills",
-  "ecdDayOfMonth": 5
-}
-```
-
-**Validation errors (400):**
-
-- Neither field provided → `"ECD is required. Provide either ecdDayOfWeek (1-7) or ecdDayOfMonth (1-31)"`
-- Both fields provided → `"Provide only one of ecdDayOfWeek or ecdDayOfMonth, not both"`
-- `ecdDayOfWeek` outside 1–7 → `"ECD must be a valid ecdDayOfWeek (1-7, where 1=Monday and 7=Sunday)"`
-- `ecdDayOfMonth` outside 1–31 → `"ECD must be a valid ecdDayOfMonth (1-31)"`
-
-### Update Habit
-
-**Endpoint:** `PUT /api/habbits/:id`
-
-Send only the fields you want to change. Providing `ecdDayOfWeek` clears `ecdDayOfMonth` (and vice versa).
-
-**Switch from day-of-week to day-of-month:**
-
-```json
-{
-  "ecdDayOfMonth": 5
-}
-```
-
-**Response includes both fields (one will be `null`):**
-
-```json
-{
-  "success": true,
-  "data": {
-    "_id": "507f1f77bcf86cd799439011",
-    "name": "Pay bills",
-    "notes": "",
-    "priority": 0,
-    "done": false,
-    "ecdDayOfWeek": null,
-    "ecdDayOfMonth": 5,
-    "createdAt": "2026-03-21T10:00:00.000Z",
-    "updatedAt": "2026-03-21T10:05:00.000Z"
-  },
-  "message": "Habbit updated successfully"
-}
-```
+**Note:** Deletes all done todos. Any remaining undone todo whose `ecd` matches today's date is moved to the lowest priority (`movedCount`).
 
 ---
 
@@ -417,7 +837,7 @@ Send only the fields you want to change. Providing `ecdDayOfWeek` clears `ecdDay
 
 Base path: `/api/dreams`
 
-All endpoints follow the same pattern as Office Tasks.
+Follows the same pattern as Office Tasks. Differences from Office are noted below.
 
 ### Endpoints:
 
@@ -429,45 +849,57 @@ All endpoints follow the same pattern as Office Tasks.
 - `GET /api/dreams/count` - Get dream count
 - `DELETE /api/dreams/chron` - Delete all done dreams
 
-### Example Create Request:
+### Create Dream
+
+**Endpoint:** `POST /api/dreams`
+
+**Request Body:**
 
 ```json
 {
-  "name": "Build a startup",
-  "notes": "Focus on AI-powered productivity tools",
-  "done": false,
-  "ecd": "2027-12-31T00:00:00.000Z"
+  "name": "Build a startup", // Required
+  "notes": "Focus on AI-powered productivity tools", // Optional
+  "done": false, // Optional
+  "ecd": "2027-12-31T00:00:00.000Z" // Optional
 }
 ```
 
----
+**Response:** `201 Created` — same structure as Office (with `message: "Dream created successfully"`).
 
-## Work On Dreams API
+**Validation error (400):**
 
-Base path: `/api/workondreams`
+```json
+{ "success": false, "error": "Dream name must be a non-empty string" }
+```
 
-All endpoints follow the same pattern as Office Tasks.
+### Update Dream
 
-### Endpoints:
+**Endpoint:** `PUT /api/dreams/:id`
 
-- `GET /api/workondreams` - Get all work on dreams
-- `GET /api/workondreams/:id` - Get work on dream by ID
-- `POST /api/workondreams` - Create work on dream
-- `PUT /api/workondreams/:id` - Update work on dream
-- `DELETE /api/workondreams/:id` - Delete work on dream
-- `GET /api/workondreams/count` - Get work on dream count
-- `DELETE /api/workondreams/chron` - Delete all done work on dreams
+Accepts: `name`, `notes`, `priority`, `done`. `ecd` is **not updatable** (set at creation only, unlike Events).
 
-### Example Create Request:
+**Validation error (400):**
+
+```json
+{ "success": false, "error": "No valid fields to update" }
+```
+
+### Chron Endpoint
+
+**Endpoint:** `DELETE /api/dreams/chron`
+
+**Response:** `200 OK`
 
 ```json
 {
-  "name": "Research market opportunities",
-  "notes": "Analyze competitor landscape",
-  "done": false,
-  "ecd": "2026-04-15T00:00:00.000Z"
+  "success": true,
+  "deletedCount": 2,
+  "movedCount": 1,
+  "message": "Successfully deleted 2 done dream(s) and moved 1 overdue dream(s) to lowest priority"
 }
 ```
+
+**Note:** Deletes all done dreams. Any remaining undone dream whose `ecd` matches today's date is moved to the lowest priority (`movedCount`).
 
 ---
 
@@ -547,7 +979,7 @@ All endpoints follow the same pattern as Office Tasks.
 
 - All dates are in ISO 8601 format: `"2026-03-20T00:00:00.000Z"`
 - `ecd` (Expected Completion Date) can be `null` for Office, Todos, Dreams, and WorkOnDreams
-- **Habits do not use `ecd`.** They use `ecdDayOfWeek` (1–7) and `ecdDayOfMonth` (1–31) instead — exactly one must be set
+- **Habits do not use `ecd`.** They use `ecdDayOfWeek` and `ecdDayOfMonth` instead (both stored as **arrays** of integers). Exactly one field must be provided on create; each accepts a single integer or an array (e.g. `[1, 3, 5]` for Mon/Wed/Fri, `[5]` for the 5th of every month)
 
 ### 3. Data Validation
 
@@ -571,7 +1003,8 @@ All endpoints follow the same pattern as Office Tasks.
 
 ### 6. Collection Differences
 
-- **Habits:** Chron endpoint marks items as undone instead of deleting them
+- **Habits:** Chron endpoint marks **all** done habits as undone (regardless of date)
+- **Events:** Chron endpoint marks done events as undone only if their `ecd` falls within the current week; never deletes; 1 year is added to `ecd` when an event is marked done
 - **Office/Todos/Dreams/WorkOnDreams:** Chron endpoint deletes done items
 
 ### 7. Testing

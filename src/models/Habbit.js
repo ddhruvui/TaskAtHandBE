@@ -233,11 +233,15 @@ class Habbit {
 
       allHabbits.forEach((habbit) => {
         // Check if ecdDayOfWeek matches today's day of week, or ecdDayOfMonth matches today's date
-        const matchesWeek =
-          habbit.ecdDayOfWeek != null && habbit.ecdDayOfWeek === todayDayOfWeek;
-        const matchesMonth =
-          habbit.ecdDayOfMonth != null &&
-          habbit.ecdDayOfMonth === todayDayOfMonth;
+        // Both fields are stored as arrays (or null), so use .includes() for matching
+        const matchesWeek = Array.isArray(habbit.ecdDayOfWeek)
+          ? habbit.ecdDayOfWeek.includes(todayDayOfWeek)
+          : habbit.ecdDayOfWeek != null &&
+            habbit.ecdDayOfWeek === todayDayOfWeek;
+        const matchesMonth = Array.isArray(habbit.ecdDayOfMonth)
+          ? habbit.ecdDayOfMonth.includes(todayDayOfMonth)
+          : habbit.ecdDayOfMonth != null &&
+            habbit.ecdDayOfMonth === todayDayOfMonth;
         if (matchesWeek || matchesMonth) {
           overdueToday.push(habbit);
         } else {
