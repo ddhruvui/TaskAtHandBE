@@ -217,9 +217,12 @@ class Dream {
       .toArray();
 
     if (remainingDreams.length > 0) {
-      // Get today's date as a string in YYYY-MM-DD format
+      // Get today's date as a string in YYYY-MM-DD format (local timezone)
       const today = new Date();
-      const todayStr = today.toISOString().split("T")[0];
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, "0");
+      const day = String(today.getDate()).padStart(2, "0");
+      const todayStr = `${year}-${month}-${day}`;
 
       // Separate dreams: dreams with ecd = today go to the end
       const normalDreams = [];
