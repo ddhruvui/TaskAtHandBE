@@ -2,361 +2,302 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
-describe("Chron Endpoint - DELETE /api/office/chron", () => {
-  let taskIds = {};
+async function clearCollections() {
+  const db = await getDatabase();
+  await db.collection("Headers-Test").deleteMany({});
+  await db.collection("Tasks-Test").deleteMany({});
+}
 
+async function createHeader(name) {
+  const res = await request(app).post("/headers").send({ name });
+  return res.body;
+}
+
+async function createTask(data) {
+  const res = await request(app).post("/tasks").send(data);
+  return res.body;
+}
+
+async function getTasksForHeader(headerId) {
+  const res = await request(app).get(`/tasks?headerId=${headerId}`);
+  return res.body;
+}
+
+describe("Cron Job", () => {
   beforeAll(async () => {
     await connectDB();
-
-    // Clear test database before chron tests
-    const db = await getDatabase();
-    const collectionName = "Office-Test";
-    await db.collection(collectionName).deleteMany({});
-    console.log(`Chron Tests: ${collectionName} collection cleared`);
   });
 
   beforeEach(async () => {
-    // Clear database before each test for isolation
-    const db = await getDatabase();
-    const collectionName = "Office-Test";
-    await db.collection(collectionName).deleteMany({});
-    taskIds = {};
+    await clearCollections();
   });
 
-  describe("Delete done tasks functionality", () => {
-    test("should delete all done tasks", async () => {
-      // Create mix of done and undone tasks
-      const task1 = await request(app)
-        .post("/api/office")
-        .send({ name: "Undone Task 1", done: false });
-      const task2 = await request(app)
-        .post("/api/office")
-        .send({ name: "Done Task 1", done: true });
-      const task3 = await request(app)
-        .post("/api/office")
-        .send({ name: "Done Task 2", done: true });
-      const task4 = await request(app)
-        .post("/api/office")
-        .send({ name: "Undone Task 2", done: false });
+  describe("Step 5 — Delete done date tasks", () => {
+    test("deletes done date tasks and leaves undone date tasks", async () => {
+      const h = await createHeader("H");
+      const t1 = await createTask({
+        name: "Done date task",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-01-01" },
+      });
+      const t2 = await createTask({
+        name: "Undone date task",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-04-01" },
+      });
+      const t3 = await createTask({
+        name: "Undone no-ecd task",
+        headerId: h._id,
+      });
 
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
+      // Mark t1 done
+      await request(app).put(`/tasks/${t1._id}`).send({ done: true });
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.deletedCount).toBe(2);
+      // Run cron
+      await request(app).post("/cron/run").send({}).expect(200);
 
-      // Verify only undone tasks remain
-      const remainingTasks = await request(app).get("/api/office");
-      expect(remainingTasks.body.count).toBe(2);
-      expect(remainingTasks.body.data.every((task) => !task.done)).toBe(true);
+      const tasks = await getTasksForHeader(h._id);
+      const ids = tasks.map((t) => t._id);
+
+      expect(ids).not.toContain(t1._id); // deleted
+      expect(ids).toContain(t2._id); // kept (undone)
+      expect(ids).toContain(t3._id); // kept (no ecd)
     });
 
-    test("should return deletedCount = 0 when no done tasks exist", async () => {
-      // Create only undone tasks
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Undone Task 1", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Undone Task 2", done: false });
+    test("does not delete done non-date tasks", async () => {
+      const h = await createHeader("H");
 
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
+      const dow = await createTask({
+        name: "Done dow task",
+        headerId: h._id,
+        ecd: { type: "day_of_week", value: ["Mon"] },
+      });
+      const dom = await createTask({
+        name: "Done dom task",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [1] },
+      });
+      const doy = await createTask({
+        name: "Done doy task",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "1/1/2030" },
+      });
+      const noEcd = await createTask({ name: "Done no-ecd", headerId: h._id });
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.deletedCount).toBe(0);
+      // Mark all done
+      for (const t of [dow, dom, doy, noEcd]) {
+        await request(app).put(`/tasks/${t._id}`).send({ done: true });
+      }
 
-      // All tasks should still exist
-      const remainingTasks = await request(app).get("/api/office");
-      expect(remainingTasks.body.count).toBe(2);
-    });
+      await request(app).post("/cron/run").send({}).expect(200);
 
-    test("should handle empty database gracefully", async () => {
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
+      const tasks = await getTasksForHeader(h._id);
+      const ids = tasks.map((t) => t._id);
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.deletedCount).toBe(0);
-      expect(response.body.movedCount).toBe(0);
-    });
-  });
-
-  describe("Move tasks with ECD = today to lowest priority", () => {
-    test("should move undone task with ECD = today to lowest priority", async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split("T")[0];
-
-      // Create tasks
-      const task1 = await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 1", done: false });
-      const task2 = await request(app)
-        .post("/api/office")
-        .send({ name: "Today ECD Task", done: false, ecd: todayStr });
-      const task3 = await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 2", done: false });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.movedCount).toBe(1);
-
-      // Verify task order - task with ECD = today should be last
-      const remainingTasks = await request(app).get("/api/office");
-      const tasks = remainingTasks.body.data;
-
-      expect(tasks.length).toBe(3);
-      expect(tasks[0].name).toBe("Normal Task 1");
-      expect(tasks[1].name).toBe("Normal Task 2");
-      expect(tasks[2].name).toBe("Today ECD Task");
-      expect(tasks[2].priority).toBe(2);
-    });
-
-    test("should move multiple undone tasks with ECD = today to lowest priority", async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split("T")[0];
-
-      // Create tasks
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 1", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Today ECD Task 1", done: false, ecd: todayStr });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 2", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Today ECD Task 2", done: false, ecd: todayStr });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.movedCount).toBe(2);
-
-      // Verify task order - tasks with ECD = today should be at the end
-      const remainingTasks = await request(app).get("/api/office");
-      const tasks = remainingTasks.body.data;
-
-      expect(tasks.length).toBe(4);
-      expect(tasks[0].name).toBe("Normal Task 1");
-      expect(tasks[1].name).toBe("Normal Task 2");
-      expect(tasks[2].name).toBe("Today ECD Task 1");
-      expect(tasks[3].name).toBe("Today ECD Task 2");
-    });
-
-    test("should NOT move done task with ECD = today", async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split("T")[0];
-
-      // Create tasks - one done with today's ECD
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Done Today ECD Task", done: true, ecd: todayStr });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.deletedCount).toBe(1); // Done task should be deleted
-      expect(response.body.movedCount).toBe(0); // No tasks moved
-
-      // Verify only normal task remains
-      const remainingTasks = await request(app).get("/api/office");
-      expect(remainingTasks.body.count).toBe(1);
-      expect(remainingTasks.body.data[0].name).toBe("Normal Task");
-    });
-
-    test("should NOT move task with ECD = tomorrow", async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split("T")[0];
-
-      // Create tasks
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Tomorrow ECD Task", done: false, ecd: tomorrowStr });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.movedCount).toBe(0); // Tomorrow's task should not be moved
-
-      // Verify order unchanged
-      const remainingTasks = await request(app).get("/api/office");
-      const tasks = remainingTasks.body.data;
-      expect(tasks.length).toBe(2);
-      expect(tasks[0].name).toBe("Normal Task");
-      expect(tasks[1].name).toBe("Tomorrow ECD Task");
-    });
-
-    test("should NOT move task with ECD = yesterday", async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-      // Create tasks
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Yesterday ECD Task", done: false, ecd: yesterdayStr });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.movedCount).toBe(0); // Yesterday's task should not be moved
-
-      // Verify order unchanged
-      const remainingTasks = await request(app).get("/api/office");
-      expect(remainingTasks.body.count).toBe(2);
+      expect(ids).toContain(dow._id);
+      expect(ids).toContain(dom._id);
+      expect(ids).toContain(doy._id);
+      expect(ids).toContain(noEcd._id);
     });
   });
 
-  describe("Combined functionality", () => {
-    test("should delete done tasks AND move today-ECD tasks to lowest priority", async () => {
+  describe("Step 3 — Mark undone: day_of_week", () => {
+    test("marks done day_of_week tasks undone when today's day matches", async () => {
+      const h = await createHeader("H");
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+        today.getUTCDay()
+      ];
+
+      const t = await createTask({
+        name: "DOW task",
+        headerId: h._id,
+        ecd: { type: "day_of_week", value: [dow] },
+      });
+
+      // Mark done
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      // Run cron with today's date
       const todayStr = today.toISOString().split("T")[0];
+      await request(app).post("/cron/run").send({ date: todayStr }).expect(200);
 
-      // Create a mix of tasks
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 1", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Done Task 1", done: true });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Today ECD Task", done: false, ecd: todayStr });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task 2", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Done Task 2", done: true });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.deletedCount).toBe(2); // 2 done tasks deleted
-      expect(response.body.movedCount).toBe(1); // 1 task with today's ECD moved
-
-      // Verify final state
-      const remainingTasks = await request(app).get("/api/office");
-      const tasks = remainingTasks.body.data;
-
-      expect(tasks.length).toBe(3);
-      expect(tasks[0].name).toBe("Normal Task 1");
-      expect(tasks[1].name).toBe("Normal Task 2");
-      expect(tasks[2].name).toBe("Today ECD Task"); // Moved to last
-      expect(tasks[2].priority).toBe(2);
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.done).toBe(false);
     });
 
-    test("should reorder priorities sequentially after deletion and moving", async () => {
+    test("does not affect day_of_week tasks whose day does not match", async () => {
+      const h = await createHeader("H");
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const todayIdx = today.getUTCDay();
+      // Pick a day that is NOT today
+      const otherDow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+        (todayIdx + 1) % 7
+      ];
+
+      const t = await createTask({
+        name: "DOW other day",
+        headerId: h._id,
+        ecd: { type: "day_of_week", value: [otherDow] },
+      });
+
+      // Mark done
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
       const todayStr = today.toISOString().split("T")[0];
+      await request(app).post("/cron/run").send({ date: todayStr }).expect(200);
 
-      // Create tasks with gaps in priority
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 1", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 2", done: true });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 3", done: false, ecd: todayStr });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 4", done: true });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 5", done: false });
-
-      // Call chron endpoint
-      const response = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-
-      // Verify priorities are sequential (0, 1, 2)
-      const remainingTasks = await request(app).get("/api/office");
-      const tasks = remainingTasks.body.data;
-
-      expect(tasks.length).toBe(3);
-      expect(tasks[0].priority).toBe(0);
-      expect(tasks[1].priority).toBe(1);
-      expect(tasks[2].priority).toBe(2);
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.done).toBe(true); // stays done
     });
   });
 
-  describe("Response format", () => {
-    test("should return correct response structure", async () => {
+  describe("Step 4 — Mark undone: day_of_month", () => {
+    test("marks done day_of_month tasks undone when today's date matches", async () => {
+      const h = await createHeader("H");
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const todayDate = today.getUTCDate();
+
+      const t = await createTask({
+        name: "DOM task",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [todayDate] },
+      });
+
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
       const todayStr = today.toISOString().split("T")[0];
+      await request(app).post("/cron/run").send({ date: todayStr }).expect(200);
 
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Normal Task", done: false });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Done Task", done: true });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Today Task", done: false, ecd: todayStr });
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.done).toBe(false);
+    });
+  });
 
-      const response = await request(app)
-        .delete("/api/office/chron")
+  describe("Step 2 — Increment day_of_year (Jan 1st)", () => {
+    test("increments year and sets done=false on Jan 1st", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "Annual task",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "7/3/2026" },
+      });
+
+      // Mark done
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      // Run cron with Jan 1 2027
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-01-01" })
         .expect(200);
 
-      expect(response.body).toHaveProperty("success");
-      expect(response.body).toHaveProperty("deletedCount");
-      expect(response.body).toHaveProperty("movedCount");
-      expect(response.body).toHaveProperty("message");
-      expect(typeof response.body.deletedCount).toBe("number");
-      expect(typeof response.body.movedCount).toBe("number");
-      expect(typeof response.body.message).toBe("string");
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.ecd.value).toBe("7/3/2027");
+      expect(updated.done).toBe(false);
+    });
+
+    test("clamps Feb 29 to Feb 28 in non-leap years on Jan 1st", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "Leap day task",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "29/2/2024" }, // 2024 was a leap year
+      });
+
+      // Run cron with Jan 1 2025 (2025 is not a leap year)
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2025-01-01" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.ecd.value).toBe("28/2/2025"); // clamped
+      expect(updated.done).toBe(false);
+    });
+  });
+
+  describe("Step 1 — Clamp day_of_month on 1st of month", () => {
+    test("clamps values exceeding days in that month on the 1st", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "DOM 30/31",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [15, 30, 31] },
+      });
+
+      // Feb 1st — Feb has 28 days in 2026
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-02-01" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      // 15 is fine, 30→28, 31→28
+      expect(updated.ecd.value).toEqual([15, 28, 28]);
+    });
+
+    test("does NOT clamp on non-1st of month", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "DOM 31",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [31] },
+      });
+
+      // Feb 15th — should NOT clamp
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-02-15" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.ecd.value).toEqual([31]); // unchanged
+    });
+  });
+
+  describe("Step 6 — Reorder priorities per header", () => {
+    test("undone tasks are sorted before done tasks after cron", async () => {
+      const h = await createHeader("H");
+
+      const t1 = await createTask({
+        name: "T1",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-12-31" },
+      });
+      const t2 = await createTask({
+        name: "T2",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-06-01" },
+      });
+      const t3 = await createTask({
+        name: "T3",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-04-01" },
+      });
+
+      // Mark t1 done (but it's a date task — will be deleted by step 5)
+      // Keep t2 and t3 undone
+
+      // Run cron (no done date tasks, just reorder)
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-26" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+
+      // T3 (sooner date) should have lower priority than T2
+      const after3 = tasks.find((t) => t._id === t3._id);
+      const after2 = tasks.find((t) => t._id === t2._id);
+      expect(after3.priority).toBeLessThan(after2.priority);
     });
   });
 });

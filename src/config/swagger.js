@@ -5,371 +5,73 @@ const options = {
     openapi: "3.0.0",
     info: {
       title: "TaskAtHand API",
-      version: "1.0.0",
+      version: "2.0.0",
       description:
-        "A comprehensive task management API supporting todos, habits, office tasks, dreams, and work on dreams with priority management.",
-      contact: {
-        name: "TaskAtHand Team",
-      },
+        "Task management API with Headers and Tasks. Tasks are scoped to Headers and support structured ECD (Expected Completion Date) with types: date, day_of_week, day_of_month, day_of_year.",
+      contact: { name: "TaskAtHand Team" },
     },
     servers: [
-      {
-        url: "http://localhost:3002",
-        description: "Development server",
-      },
-      {
-        url: "http://localhost:3002",
-        description: "Production server",
-      },
+      { url: "http://localhost:3002", description: "Development server" },
     ],
     tags: [
-      {
-        name: "Todos",
-        description: "Personal todo management endpoints",
-      },
-      {
-        name: "Habits",
-        description: "Habit tracking endpoints",
-      },
-      {
-        name: "Office",
-        description: "Office task management endpoints",
-      },
-      {
-        name: "Dreams",
-        description: "Dream tracking and management endpoints",
-      },
-      {
-        name: "WorkOnDreams",
-        description: "Work on dreams tracking and management endpoints",
-      },
-      {
-        name: "System",
-        description: "System health and info endpoints",
-      },
+      { name: "Headers", description: "Header management endpoints" },
+      { name: "Tasks", description: "Task management endpoints" },
+      { name: "Cron", description: "Cron job trigger endpoint" },
+      { name: "System", description: "System health endpoints" },
     ],
     components: {
       schemas: {
-        Todo: {
+        Header: {
           type: "object",
-          required: ["name"],
           properties: {
-            _id: {
-              type: "string",
-              description: "MongoDB ObjectId",
-              example: "507f1f77bcf86cd799439011",
-            },
-            name: {
-              type: "string",
-              description: "Todo name/title",
-              example: "Buy groceries",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "Milk, eggs, bread",
-            },
-            priority: {
-              type: "number",
-              description: "Priority order (0-based, lower is higher priority)",
-              example: 0,
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date",
-              example: "2026-03-20T00:00:00.000Z",
-              nullable: true,
-            },
-            createdAt: {
-              type: "string",
-              format: "date-time",
-              description: "Creation timestamp",
-            },
-            updatedAt: {
-              type: "string",
-              format: "date-time",
-              description: "Last update timestamp",
-            },
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Work" },
+            priority: { type: "integer", example: 0 },
           },
         },
-        Habit: {
+        ECD: {
           type: "object",
-          required: ["name"],
+          required: ["type", "value"],
           properties: {
-            _id: {
+            type: {
               type: "string",
-              description: "MongoDB ObjectId",
-              example: "507f1f77bcf86cd799439011",
+              enum: ["date", "day_of_week", "day_of_month", "day_of_year"],
+              example: "date",
             },
-            name: {
-              type: "string",
-              description: "Habit name/title",
-              example: "Morning exercise",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "30 minutes cardio",
-            },
-            priority: {
-              type: "number",
-              description: "Priority order (0-based, lower is higher priority)",
-              example: 0,
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date",
-              example: "2026-03-20T00:00:00.000Z",
-              nullable: true,
-            },
-            createdAt: {
-              type: "string",
-              format: "date-time",
-              description: "Creation timestamp",
-            },
-            updatedAt: {
-              type: "string",
-              format: "date-time",
-              description: "Last update timestamp",
+            value: {
+              description:
+                'YYYY-MM-DD string for "date", D/M/YYYY string for "day_of_year", array of day names for "day_of_week", array of integers (1-31) for "day_of_month"',
+              example: "2026-04-10",
             },
           },
         },
         Task: {
           type: "object",
-          required: ["name"],
           properties: {
-            _id: {
-              type: "string",
-              description: "MongoDB ObjectId",
-              example: "507f1f77bcf86cd799439011",
-            },
-            name: {
-              type: "string",
-              description: "Task name/title",
-              example: "Prepare quarterly report",
-            },
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Write report" },
             notes: {
               type: "string",
-              description: "Additional notes or details",
-              example: "Include sales data from Q1",
-            },
-            priority: {
-              type: "number",
-              description: "Priority order (0-based, lower is higher priority)",
-              example: 0,
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date",
-              example: "2026-03-20T00:00:00.000Z",
+              example: "Include Q1 data",
               nullable: true,
             },
-            createdAt: {
-              type: "string",
-              format: "date-time",
-              description: "Creation timestamp",
-            },
-            updatedAt: {
-              type: "string",
-              format: "date-time",
-              description: "Last update timestamp",
-            },
-          },
-        },
-        Dream: {
-          type: "object",
-          required: ["name"],
-          properties: {
-            _id: {
-              type: "string",
-              description: "MongoDB ObjectId",
-              example: "507f1f77bcf86cd799439011",
-            },
-            name: {
-              type: "string",
-              description: "Dream name/title",
-              example: "Build a startup",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "Focus on AI-powered productivity tools",
-            },
+            headerId: { type: "string", example: "507f1f77bcf86cd799439011" },
             priority: {
-              type: "number",
-              description: "Priority order (0-based, lower is higher priority)",
+              type: "integer",
+              description: "0-based, scoped per header",
               example: 0,
             },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date",
-              example: "2026-03-20T00:00:00.000Z",
-              nullable: true,
-            },
-            createdAt: {
-              type: "string",
-              format: "date-time",
-              description: "Creation timestamp",
-            },
-            updatedAt: {
-              type: "string",
-              format: "date-time",
-              description: "Last update timestamp",
-            },
-          },
-        },
-        WorkOnDream: {
-          type: "object",
-          required: ["name"],
-          properties: {
-            _id: {
-              type: "string",
-              description: "MongoDB ObjectId",
-              example: "507f1f77bcf86cd799439011",
-            },
-            name: {
-              type: "string",
-              description: "Work on dream name/title",
-              example: "Research market opportunities",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "Analyze competitor landscape",
-            },
-            priority: {
-              type: "number",
-              description: "Priority order (0-based, lower is higher priority)",
-              example: 0,
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date",
-              example: "2026-03-20T00:00:00.000Z",
-              nullable: true,
-            },
-            createdAt: {
-              type: "string",
-              format: "date-time",
-              description: "Creation timestamp",
-            },
-            updatedAt: {
-              type: "string",
-              format: "date-time",
-              description: "Last update timestamp",
-            },
-          },
-        },
-        CreateTodo: {
-          type: "object",
-          required: ["name"],
-          properties: {
-            name: {
-              type: "string",
-              description: "Todo name/title",
-              example: "Buy groceries",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "Milk, eggs, bread",
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: false,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date (ISO 8601 format)",
-              example: "2026-03-20T00:00:00.000Z",
-            },
-          },
-        },
-        UpdateTodo: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Todo name/title",
-              example: "Buy groceries",
-            },
-            notes: {
-              type: "string",
-              description: "Additional notes or details",
-              example: "Milk, eggs, bread, cheese",
-            },
-            priority: {
-              type: "number",
-              description: "Priority order (0-based)",
-              example: 2,
-            },
-            done: {
-              type: "boolean",
-              description: "Completion status",
-              example: true,
-            },
-            ecd: {
-              type: "string",
-              format: "date-time",
-              description: "Expected Completion Date (ISO 8601 format)",
-              example: "2026-03-20T00:00:00.000Z",
-            },
-          },
-        },
-        Count: {
-          type: "object",
-          properties: {
-            count: {
-              type: "number",
-              description: "Total count of items",
-              example: 5,
-            },
+            ecd: { $ref: "#/components/schemas/ECD", nullable: true },
+            done: { type: "boolean", example: false },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
           },
         },
         Error: {
           type: "object",
           properties: {
-            error: {
-              type: "string",
-              description: "Error message",
-              example: "Invalid ID format",
-            },
-            message: {
-              type: "string",
-              description: "Detailed error message (development only)",
-            },
+            error: { type: "string", example: "Header not found" },
+            message: { type: "string" },
           },
         },
       },

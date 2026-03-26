@@ -2,425 +2,144 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
-describe("Collections Independence Tests", () => {
+async function clearCollections() {
+  const db = await getDatabase();
+  await db.collection("Headers-Test").deleteMany({});
+  await db.collection("Tasks-Test").deleteMany({});
+}
+
+describe("Collection Isolation", () => {
   beforeAll(async () => {
     await connectDB();
+    await clearCollections();
+  });
 
-    // Clear all test collections before running tests
+  test("Headers and Tasks are stored in separate collections", async () => {
     const db = await getDatabase();
-    await db.collection("Office-Test").deleteMany({});
-    await db.collection("Habbit-Test").deleteMany({});
-    await db.collection("Todo-Test").deleteMany({});
-    await db.collection("Dream-Test").deleteMany({});
-    await db.collection("WorkOnDream-Test").deleteMany({});
-    console.log("Collections Test: All test collections cleared");
+
+    const h = await request(app)
+      .post("/headers")
+      .send({ name: "Work" })
+      .expect(201);
+    const t = await request(app)
+      .post("/tasks")
+      .send({ name: "Task 1", headerId: h.body._id })
+      .expect(201);
+
+    const headerCount = await db.collection("Headers-Test").countDocuments();
+    const taskCount = await db.collection("Tasks-Test").countDocuments();
+
+    expect(headerCount).toBeGreaterThanOrEqual(1);
+    expect(taskCount).toBeGreaterThanOrEqual(1);
+
+    // The header _id should not exist in Tasks-Test
+    const { ObjectId } = require("mongodb");
+    const headerInTasksCol = await db
+      .collection("Tasks-Test")
+      .findOne({ _id: new ObjectId(h.body._id) });
+    expect(headerInTasksCol).toBeNull();
+
+    // The task _id should not exist in Headers-Test
+    const taskInHeadersCol = await db
+      .collection("Headers-Test")
+      .findOne({ _id: new ObjectId(t.body._id) });
+    expect(taskInHeadersCol).toBeNull();
   });
 
-  describe("Collection Isolation", () => {
-    let taskId, habbitId, todoId, dreamId, workOnDreamId;
+  test("deleting a header cascades to delete its tasks", async () => {
+    await clearCollections();
+    const db = await getDatabase();
 
-    test("should create a task in Office collection", async () => {
-      const response = await request(app)
-        .post("/api/office")
-        .send({ name: "Task Item" })
-        .expect(201);
+    const h = await request(app)
+      .post("/headers")
+      .send({ name: "H1" })
+      .expect(201);
+    await request(app)
+      .post("/tasks")
+      .send({ name: "T1", headerId: h.body._id });
+    await request(app)
+      .post("/tasks")
+      .send({ name: "T2", headerId: h.body._id });
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Task Item");
-      taskId = response.body.data._id;
-    });
+    const tasksBeforeDelete = await db
+      .collection("Tasks-Test")
+      .countDocuments({ headerId: h.body._id });
+    expect(tasksBeforeDelete).toBe(2);
 
-    test("should create a habbit in Habbit collection", async () => {
-      const response = await request(app)
-        .post("/api/habbits")
-        .send({ name: "Habbit Item", ecdDayOfWeek: 1 })
-        .expect(201);
+    const res = await request(app).delete(`/headers/${h.body._id}`).expect(200);
+    expect(res.body.tasksDeleted).toBe(2);
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Habbit Item");
-      habbitId = response.body.data._id;
-    });
-
-    test("should create a todo in Todo collection", async () => {
-      const response = await request(app)
-        .post("/api/todos")
-        .send({ name: "Todo Item" })
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Todo Item");
-      todoId = response.body.data._id;
-    });
-
-    test("should create a dream in Dream collection", async () => {
-      const response = await request(app)
-        .post("/api/dreams")
-        .send({ name: "Dream Item" })
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Dream Item");
-      dreamId = response.body.data._id;
-    });
-
-    test("should create a work on dream in WorkOnDream collection", async () => {
-      const response = await request(app)
-        .post("/api/workondreams")
-        .send({ name: "WorkOnDream Item" })
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("WorkOnDream Item");
-      workOnDreamId = response.body.data._id;
-    });
-
-    test("should have only 1 task in Office collection", async () => {
-      const response = await request(app).get("/api/office").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBe(1);
-      expect(response.body.data[0].name).toBe("Task Item");
-    });
-
-    test("should have only 1 habbit in Habbit collection", async () => {
-      const response = await request(app).get("/api/habbits").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBe(1);
-      expect(response.body.data[0].name).toBe("Habbit Item");
-    });
-
-    test("should have only 1 todo in Todo collection", async () => {
-      const response = await request(app).get("/api/todos").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBe(1);
-      expect(response.body.data[0].name).toBe("Todo Item");
-    });
-
-    test("should have only 1 dream in Dream collection", async () => {
-      const response = await request(app).get("/api/dreams").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBe(1);
-      expect(response.body.data[0].name).toBe("Dream Item");
-    });
-
-    test("should have only 1 work on dream in WorkOnDream collection", async () => {
-      const response = await request(app).get("/api/workondreams").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBe(1);
-      expect(response.body.data[0].name).toBe("WorkOnDream Item");
-    });
-
-    test("should verify test collection names are being used", async () => {
-      const db = await getDatabase();
-
-      const taskCount = await db.collection("Office-Test").countDocuments();
-      const habbitCount = await db.collection("Habbit-Test").countDocuments();
-      const todoCount = await db.collection("Todo-Test").countDocuments();
-      const dreamCount = await db.collection("Dream-Test").countDocuments();
-      const workOnDreamCount = await db
-        .collection("WorkOnDream-Test")
-        .countDocuments();
-
-      expect(taskCount).toBe(1);
-      expect(habbitCount).toBe(1);
-      expect(todoCount).toBe(1);
-      expect(dreamCount).toBe(1);
-      expect(workOnDreamCount).toBe(1);
-    });
+    const tasksAfterDelete = await db
+      .collection("Tasks-Test")
+      .countDocuments({ headerId: h.body._id });
+    expect(tasksAfterDelete).toBe(0);
   });
 
-  describe("CRUD Operations for All Collections", () => {
-    beforeEach(async () => {
-      // Clear all collections before each test
-      const db = await getDatabase();
-      await db.collection("Office-Test").deleteMany({});
-      await db.collection("Habbit-Test").deleteMany({});
-      await db.collection("Todo-Test").deleteMany({});
-      await db.collection("Dream-Test").deleteMany({});
-      await db.collection("WorkOnDream-Test").deleteMany({});
-    });
+  test("tasks from different headers are isolated in priority", async () => {
+    await clearCollections();
 
-    describe("Tasks CRUD", () => {
-      test("should perform full CRUD cycle on tasks", async () => {
-        // Create
-        const createRes = await request(app)
-          .post("/api/office")
-          .send({ name: "Test Task", notes: "Notes" })
-          .expect(201);
-        const taskId = createRes.body.data._id;
+    const h1 = await request(app)
+      .post("/headers")
+      .send({ name: "H1" })
+      .expect(201);
+    const h2 = await request(app)
+      .post("/headers")
+      .send({ name: "H2" })
+      .expect(201);
 
-        // Read
-        const readRes = await request(app)
-          .get(`/api/office/${taskId}`)
-          .expect(200);
-        expect(readRes.body.data.name).toBe("Test Task");
+    await request(app)
+      .post("/tasks")
+      .send({ name: "H1-T1", headerId: h1.body._id });
+    await request(app)
+      .post("/tasks")
+      .send({ name: "H1-T2", headerId: h1.body._id });
+    await request(app)
+      .post("/tasks")
+      .send({ name: "H2-T1", headerId: h2.body._id });
 
-        // Update
-        const updateRes = await request(app)
-          .put(`/api/office/${taskId}`)
-          .send({ name: "Updated Task" })
-          .expect(200);
-        expect(updateRes.body.data.name).toBe("Updated Task");
+    const h1Tasks = await request(app)
+      .get(`/tasks?headerId=${h1.body._id}`)
+      .expect(200);
+    const h2Tasks = await request(app)
+      .get(`/tasks?headerId=${h2.body._id}`)
+      .expect(200);
 
-        // Delete
-        await request(app).delete(`/api/office/${taskId}`).expect(200);
+    // H1 has 2 tasks with priorities 0 and 1
+    expect(h1Tasks.body.length).toBe(2);
+    expect(h1Tasks.body.map((t) => t.priority)).toEqual([0, 1]);
 
-        // Verify deletion
-        const allRes = await request(app).get("/api/office").expect(200);
-        expect(allRes.body.count).toBe(0);
-      });
-    });
-
-    describe("Habbits CRUD", () => {
-      test("should perform full CRUD cycle on habbits", async () => {
-        // Create
-        const createRes = await request(app)
-          .post("/api/habbits")
-          .send({ name: "Test Habbit", notes: "Notes", ecdDayOfWeek: 5 })
-          .expect(201);
-        const habbitId = createRes.body.data._id;
-
-        // Read
-        const readRes = await request(app)
-          .get(`/api/habbits/${habbitId}`)
-          .expect(200);
-        expect(readRes.body.data.name).toBe("Test Habbit");
-
-        // Update
-        const updateRes = await request(app)
-          .put(`/api/habbits/${habbitId}`)
-          .send({ name: "Updated Habbit" })
-          .expect(200);
-        expect(updateRes.body.data.name).toBe("Updated Habbit");
-
-        // Delete
-        await request(app).delete(`/api/habbits/${habbitId}`).expect(200);
-
-        // Verify deletion
-        const allRes = await request(app).get("/api/habbits").expect(200);
-        expect(allRes.body.count).toBe(0);
-      });
-    });
-
-    describe("Dreams CRUD", () => {
-      test("should perform full CRUD cycle on dreams", async () => {
-        // Create
-        const createRes = await request(app)
-          .post("/api/dreams")
-          .send({ name: "Test Dream", notes: "Notes" })
-          .expect(201);
-        const dreamId = createRes.body.data._id;
-
-        // Read
-        const readRes = await request(app)
-          .get(`/api/dreams/${dreamId}`)
-          .expect(200);
-        expect(readRes.body.data.name).toBe("Test Dream");
-
-        // Update
-        const updateRes = await request(app)
-          .put(`/api/dreams/${dreamId}`)
-          .send({ name: "Updated Dream" })
-          .expect(200);
-        expect(updateRes.body.data.name).toBe("Updated Dream");
-
-        // Delete
-        await request(app).delete(`/api/dreams/${dreamId}`).expect(200);
-
-        // Verify deletion
-        const allRes = await request(app).get("/api/dreams").expect(200);
-        expect(allRes.body.count).toBe(0);
-      });
-    });
-
-    describe("WorkOnDreams CRUD", () => {
-      test("should perform full CRUD cycle on work on dreams", async () => {
-        // Create
-        const createRes = await request(app)
-          .post("/api/workondreams")
-          .send({ name: "Test WorkOnDream", notes: "Notes" })
-          .expect(201);
-        const workOnDreamId = createRes.body.data._id;
-
-        // Read
-        const readRes = await request(app)
-          .get(`/api/workondreams/${workOnDreamId}`)
-          .expect(200);
-        expect(readRes.body.data.name).toBe("Test WorkOnDream");
-
-        // Update
-        const updateRes = await request(app)
-          .put(`/api/workondreams/${workOnDreamId}`)
-          .send({ name: "Updated WorkOnDream" })
-          .expect(200);
-        expect(updateRes.body.data.name).toBe("Updated WorkOnDream");
-
-        // Delete
-        await request(app)
-          .delete(`/api/workondreams/${workOnDreamId}`)
-          .expect(200);
-
-        // Verify deletion
-        const allRes = await request(app).get("/api/workondreams").expect(200);
-        expect(allRes.body.count).toBe(0);
-      });
-    });
-
-    describe("Todos CRUD", () => {
-      test("should perform full CRUD cycle on todos", async () => {
-        // Create
-        const createRes = await request(app)
-          .post("/api/todos")
-          .send({ name: "Test Todo", notes: "Notes" })
-          .expect(201);
-        const todoId = createRes.body.data._id;
-
-        // Read
-        const readRes = await request(app)
-          .get(`/api/todos/${todoId}`)
-          .expect(200);
-        expect(readRes.body.data.name).toBe("Test Todo");
-
-        // Update
-        const updateRes = await request(app)
-          .put(`/api/todos/${todoId}`)
-          .send({ name: "Updated Todo" })
-          .expect(200);
-        expect(updateRes.body.data.name).toBe("Updated Todo");
-
-        // Delete
-        await request(app).delete(`/api/todos/${todoId}`).expect(200);
-
-        // Verify deletion
-        const allRes = await request(app).get("/api/todos").expect(200);
-        expect(allRes.body.count).toBe(0);
-      });
-    });
+    // H2 has 1 task with priority 0 — independent of H1
+    expect(h2Tasks.body.length).toBe(1);
+    expect(h2Tasks.body[0].priority).toBe(0);
   });
 
-  describe("Priority Management Independence", () => {
-    beforeEach(async () => {
-      const db = await getDatabase();
-      await db.collection("Office-Test").deleteMany({});
-      await db.collection("Habbit-Test").deleteMany({});
-      await db.collection("Todo-Test").deleteMany({});
-    });
+  test("GET /tasks only returns tasks for the specified headerId", async () => {
+    await clearCollections();
 
-    test("should manage priorities independently in each collection", async () => {
-      // Create multiple items in each collection
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 1" })
-        .expect(201);
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task 2" })
-        .expect(201);
+    const h1 = await request(app)
+      .post("/headers")
+      .send({ name: "H1" })
+      .expect(201);
+    const h2 = await request(app)
+      .post("/headers")
+      .send({ name: "H2" })
+      .expect(201);
 
-      await request(app)
-        .post("/api/habbits")
-        .send({ name: "Habbit 1", ecdDayOfWeek: 1 })
-        .expect(201);
-      await request(app)
-        .post("/api/habbits")
-        .send({ name: "Habbit 2", ecdDayOfWeek: 2 })
-        .expect(201);
+    await request(app)
+      .post("/tasks")
+      .send({ name: "H1-Task", headerId: h1.body._id });
+    await request(app)
+      .post("/tasks")
+      .send({ name: "H2-Task", headerId: h2.body._id });
 
-      await request(app)
-        .post("/api/todos")
-        .send({ name: "Todo 1" })
-        .expect(201);
-      await request(app)
-        .post("/api/todos")
-        .send({ name: "Todo 2" })
-        .expect(201);
+    const h1Tasks = await request(app)
+      .get(`/tasks?headerId=${h1.body._id}`)
+      .expect(200);
+    expect(h1Tasks.body.every((t) => t.headerId === h1.body._id)).toBe(true);
 
-      // Verify each collection has 2 items
-      const tasksRes = await request(app).get("/api/office").expect(200);
-      const habbitsRes = await request(app).get("/api/habbits").expect(200);
-      const todosRes = await request(app).get("/api/todos").expect(200);
-
-      expect(tasksRes.body.count).toBe(2);
-      expect(habbitsRes.body.count).toBe(2);
-      expect(todosRes.body.count).toBe(2);
-
-      // Verify priorities are independent (both start at 0)
-      expect(tasksRes.body.data[0].priority).toBe(0);
-      expect(habbitsRes.body.data[0].priority).toBe(0);
-      expect(todosRes.body.data[0].priority).toBe(0);
-    });
-  });
-
-  describe("Chron Endpoint for All Collections", () => {
-    beforeEach(async () => {
-      const db = await getDatabase();
-      await db.collection("Office-Test").deleteMany({});
-      await db.collection("Habbit-Test").deleteMany({});
-      await db.collection("Todo-Test").deleteMany({});
-    });
-
-    test("should delete done tasks/todos and mark done habbits as undone independently in each collection", async () => {
-      // Create done and undone items in each collection
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task Done", done: true });
-      await request(app)
-        .post("/api/office")
-        .send({ name: "Task Undone", done: false });
-
-      await request(app)
-        .post("/api/habbits")
-        .send({ name: "Habbit Done", done: true, ecdDayOfWeek: 1 });
-      await request(app)
-        .post("/api/habbits")
-        .send({ name: "Habbit Undone", done: false, ecdDayOfWeek: 2 });
-
-      await request(app)
-        .post("/api/todos")
-        .send({ name: "Todo Done", done: true });
-      await request(app)
-        .post("/api/todos")
-        .send({ name: "Todo Undone", done: false });
-
-      // Run chron endpoints
-      const taskChron = await request(app)
-        .delete("/api/office/chron")
-        .expect(200);
-      const habbitChron = await request(app)
-        .delete("/api/habbits/chron")
-        .expect(200);
-      const todoChron = await request(app)
-        .delete("/api/todos/chron")
-        .expect(200);
-
-      // Tasks and Todos delete done items
-      expect(taskChron.body.deletedCount).toBe(1);
-      expect(todoChron.body.deletedCount).toBe(1);
-      // Habbits mark done items as undone
-      expect(habbitChron.body.markedUndoneCount).toBe(1);
-
-      // Verify results
-      const tasksRes = await request(app).get("/api/office").expect(200);
-      const habbitsRes = await request(app).get("/api/habbits").expect(200);
-      const todosRes = await request(app).get("/api/todos").expect(200);
-
-      // Tasks and Todos: only undone items remain
-      expect(tasksRes.body.count).toBe(1);
-      expect(tasksRes.body.data[0].name).toBe("Task Undone");
-
-      expect(todosRes.body.count).toBe(1);
-      expect(todosRes.body.data[0].name).toBe("Todo Undone");
-
-      // Habbits: both items remain, but now both are undone
-      expect(habbitsRes.body.count).toBe(2);
-      expect(habbitsRes.body.data.every((h) => h.done === false)).toBe(true);
-      const habbitNames = habbitsRes.body.data.map((h) => h.name);
-      expect(habbitNames).toContain("Habbit Done");
-      expect(habbitNames).toContain("Habbit Undone");
-    });
+    const h2Tasks = await request(app)
+      .get(`/tasks?headerId=${h2.body._id}`)
+      .expect(200);
+    expect(h2Tasks.body.every((t) => t.headerId === h2.body._id)).toBe(true);
   });
 });

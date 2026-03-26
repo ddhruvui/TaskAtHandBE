@@ -12,18 +12,9 @@ beforeAll(async () => {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   try {
-    // Get the TaskAtHand database
     const db = await getDatabase();
 
-    // Clear all test collections
-    const testCollections = [
-      "Office-Test",
-      "Habbit-Test",
-      "Todo-Test",
-      "Dream-Test",
-      "WorkOnDream-Test",
-      "Events-Test",
-    ];
+    const testCollections = ["Headers-Test", "Tasks-Test"];
 
     await Promise.all(
       testCollections.map((col) => db.collection(col).deleteMany({})),

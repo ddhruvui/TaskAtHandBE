@@ -3,6 +3,7 @@ const dotenv = require("dotenv");
 const { connectDB } = require("./config/db");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
+const { runCron, scheduleCron, getLastRun } = require("./cron/cronJob");
 
 // Load environment variables
 dotenv.config();
@@ -13,7 +14,7 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS middleware (if needed)
+// CORS middleware
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header(
@@ -24,6 +25,7 @@ app.use((req, res, next) => {
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, DELETE, PATCH, OPTIONS",
   );
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
@@ -41,24 +43,11 @@ app.use(
  * @openapi
  * /:
  *   get:
- *     tags:
- *       - System
+ *     tags: [System]
  *     summary: API root endpoint
- *     description: Returns basic API information and status
  *     responses:
  *       200:
  *         description: API is running
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: TaskAtHand API is running
- *                 environment:
- *                   type: string
- *                   example: development
  */
 app.get("/", (req, res) => {
   res.json({
@@ -72,36 +61,42 @@ app.get("/", (req, res) => {
  * @openapi
  * /health:
  *   get:
- *     tags:
- *       - System
+ *     tags: [System]
  *     summary: Health check endpoint
- *     description: Returns the health status of the API
  *     responses:
  *       200:
  *         description: API is healthy
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: ok
- *                 timestamp:
- *                   type: string
- *                   format: date-time
  */
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Import and use routes
-app.use("/api/office", require("./routes/officeRoutes"));
-app.use("/api/habbits", require("./routes/habbitRoutes"));
-app.use("/api/todos", require("./routes/todoRoutes"));
-app.use("/api/events", require("./routes/eventRoutes"));
-app.use("/api/dreams", require("./routes/dreamRoutes"));
-app.use("/api/workondreams", require("./routes/workOnDreamRoutes"));
+// Routes
+app.use("/headers", require("./routes/headerRoutes"));
+app.use("/tasks", require("./routes/taskRoutes"));
+
+// Manual cron trigger
+app.post("/cron/run", async (req, res) => {
+  try {
+    const overrideDate =
+      req.body && req.body.date ? new Date(req.body.date) : undefined;
+    const stats = await runCron(overrideDate);
+    res.json(stats);
+  } catch (error) {
+    console.error("Error running cron:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cron status
+app.get("/cron/status", (req, res) => {
+  const last = getLastRun();
+  if (!last) {
+    return res.status(404).json({ error: "Cron has not run yet" });
+  }
+  const { ranAt, ...rest } = last;
+  res.json({ lastRanAt: ranAt, ...rest });
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -123,6 +118,7 @@ const PORT = process.env.PORT || 3002;
 const startServer = async () => {
   try {
     await connectDB();
+    scheduleCron();
     app.listen(PORT, () => {
       console.log(
         `Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`,

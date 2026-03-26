@@ -2,399 +2,225 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
-describe("ECD (Expected Completion Date) Validation", () => {
-  // Connect to database before tests
+async function clearCollections() {
+  const db = await getDatabase();
+  await db.collection("Headers-Test").deleteMany({});
+  await db.collection("Tasks-Test").deleteMany({});
+}
+
+describe("ECD Validation", () => {
+  let headerId;
+
   beforeAll(async () => {
     await connectDB();
-
-    // Clear test database before ECD tests
-    const db = await getDatabase();
-    const collectionName = "Office-Test";
-    await db.collection(collectionName).deleteMany({});
-    console.log(`ECD Tests: ${collectionName} collection cleared`);
+    await clearCollections();
+    const res = await request(app)
+      .post("/headers")
+      .send({ name: "ECD Header" });
+    headerId = res.body._id;
   });
 
-  describe("CREATE with ECD", () => {
-    test("should create task with valid future ECD", async () => {
-      const taskData = {
-        name: "Future task",
-        notes: "Task with future date",
-        ecd: "2026-12-31",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
+  describe("type: date", () => {
+    test("accepts valid YYYY-MM-DD value", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "date", value: "2026-12-31" },
+        })
         .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-      expect(response.body.data.ecd).toBeTruthy();
+      expect(res.body.ecd).toEqual({ type: "date", value: "2026-12-31" });
     });
 
-    test("should create task with valid past ECD (overdue)", async () => {
-      const taskData = {
-        name: "Overdue task",
-        notes: "Task with past date",
-        ecd: "2026-01-01",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-      // Task should be created even if date is in the past
+    test("rejects non-date string", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "date", value: "not-a-date" },
+        })
+        .expect(400);
     });
 
-    test("should create task with today's date as ECD", async () => {
-      const today = new Date().toISOString().split("T")[0];
-      const taskData = {
-        name: "Due today",
-        notes: "Task due today",
-        ecd: today,
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-    });
-
-    test("should create task without ECD (null)", async () => {
-      const taskData = {
-        name: "No ECD task",
-        notes: "Task without expected completion date",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(null);
-    });
-
-    test("should create task with explicit null ECD", async () => {
-      const taskData = {
-        name: "Explicit null ECD",
-        notes: "Task with null ECD",
-        ecd: null,
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(null);
-    });
-
-    test("should handle ISO 8601 datetime format", async () => {
-      const taskData = {
-        name: "ISO datetime task",
-        notes: "Task with full datetime",
-        ecd: "2026-06-15T14:30:00.000Z",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-    });
-
-    test("should handle YYYY-MM-DD date format", async () => {
-      const taskData = {
-        name: "Date format task",
-        notes: "Task with simple date",
-        ecd: "2026-08-20",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-    });
-
-    test("should reject invalid date format", async () => {
-      const taskData = {
-        name: "Invalid date task",
-        notes: "Task with invalid date",
-        ecd: "invalid-date",
-      };
-
-      const response = await request(app).post("/api/office").send(taskData);
-
-      // Should either reject or set to null, depending on your implementation
-      // Current implementation creates it with Invalid Date, which might not be ideal
-      expect(response.body.success).toBe(true);
-    });
-
-    test("should handle malformed date strings", async () => {
-      const taskData = {
-        name: "Malformed date task",
-        notes: "Task with malformed date",
-        ecd: "2026-13-45", // Invalid month and day
-      };
-
-      const response = await request(app).post("/api/office").send(taskData);
-
-      expect(response.body.success).toBe(true);
-    });
-
-    test("should handle empty string ECD", async () => {
-      const taskData = {
-        name: "Empty ECD task",
-        notes: "Task with empty ECD",
-        ecd: "",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      // Empty string should be treated as null/falsy
+    test("rejects wrong format (D/M/YYYY instead of YYYY-MM-DD)", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "date", value: "25/12/2026" },
+        })
+        .expect(400);
     });
   });
 
-  describe("UPDATE with ECD", () => {
-    let taskId;
-
-    beforeAll(async () => {
-      // Create a task to update
-      const response = await request(app)
-        .post("/api/office")
-        .send({ name: "Task for ECD updates", notes: "Original ECD test" });
-      taskId = response.body.data._id;
+  describe("type: day_of_week", () => {
+    test("accepts valid array of day names", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_week", value: ["Mon", "Wed", "Fri"] },
+        })
+        .expect(201);
+      expect(res.body.ecd.value).toEqual(["Mon", "Wed", "Fri"]);
     });
 
-    test("should update task with new ECD", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ name: "Updated with ECD", ecd: "2026-05-15" });
-
-      // Note: Your current controller doesn't support updating ECD
-      // This test will verify current behavior
-      expect(response.body.success).toBe(true);
+    test("rejects invalid day names", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_week", value: ["Monday", "Weds"] },
+        })
+        .expect(400);
     });
 
-    test("should update task to remove ECD (set to null)", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ name: "ECD removed", ecd: null });
-
-      expect(response.body.success).toBe(true);
+    test("rejects empty array", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({ name: "T", headerId, ecd: { type: "day_of_week", value: [] } })
+        .expect(400);
     });
 
-    test("should update task ECD from past to future", async () => {
-      // First create task with past ECD
-      const createResponse = await request(app).post("/api/office").send({
-        name: "Update ECD test",
-        ecd: "2026-01-01",
-      });
-
-      const newTaskId = createResponse.body.data._id;
-
-      // Try to update to future date
-      const updateResponse = await request(app)
-        .put(`/api/office/${newTaskId}`)
-        .send({ name: "Updated name", ecd: "2026-12-31" });
-
-      // Note: Current implementation doesn't support ECD updates
-      // This test verifies that sending ECD in update doesn't break the request
-      // but the ECD field won't actually be updated
-      expect(updateResponse.body.success).toBe(true);
+    test("rejects non-array value", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_week", value: "Mon" },
+        })
+        .expect(400);
     });
   });
 
-  describe("Query tasks by ECD", () => {
-    beforeAll(async () => {
-      // Clear and create test data
-      const db = await getDatabase();
-      await db.collection("Office-Test").deleteMany({});
-
-      // Create tasks with various ECDs
-      await request(app).post("/api/office").send({
-        name: "Overdue 1",
-        ecd: "2026-01-15",
-      });
-
-      await request(app).post("/api/office").send({
-        name: "Due soon",
-        ecd: "2026-03-20",
-      });
-
-      await request(app).post("/api/office").send({
-        name: "Future task",
-        ecd: "2026-12-01",
-      });
-
-      await request(app).post("/api/office").send({
-        name: "No ECD",
-        ecd: null,
-      });
+  describe("type: day_of_month", () => {
+    test("accepts valid array of integers 1-31", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_month", value: [1, 15, 31] },
+        })
+        .expect(201);
+      expect(res.body.ecd.value).toEqual([1, 15, 31]);
     });
 
-    test("should retrieve all tasks including those with and without ECD", async () => {
-      const response = await request(app).get("/api/office").expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBeGreaterThanOrEqual(4);
-
-      // Check that tasks have ECD field
-      const tasksWithECD = response.body.data.filter(
-        (task) => task.ecd !== null,
-      );
-      const tasksWithoutECD = response.body.data.filter(
-        (task) => task.ecd === null,
-      );
-
-      expect(tasksWithECD.length).toBeGreaterThan(0);
-      expect(tasksWithoutECD.length).toBeGreaterThan(0);
+    test("rejects values out of range", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_month", value: [0, 32] },
+        })
+        .expect(400);
     });
 
-    test("should retrieve task by ID and verify ECD format", async () => {
-      // Create a task with known ECD
-      const createResponse = await request(app).post("/api/office").send({
-        name: "ECD format verification",
-        ecd: "2026-07-15",
-      });
+    test("rejects non-integer values", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_month", value: [1.5, 10] },
+        })
+        .expect(400);
+    });
 
-      const taskId = createResponse.body.data._id;
-
-      // Retrieve it
-      const response = await request(app)
-        .get(`/api/office/${taskId}`)
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
-
-      // ECD should be a valid date (stored as ISOString in MongoDB)
-      if (response.body.data.ecd) {
-        const ecdDate = new Date(response.body.data.ecd);
-        expect(ecdDate).toBeInstanceOf(Date);
-        expect(isNaN(ecdDate.getTime())).toBe(false);
-      }
+    test("rejects empty array", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({ name: "T", headerId, ecd: { type: "day_of_month", value: [] } })
+        .expect(400);
     });
   });
 
-  describe("ECD Edge Cases", () => {
-    test("should handle year boundaries (leap year)", async () => {
-      const taskData = {
-        name: "Leap year task",
-        ecd: "2028-02-29", // 2028 is a leap year
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
+  describe("type: day_of_year", () => {
+    test("accepts valid D/M/YYYY string", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_year", value: "7/3/2006" },
+        })
         .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
+      expect(res.body.ecd.value).toBe("7/3/2006");
     });
 
-    test("should handle non-leap year Feb 29", async () => {
-      const taskData = {
-        name: "Invalid leap date",
-        ecd: "2027-02-29", // 2027 is not a leap year
-      };
-
-      const response = await request(app).post("/api/office").send(taskData);
-
-      // JavaScript Date will adjust this to March 1st
-      expect(response.body.success).toBe(true);
+    test("accepts D/M/YYYY with single-digit day and month", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_year", value: "1/1/2030" },
+        })
+        .expect(201);
+      expect(res.body.ecd.value).toBe("1/1/2030");
     });
 
-    test("should handle far future dates", async () => {
-      const taskData = {
-        name: "Far future task",
-        ecd: "2099-12-31",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
+    test("rejects YYYY-MM-DD format (wrong format for day_of_year)", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_year", value: "2026-12-31" },
+        })
+        .expect(400);
     });
 
-    test("should handle far past dates", async () => {
-      const taskData = {
-        name: "Far past task",
-        ecd: "2000-01-01",
-      };
+    test("rejects non-string value", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "T",
+          headerId,
+          ecd: { type: "day_of_year", value: [7, 3, 2006] },
+        })
+        .expect(400);
+    });
+  });
 
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
+  describe("ecd: null / omitted", () => {
+    test("task with no ecd field stores null", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({ name: "No ECD", headerId })
         .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("ecd");
+      expect(res.body.ecd).toBeNull();
     });
 
-    test("should handle different date separators", async () => {
-      const taskData = {
-        name: "Different separator",
-        ecd: "2026/06/15", // Using slashes instead of dashes
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
+    test("task with explicit null ecd stores null", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({ name: "Null ECD", headerId, ecd: null })
         .expect(201);
+      expect(res.body.ecd).toBeNull();
+    });
+  });
 
-      expect(response.body.success).toBe(true);
+  describe("invalid ecd type", () => {
+    test("rejects unknown ecd type", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({ name: "T", headerId, ecd: { type: "weekly", value: "Mon" } })
+        .expect(400);
     });
 
-    test("should handle numeric timestamp", async () => {
-      const timestamp = Date.now();
-      const taskData = {
-        name: "Timestamp task",
-        ecd: timestamp,
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-    });
-
-    test("should handle undefined ECD", async () => {
-      const taskData = {
-        name: "Undefined ECD",
-        notes: "No ECD field at all",
-        // ecd is not included
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.ecd).toBe(null);
+    test("rejects ecd as a plain string", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({ name: "T", headerId, ecd: "2026-12-31" })
+        .expect(400);
     });
   });
 });

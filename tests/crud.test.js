@@ -2,354 +2,327 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
-describe("Task CRUD Operations", () => {
-  // Connect to database before tests
+async function clearCollections() {
+  const db = await getDatabase();
+  await db.collection("Headers-Test").deleteMany({});
+  await db.collection("Tasks-Test").deleteMany({});
+}
+
+describe("Headers CRUD", () => {
   beforeAll(async () => {
     await connectDB();
-
-    // Clear test database before CRUD tests
-    const db = await getDatabase();
-    const collectionName = "Office-Test";
-    await db.collection(collectionName).deleteMany({});
-    console.log(`CRUD Tests: ${collectionName} collection cleared`);
+    await clearCollections();
   });
 
-  describe("CREATE - POST /api/office", () => {
-    test("should create a task with all fields", async () => {
-      const taskData = {
-        name: "Test Task",
-        notes: "Test notes",
-        done: false,
-        ecd: "2026-03-20",
-      };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data).toHaveProperty("_id");
-      expect(response.body.data.name).toBe(taskData.name);
-      expect(response.body.data.notes).toBe(taskData.notes);
-      expect(response.body.data.done).toBe(false);
-      expect(response.body.data).toHaveProperty("ecd");
-      expect(response.body.data.priority).toBe(0);
-    });
-
-    test("should create a task with only required fields", async () => {
-      // Get current count so we know the expected priority regardless of other
-      // tasks that may have been inserted by parallel test files.
-      const countRes = await request(app).get("/api/office/count");
-      const expectedPriority = countRes.body.count; // new undone task goes here
-
-      const taskData = { name: "Minimal Task" };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Minimal Task");
-      expect(response.body.data.notes).toBe("");
-      expect(response.body.data.done).toBe(false);
-      expect(response.body.data.priority).toBe(expectedPriority);
-    });
-
-    test("should reject task without name", async () => {
-      const taskData = { notes: "No name provided" };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(400);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Task name must be a non-empty string");
-    });
-
-    test("should reject task with empty name", async () => {
-      const taskData = { name: "   " };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(400);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Task name must be a non-empty string");
-    });
-
-    test("should trim whitespace from task name", async () => {
-      const taskData = { name: "  Trimmed Task  " };
-
-      const response = await request(app)
-        .post("/api/office")
-        .send(taskData)
-        .expect(201);
-
-      expect(response.body.data.name).toBe("Trimmed Task");
+  describe("GET /headers (empty)", () => {
+    test("returns empty array when no headers exist", async () => {
+      await clearCollections();
+      const res = await request(app).get("/headers").expect(200);
+      expect(res.body).toEqual([]);
     });
   });
 
-  describe("READ - GET /api/office", () => {
-    test("should retrieve all tasks", async () => {
-      const response = await request(app).get("/api/office").expect(200);
+  let headerId;
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.count).toBeGreaterThan(0);
-      expect(Array.isArray(response.body.data)).toBe(true);
-    });
-
-    test("should retrieve task by valid ID", async () => {
-      // First create a task
-      const createResponse = await request(app)
-        .post("/api/office")
-        .send({ name: "Task to retrieve" })
+  describe("POST /headers", () => {
+    test("creates a header and assigns priority 0 as first header", async () => {
+      const res = await request(app)
+        .post("/headers")
+        .send({ name: "Work" })
         .expect(201);
 
-      const taskId = createResponse.body.data._id;
+      expect(res.body).toHaveProperty("_id");
+      expect(res.body.name).toBe("Work");
+      expect(res.body.priority).toBe(0);
+      headerId = res.body._id;
+    });
 
-      // Then retrieve it
-      const response = await request(app)
-        .get(`/api/office/${taskId}`)
+    test("second header gets priority 1", async () => {
+      const res = await request(app)
+        .post("/headers")
+        .send({ name: "Personal" })
+        .expect(201);
+
+      expect(res.body.priority).toBe(1);
+    });
+
+    test("rejects missing name", async () => {
+      await request(app).post("/headers").send({}).expect(400);
+    });
+
+    test("rejects empty name", async () => {
+      await request(app).post("/headers").send({ name: "  " }).expect(400);
+    });
+
+    test("trims whitespace from name", async () => {
+      const res = await request(app)
+        .post("/headers")
+        .send({ name: "  Trimmed  " })
+        .expect(201);
+      expect(res.body.name).toBe("Trimmed");
+    });
+  });
+
+  describe("GET /headers", () => {
+    test("returns all headers sorted by priority", async () => {
+      const res = await request(app).get("/headers").expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      for (let i = 1; i < res.body.length; i++) {
+        expect(res.body[i].priority).toBeGreaterThan(res.body[i - 1].priority);
+      }
+    });
+  });
+
+  describe("PUT /headers/:id", () => {
+    test("updates header name", async () => {
+      const res = await request(app)
+        .put(`/headers/${headerId}`)
+        .send({ name: "Updated Work" })
+        .expect(200);
+      expect(res.body.name).toBe("Updated Work");
+    });
+
+    test("trims whitespace from name on update", async () => {
+      const res = await request(app)
+        .put(`/headers/${headerId}`)
+        .send({ name: "  Trimmed Update  " })
+        .expect(200);
+      expect(res.body.name).toBe("Trimmed Update");
+    });
+
+    test("updates header priority and shifts others", async () => {
+      // headerId is currently priority 0; move it to priority 1
+      const before = await request(app).get("/headers").expect(200);
+      const h0 = before.body.find((h) => h._id === headerId);
+      const h1 = before.body.find((h) => h.priority === 1);
+
+      const res = await request(app)
+        .put(`/headers/${headerId}`)
+        .send({ priority: 1 })
+        .expect(200);
+      expect(res.body.priority).toBe(1);
+
+      // The header that was at priority 1 should have moved to 0
+      const after = await request(app).get("/headers").expect(200);
+      const shifted = after.body.find((h) => h._id === h1._id);
+      expect(shifted.priority).toBe(0);
+    });
+
+    test("returns 404 for nonexistent id", async () => {
+      await request(app)
+        .put("/headers/000000000000000000000000")
+        .send({ name: "Ghost" })
+        .expect(404);
+    });
+  });
+
+  describe("DELETE /headers/:id", () => {
+    test("deletes header and returns deleted id + tasksDeleted", async () => {
+      // Create a header and two tasks for it
+      const hRes = await request(app)
+        .post("/headers")
+        .send({ name: "To Delete" })
+        .expect(201);
+      const hId = hRes.body._id;
+
+      await request(app).post("/tasks").send({ name: "T1", headerId: hId }).expect(201);
+      await request(app).post("/tasks").send({ name: "T2", headerId: hId }).expect(201);
+
+      const res = await request(app).delete(`/headers/${hId}`).expect(200);
+      expect(res.body.deleted).toBe(hId);
+      expect(res.body.tasksDeleted).toBe(2);
+
+      // Tasks should be gone
+      const tasks = await request(app)
+        .get(`/tasks?headerId=${hId}`)
+        .expect(404); // Header gone → 404
+    });
+
+    test("returns 404 for nonexistent id", async () => {
+      await request(app).delete("/headers/000000000000000000000000").expect(404);
+    });
+
+    test("tasksDeleted is 0 when header has no tasks", async () => {
+      const hRes = await request(app)
+        .post("/headers")
+        .send({ name: "Empty Header" })
+        .expect(201);
+      const res = await request(app)
+        .delete(`/headers/${hRes.body._id}`)
+        .expect(200);
+      expect(res.body.deleted).toBe(hRes.body._id);
+      expect(res.body.tasksDeleted).toBe(0);
+    });
+  });
+});
+
+describe("Tasks CRUD", () => {
+  let headerId;
+
+  beforeAll(async () => {
+    await connectDB();
+    await clearCollections();
+    const res = await request(app)
+      .post("/headers")
+      .send({ name: "Test Header" });
+    headerId = res.body._id;
+  });
+
+  describe("POST /tasks", () => {
+    test("creates a task with required fields", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({ name: "Task 1", headerId })
+        .expect(201);
+
+      expect(res.body).toHaveProperty("_id");
+      expect(res.body.name).toBe("Task 1");
+      expect(res.body.headerId).toBe(headerId);
+      expect(res.body.priority).toBe(0);
+      expect(res.body.done).toBe(false);
+      expect(res.body.notes).toBe("");
+      expect(res.body.ecd).toBeNull();
+      expect(res.body).toHaveProperty("createdAt");
+      expect(res.body).toHaveProperty("updatedAt");
+    });
+
+    test("creates a task with all fields", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({
+          name: "Task With ECD",
+          notes: "Some notes",
+          headerId,
+          ecd: { type: "date", value: "2026-12-31" },
+        })
+        .expect(201);
+
+      expect(res.body.name).toBe("Task With ECD");
+      expect(res.body.notes).toBe("Some notes");
+      expect(res.body.ecd).toEqual({ type: "date", value: "2026-12-31" });
+    });
+
+    test("rejects task without name", async () => {
+      await request(app).post("/tasks").send({ headerId }).expect(400);
+    });
+
+    test("rejects task without headerId", async () => {
+      await request(app).post("/tasks").send({ name: "No Header" }).expect(400);
+    });
+
+    test("rejects task with nonexistent headerId", async () => {
+      await request(app)
+        .post("/tasks")
+        .send({ name: "Ghost Task", headerId: "000000000000000000000000" })
+        .expect(404);
+    });
+
+    test("trims whitespace from name", async () => {
+      const res = await request(app)
+        .post("/tasks")
+        .send({ name: "  Trimmed  ", headerId })
+        .expect(201);
+      expect(res.body.name).toBe("Trimmed");
+    });
+  });
+
+  describe("GET /tasks", () => {
+    test("returns tasks sorted by priority for headerId", async () => {
+      const res = await request(app)
+        .get(`/tasks?headerId=${headerId}`)
         .expect(200);
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.data._id).toBe(taskId);
-      expect(response.body.data.name).toBe("Task to retrieve");
+      expect(Array.isArray(res.body)).toBe(true);
+      for (let i = 1; i < res.body.length; i++) {
+        expect(res.body[i].priority).toBeGreaterThan(res.body[i - 1].priority);
+      }
     });
 
-    test("should return 404 for non-existent task ID", async () => {
-      const fakeId = "507f1f77bcf86cd799439011"; // Valid ObjectId format
+    test("returns 400 when headerId is missing", async () => {
+      await request(app).get("/tasks").expect(400);
+    });
 
-      const response = await request(app)
-        .get(`/api/office/${fakeId}`)
+    test("returns 404 for nonexistent headerId", async () => {
+      await request(app)
+        .get("/tasks?headerId=000000000000000000000000")
         .expect(404);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Task not found");
-    });
-
-    test("should return 400 for invalid task ID format", async () => {
-      const invalidId = "invalid-id";
-
-      const response = await request(app)
-        .get(`/api/office/${invalidId}`)
-        .expect(400);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Invalid task ID format");
     });
   });
 
-  describe("UPDATE - PUT /api/office/:id", () => {
+  describe("PUT /tasks/:id", () => {
     let taskId;
 
     beforeAll(async () => {
-      // Create a task to update
-      const response = await request(app)
-        .post("/api/office")
-        .send({ name: "Task to update", notes: "Original notes" });
-      taskId = response.body.data._id;
+      const res = await request(app)
+        .post("/tasks")
+        .send({ name: "Update Me", headerId });
+      taskId = res.body._id;
     });
 
-    test("should update task name", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ name: "Updated task name" })
+    test("updates task name", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ name: "Updated" })
         .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe("Updated task name");
+      expect(res.body.name).toBe("Updated");
     });
 
-    test("should update task notes", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ notes: "Updated notes" })
+    test("updates task notes", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ notes: "New notes" })
         .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.notes).toBe("Updated notes");
+      expect(res.body.notes).toBe("New notes");
     });
 
-    test("should update task done status", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ done: true })
+    test("updates ecd", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ ecd: { type: "day_of_week", value: ["Mon", "Fri"] } })
         .expect(200);
-
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.done).toBe(true);
+      expect(res.body.ecd).toEqual({ type: "day_of_week", value: ["Mon", "Fri"] });
     });
 
-    test("should update multiple fields at once", async () => {
-      const updateData = {
-        name: "Multi update",
-        notes: "Multiple fields updated",
-        done: false,
-      };
+    test("updatedAt changes on every write", async () => {
+      const before = await request(app).get(`/tasks?headerId=${headerId}`).expect(200);
+      const beforeTask = before.body.find((t) => t._id === taskId);
 
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send(updateData)
-        .expect(200);
+      await new Promise((r) => setTimeout(r, 10));
 
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe(updateData.name);
-      expect(response.body.data.notes).toBe(updateData.notes);
-      expect(response.body.data.done).toBe(updateData.done);
-    });
+      await request(app).put(`/tasks/${taskId}`).send({ name: "Changed Again" }).expect(200);
 
-    test("should return 404 when updating non-existent task", async () => {
-      const fakeId = "507f1f77bcf86cd799439011";
+      const after = await request(app).get(`/tasks?headerId=${headerId}`).expect(200);
+      const afterTask = after.body.find((t) => t._id === taskId);
 
-      const response = await request(app)
-        .put(`/api/office/${fakeId}`)
-        .send({ name: "Updated name" })
-        .expect(404);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Task not found");
-    });
-
-    test("should return 400 when no fields provided", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({})
-        .expect(400);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("No valid fields to update");
-    });
-
-    test("should return 400 for invalid priority", async () => {
-      const response = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({ priority: -1 })
-        .expect(400);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe(
-        "Priority must be a non-negative integer",
+      expect(new Date(afterTask.updatedAt).getTime()).toBeGreaterThanOrEqual(
+        new Date(beforeTask.updatedAt).getTime(),
       );
     });
-  });
 
-  describe("DELETE - DELETE /api/office/:id", () => {
-    test("should delete an existing task", async () => {
-      // Create a task to delete
-      const createResponse = await request(app)
-        .post("/api/office")
-        .send({ name: "Task to delete" })
-        .expect(201);
-
-      const taskId = createResponse.body.data._id;
-
-      // Delete the task
-      const deleteResponse = await request(app)
-        .delete(`/api/office/${taskId}`)
-        .expect(200);
-
-      expect(deleteResponse.body.success).toBe(true);
-      expect(deleteResponse.body.message).toContain("deleted successfully");
-
-      // Verify task is deleted
-      await request(app).get(`/api/office/${taskId}`).expect(404);
-    });
-
-    test("should return 404 when deleting non-existent task", async () => {
-      const fakeId = "507f1f77bcf86cd799439011";
-
-      const response = await request(app)
-        .delete(`/api/office/${fakeId}`)
-        .expect(404);
-
-      expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe("Task not found");
-    });
-
-    test("should reorder priorities after deletion", async () => {
-      // Create 3 tasks
-      const task1 = await request(app)
-        .post("/api/office")
-        .send({ name: "Priority Test 1" });
-      const task2 = await request(app)
-        .post("/api/office")
-        .send({ name: "Priority Test 2" });
-      const task3 = await request(app)
-        .post("/api/office")
-        .send({ name: "Priority Test 3" });
-
-      const p1Before = task1.body.data.priority;
-      const p3Before = task3.body.data.priority;
-
-      // Delete the middle task
+    test("returns 404 for nonexistent id", async () => {
       await request(app)
-        .delete(`/api/office/${task2.body.data._id}`)
-        .expect(200);
-
-      // Fetch the specific tasks we created and verify their priorities have no gaps
-      const t1 = (await request(app).get(`/api/office/${task1.body.data._id}`))
-        .body.data;
-      const t3 = (await request(app).get(`/api/office/${task3.body.data._id}`))
-        .body.data;
-
-      // After deleting the middle task, task3's priority should decrease by 1
-      expect(t3.priority).toBe(p3Before - 1);
-      // task1 was before task2, so its priority should be unchanged
-      expect(t1.priority).toBe(p1Before);
-      // No gap between them
-      expect(t3.priority).toBe(t1.priority + 1);
+        .put("/tasks/000000000000000000000000")
+        .send({ name: "Ghost" })
+        .expect(404);
     });
   });
 
-  describe("CRUD Complete Workflow", () => {
-    test("should perform complete CRUD operations on a task", async () => {
-      // CREATE
-      const createResponse = await request(app)
-        .post("/api/office")
-        .send({
-          name: "Workflow Task",
-          notes: "Testing complete workflow",
-          ecd: "2026-03-25",
-        })
+  describe("DELETE /tasks/:id", () => {
+    test("deletes a task and returns deleted id", async () => {
+      const created = await request(app)
+        .post("/tasks")
+        .send({ name: "Delete Me", headerId })
         .expect(201);
 
-      const taskId = createResponse.body.data._id;
-      expect(createResponse.body.data.name).toBe("Workflow Task");
-
-      // READ
-      const readResponse = await request(app)
-        .get(`/api/office/${taskId}`)
+      const res = await request(app)
+        .delete(`/tasks/${created.body._id}`)
         .expect(200);
 
-      expect(readResponse.body.data._id).toBe(taskId);
-      expect(readResponse.body.data.name).toBe("Workflow Task");
+      expect(res.body.deleted).toBe(created.body._id);
+    });
 
-      // UPDATE
-      const updateResponse = await request(app)
-        .put(`/api/office/${taskId}`)
-        .send({
-          name: "Updated Workflow Task",
-          done: true,
-        })
-        .expect(200);
-
-      expect(updateResponse.body.data.name).toBe("Updated Workflow Task");
-      expect(updateResponse.body.data.done).toBe(true);
-
-      // DELETE
-      const deleteResponse = await request(app)
-        .delete(`/api/office/${taskId}`)
-        .expect(200);
-
-      expect(deleteResponse.body.success).toBe(true);
-
-      // VERIFY DELETION
-      await request(app).get(`/api/office/${taskId}`).expect(404);
+    test("returns 404 for nonexistent id", async () => {
+      await request(app).delete("/tasks/000000000000000000000000").expect(404);
     });
   });
 });
