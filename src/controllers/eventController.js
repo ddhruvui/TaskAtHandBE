@@ -158,6 +158,16 @@ const updateEvent = async (req, res) => {
       });
     }
 
+    if (
+      error.message.includes("Not done task cannot have priority") ||
+      error.message.includes("Done task cannot have priority less than")
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+      });
+    }
+
     res.status(500).json({
       success: false,
       error: "Failed to update event",

@@ -126,6 +126,21 @@ class Office {
         throw new Error(`Priority must be between 0 and ${count - 1}`);
       }
 
+      // Enforce done/not-done boundary:
+      // Not done tasks must stay above done tasks (lower priority numbers)
+      // Done tasks must stay below not done tasks (higher priority numbers)
+      const undoneCount = await collection.countDocuments({ done: false });
+      if (!currentTask.done && newPriority >= undoneCount) {
+        throw new Error(
+          "Not done task cannot have priority greater than or equal to a done task",
+        );
+      }
+      if (currentTask.done && newPriority < undoneCount) {
+        throw new Error(
+          "Done task cannot have priority less than a not done task",
+        );
+      }
+
       // Reorder other tasks
       if (oldPriority !== newPriority) {
         if (newPriority < oldPriority) {

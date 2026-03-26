@@ -242,4 +242,120 @@ describe("Done/Undone Priority Adjustment", () => {
 
     console.log("\n✅ New task correctly inserted before done tasks!");
   });
+
+  describe("Done/Not-Done Priority Boundary Enforcement", () => {
+    let notDoneId;
+    let doneId;
+
+    beforeEach(async () => {
+      // Fresh isolated set: 2 not-done tasks, then 1 done task
+      const t1 = await request(app)
+        .post("/api/office")
+        .send({ name: "Boundary NotDone 1" })
+        .expect(201);
+      const t2 = await request(app)
+        .post("/api/office")
+        .send({ name: "Boundary NotDone 2" })
+        .expect(201);
+      const t3 = await request(app)
+        .post("/api/office")
+        .send({ name: "Boundary Done 1" })
+        .expect(201);
+
+      notDoneId = t1.body.data._id;
+      doneId = t3.body.data._id;
+
+      // Mark t3 as done so it sits below the not-done tasks
+      await request(app)
+        .put(`/api/office/${doneId}`)
+        .send({ done: true })
+        .expect(200);
+    });
+
+    test("should reject moving a not-done task into done territory", async () => {
+      // Get current state to find the boundary position
+      const allTasks = await request(app).get("/api/office").expect(200);
+      const total = allTasks.body.count;
+
+      // Try to move the not-done task to the last position (done territory)
+      const response = await request(app)
+        .put(`/api/office/${notDoneId}`)
+        .send({ priority: total - 1 })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain(
+        "Not done task cannot have priority",
+      );
+    });
+
+    test("should reject moving a done task into not-done territory", async () => {
+      // Try to move the done task to position 0 (not-done territory)
+      const response = await request(app)
+        .put(`/api/office/${doneId}`)
+        .send({ priority: 0 })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toContain(
+        "Done task cannot have priority less than",
+      );
+    });
+
+    test("should allow moving a not-done task within not-done range", async () => {
+      // t1 is at priority 0 (or similar), move it to 1 (still within not-done zone)
+      const allTasks = await request(app).get("/api/office").expect(200);
+      const notDoneTask = allTasks.body.data.find((t) => t._id === notDoneId);
+      const undoneCount = allTasks.body.data.filter((t) => !t.done).length;
+
+      // Pick any valid not-done priority that's different from current
+      const targetPriority = notDoneTask.priority === 0 ? 1 : 0;
+
+      if (undoneCount > 1) {
+        const response = await request(app)
+          .put(`/api/office/${notDoneId}`)
+          .send({ priority: targetPriority })
+          .expect(200);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.done).toBe(false);
+        expect(response.body.data.priority).toBe(targetPriority);
+      }
+    });
+
+    test("should preserve done/not-done ordering after a boundary-rejected move", async () => {
+      const allTasksBefore = await request(app).get("/api/office").expect(200);
+      const total = allTasksBefore.body.count;
+
+      // Attempt illegal move (should be rejected)
+      await request(app)
+        .put(`/api/office/${notDoneId}`)
+        .send({ priority: total - 1 })
+        .expect(400);
+
+      // Verify state hasn't changed
+      const allTasksAfter = await request(app).get("/api/office").expect(200);
+      const notDoneTaskAfter = allTasksAfter.body.data.find(
+        (t) => t._id === notDoneId,
+      );
+      const notDoneTaskBefore = allTasksBefore.body.data.find(
+        (t) => t._id === notDoneId,
+      );
+
+      expect(notDoneTaskAfter.priority).toBe(notDoneTaskBefore.priority);
+      expect(notDoneTaskAfter.done).toBe(false);
+
+      // Verify all not-done tasks still come before all done tasks
+      const notDonePriorities = allTasksAfter.body.data
+        .filter((t) => !t.done)
+        .map((t) => t.priority);
+      const donePriorities = allTasksAfter.body.data
+        .filter((t) => t.done)
+        .map((t) => t.priority);
+
+      const maxNotDone = Math.max(...notDonePriorities);
+      const minDone = Math.min(...donePriorities);
+      expect(maxNotDone).toBeLessThan(minDone);
+    });
+  });
 });

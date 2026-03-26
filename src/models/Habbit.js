@@ -127,6 +127,21 @@ class Habbit {
         throw new Error(`Priority must be between 0 and ${count - 1}`);
       }
 
+      // Enforce done/not-done boundary:
+      // Not done items must stay above done items (lower priority numbers)
+      // Done items must stay below not done items (higher priority numbers)
+      const undoneCount = await collection.countDocuments({ done: false });
+      if (!currentHabbit.done && newPriority >= undoneCount) {
+        throw new Error(
+          "Not done task cannot have priority greater than or equal to a done task",
+        );
+      }
+      if (currentHabbit.done && newPriority < undoneCount) {
+        throw new Error(
+          "Done task cannot have priority less than a not done task",
+        );
+      }
+
       // Reorder other habbits
       if (oldPriority !== newPriority) {
         if (newPriority < oldPriority) {
