@@ -1,37 +1,40 @@
 /**
  * Example: How to use the database with prod/test switching
  *
- * The USE_TEST_DB environment variable controls which database to use:
- * - USE_TEST_DB=false → Uses production databases (e.g., 'Office')
- * - USE_TEST_DB=true → Uses test databases (e.g., 'Office-Test')
+ * The USE_TEST_DB environment variable controls which collections to use:
+ * - USE_TEST_DB=false → Uses production collections ('Headers', 'Tasks')
+ * - USE_TEST_DB=true  → Uses test collections ('Headers-Test', 'Tasks-Test')
  */
 
 const { getDatabase } = require("../src/config/db");
 
 async function exampleUsage() {
   try {
-    // Get database instance - automatically switches based on USE_TEST_DB
-    const officeDB = await getDatabase("Office");
+    const db = await getDatabase();
 
-    // Access collections
-    const tasksCollection = officeDB.collection("tasks");
-    const usersCollection = officeDB.collection("users");
+    // Collection names are controlled by USE_TEST_DB
+    const useTestDB = process.env.USE_TEST_DB === "true";
+    const headersCollection = db.collection(
+      useTestDB ? "Headers-Test" : "Headers",
+    );
+    const tasksCollection = db.collection(useTestDB ? "Tasks-Test" : "Tasks");
 
-    // Perform database operations
-    const tasks = await tasksCollection.find({}).toArray();
-    console.log("Tasks:", tasks);
+    // Fetch all headers sorted by priority
+    const headers = await headersCollection
+      .find({})
+      .sort({ priority: 1 })
+      .toArray();
+    console.log("Headers:", headers);
 
-    // Insert a document
-    const result = await tasksCollection.insertOne({
-      title: "Example Task",
-      completed: false,
-      createdAt: new Date(),
-    });
-    console.log("Inserted task:", result.insertedId);
-
-    // You can work with multiple databases
-    const analyticsDB = await getDatabase("Analytics");
-    const logsCollection = analyticsDB.collection("logs");
+    // Fetch all tasks for the first header
+    if (headers.length > 0) {
+      const headerId = headers[0]._id.toString();
+      const tasks = await tasksCollection
+        .find({ headerId })
+        .sort({ priority: 1 })
+        .toArray();
+      console.log(`Tasks for header "${headers[0].name}":`, tasks);
+    }
   } catch (error) {
     console.error("Database operation failed:", error);
   }

@@ -204,10 +204,34 @@ describe("Error Handling", () => {
       expect(res.body).toHaveProperty("error");
     });
 
-    test("400 when priority is out of range", async () => {
+    test("400 when priority is out of range (too large)", async () => {
       const res = await request(app)
         .put(`/tasks/${taskId}`)
         .send({ priority: 9999 })
+        .expect(400);
+      expect(res.body).toHaveProperty("error");
+    });
+
+    test("400 when priority is negative", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ priority: -1 })
+        .expect(400);
+      expect(res.body).toHaveProperty("error");
+    });
+
+    test("400 when priority is a non-integer (float)", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ priority: 0.5 })
+        .expect(400);
+      expect(res.body).toHaveProperty("error");
+    });
+
+    test("400 when priority is a non-integer (string)", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ priority: "high" })
         .expect(400);
       expect(res.body).toHaveProperty("error");
     });

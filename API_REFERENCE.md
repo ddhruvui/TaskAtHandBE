@@ -359,7 +359,13 @@ Updates a task. All body fields are optional — send only what needs to change.
 { "error": "done must be a boolean" }
 ```
 
-**Error `400` — invalid priority:**
+**Error `400` — priority not a non-negative integer:**
+
+```json
+{ "error": "Priority must be a non-negative integer" }
+```
+
+**Error `400` — priority out of range:**
 
 ```json
 { "error": "Priority must be between 0 and 5" }
@@ -403,16 +409,40 @@ The cron job runs daily at UTC midnight and performs 6 steps to maintain task st
 
 ### Cron Steps
 
-| Step | Trigger            | Action                                                                 |
-| ---- | ------------------ | ---------------------------------------------------------------------- |
-| 1    | 1st of every month | Clamp `day_of_month` ECD values that exceed the month's maximum days   |
-| 2    | January 1st only   | Advance `day_of_year` ECDs by 1 year                                   |
-| 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone           |
-| 4    | 1st of month       | Mark tasks with a `day_of_month` ECD containing today's date as undone |
-| 5    | Every day          | Delete tasks with a `date` ECD that has passed (past or today)         |
-| 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp |
+| Step | Trigger            | Action                                                                          |
+| ---- | ------------------ | ------------------------------------------------------------------------------- |
+| 1    | 1st of every month | Clamp `day_of_month` ECD values that exceed the month's maximum days            |
+| 2    | January 1st only   | Advance `day_of_year` ECDs by 1 year and mark those tasks undone                |
+| 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone                    |
+| 4    | 1st of month       | Mark tasks with a `day_of_month` ECD containing today's date as undone          |
+| 5    | Every day          | Delete tasks that are **done** and have a `date` ECD (regardless of date value) |
+| 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
 
 All date operations in the cron run in UTC.
+
+### `GET /cron/status`
+
+Returns stats from the most recent cron run.
+
+**Response `200`:**
+
+```json
+{
+  "lastRanAt": "2026-01-01T00:00:00.000Z",
+  "tasksDeleted": 2,
+  "tasksMarkedUndone": 3,
+  "tasksClamped": 1,
+  "headersReordered": 4
+}
+```
+
+**Error `404`** — cron has never run:
+
+```json
+{ "error": "Cron has not run yet" }
+```
+
+---
 
 ### `POST /cron/run`
 
@@ -433,13 +463,19 @@ Manually triggers the cron job. Accepts an optional date override.
 **Response `200`:**
 
 ```json
-{ "success": true, "message": "Cron job executed" }
+{
+  "ranAt": "2026-01-01T00:00:00.000Z",
+  "tasksDeleted": 2,
+  "tasksMarkedUndone": 3,
+  "tasksClamped": 1,
+  "headersReordered": 4
+}
 ```
 
 **Error `500`:**
 
 ```json
-{ "success": false, "error": "..." }
+{ "error": "..." }
 ```
 
 ---

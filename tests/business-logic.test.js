@@ -394,4 +394,174 @@ describe("Task Priority: Manual Reorder", () => {
     const priorities = after.body.map((t) => t.priority).sort((a, b) => a - b);
     expect(priorities).toEqual([0, 1]);
   });
+
+  test("manually reordering task shifts affected tasks correctly (move up: 2→0)", async () => {
+    await clearCollections();
+    const h = await request(app)
+      .post("/headers")
+      .send({ name: "H3" })
+      .expect(201);
+    const hId = h.body._id;
+
+    const t1 = await request(app)
+      .post("/tasks")
+      .send({ name: "T1", headerId: hId })
+      .expect(201);
+    const t2 = await request(app)
+      .post("/tasks")
+      .send({ name: "T2", headerId: hId })
+      .expect(201);
+    const t3 = await request(app)
+      .post("/tasks")
+      .send({ name: "T3", headerId: hId })
+      .expect(201);
+
+    // Move T3 (priority 2) up to priority 0
+    await request(app)
+      .put(`/tasks/${t3.body._id}`)
+      .send({ priority: 0 })
+      .expect(200);
+
+    const all = await request(app).get(`/tasks?headerId=${hId}`).expect(200);
+    const after1 = all.body.find((t) => t._id === t1.body._id);
+    const after2 = all.body.find((t) => t._id === t2.body._id);
+    const after3 = all.body.find((t) => t._id === t3.body._id);
+
+    expect(after3.priority).toBe(0);
+    expect(after1.priority).toBe(1);
+    expect(after2.priority).toBe(2);
+  });
+});
+
+describe("Task Priority: Insertion — Edge Cases", () => {
+  let headerId;
+
+  beforeEach(async () => {
+    const db = await getDatabase();
+    await db.collection("Headers-Test").deleteMany({});
+    await db.collection("Tasks-Test").deleteMany({});
+    const res = await request(app).post("/headers").send({ name: "H" });
+    headerId = res.body._id;
+  });
+
+  test("new task gets priority 0 when no tasks exist", async () => {
+    const t = await request(app)
+      .post("/tasks")
+      .send({ name: "First", headerId })
+      .expect(201);
+    expect(t.body.priority).toBe(0);
+  });
+
+  test("new task inserts at priority 0 when all existing tasks are done", async () => {
+    const t1 = await request(app)
+      .post("/tasks")
+      .send({ name: "T1", headerId })
+      .expect(201);
+    const t2 = await request(app)
+      .post("/tasks")
+      .send({ name: "T2", headerId })
+      .expect(201);
+
+    // Mark all done
+    await request(app).put(`/tasks/${t1.body._id}`).send({ done: true });
+    await request(app).put(`/tasks/${t2.body._id}`).send({ done: true });
+
+    // Add a new task — all existing are done, spec says insert at position 0
+    const t3 = await request(app)
+      .post("/tasks")
+      .send({ name: "T3", headerId })
+      .expect(201);
+    expect(t3.body.priority).toBe(0);
+
+    const tasks = await request(app)
+      .get(`/tasks?headerId=${headerId}`)
+      .expect(200);
+    const undone = tasks.body.filter((t) => !t.done);
+    const done = tasks.body.filter((t) => t.done);
+
+    expect(undone.length).toBe(1);
+    expect(undone[0].priority).toBe(0);
+    const minDonePriority = Math.min(...done.map((t) => t.priority));
+    expect(minDonePriority).toBeGreaterThan(0);
+  });
+});
+
+describe("Task Priority: Done/Undone Toggle — No-ops", () => {
+  let headerId;
+
+  beforeEach(async () => {
+    const db = await getDatabase();
+    await db.collection("Headers-Test").deleteMany({});
+    await db.collection("Tasks-Test").deleteMany({});
+    const res = await request(app).post("/headers").send({ name: "H" });
+    headerId = res.body._id;
+  });
+
+  test("sending done:true on already-done task does not shift priorities", async () => {
+    const t1 = await request(app)
+      .post("/tasks")
+      .send({ name: "T1", headerId })
+      .expect(201);
+    const t2 = await request(app)
+      .post("/tasks")
+      .send({ name: "T2", headerId })
+      .expect(201);
+
+    // Mark T1 done (moves to last position)
+    await request(app).put(`/tasks/${t1.body._id}`).send({ done: true });
+
+    const before = await request(app)
+      .get(`/tasks?headerId=${headerId}`)
+      .expect(200);
+    const t1Before = before.body.find((t) => t._id === t1.body._id);
+    const t2Before = before.body.find((t) => t._id === t2.body._id);
+
+    // Send done:true again — should be a no-op on priorities
+    await request(app)
+      .put(`/tasks/${t1.body._id}`)
+      .send({ done: true })
+      .expect(200);
+
+    const after = await request(app)
+      .get(`/tasks?headerId=${headerId}`)
+      .expect(200);
+    const t1After = after.body.find((t) => t._id === t1.body._id);
+    const t2After = after.body.find((t) => t._id === t2.body._id);
+
+    expect(t1After.priority).toBe(t1Before.priority);
+    expect(t2After.priority).toBe(t2Before.priority);
+  });
+
+  test("sending done:false on already-undone task does not shift priorities", async () => {
+    const t1 = await request(app)
+      .post("/tasks")
+      .send({ name: "T1", headerId })
+      .expect(201);
+    const t2 = await request(app)
+      .post("/tasks")
+      .send({ name: "T2", headerId })
+      .expect(201);
+
+    // Both are undone. Capture current priorities.
+    const before = await request(app)
+      .get(`/tasks?headerId=${headerId}`)
+      .expect(200);
+    const t1Before = before.body.find((t) => t._id === t1.body._id);
+    const t2Before = before.body.find((t) => t._id === t2.body._id);
+
+    // Send done:false to T1 which is already undone — should be a no-op
+    await request(app)
+      .put(`/tasks/${t1.body._id}`)
+      .send({ done: false })
+      .expect(200);
+
+    const after = await request(app)
+      .get(`/tasks?headerId=${headerId}`)
+      .expect(200);
+    const t1After = after.body.find((t) => t._id === t1.body._id);
+    const t2After = after.body.find((t) => t._id === t2.body._id);
+
+    expect(t1After.priority).toBe(t1Before.priority);
+    expect(t2After.priority).toBe(t2Before.priority);
+  });
 });

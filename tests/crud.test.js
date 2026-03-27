@@ -238,6 +238,19 @@ describe("Tasks CRUD", () => {
       }
     });
 
+    test("returns empty array for a header that exists but has no tasks", async () => {
+      const empty = await request(app)
+        .post("/headers")
+        .send({ name: "Empty" })
+        .expect(201);
+
+      const res = await request(app)
+        .get(`/tasks?headerId=${empty.body._id}`)
+        .expect(200);
+
+      expect(res.body).toEqual([]);
+    });
+
     test("returns 400 when headerId is missing", async () => {
       await request(app).get("/tasks").expect(400);
     });
@@ -275,6 +288,17 @@ describe("Tasks CRUD", () => {
       expect(res.body.notes).toBe("New notes");
     });
 
+    test("clears notes back to empty string", async () => {
+      // First ensure there are notes
+      await request(app).put(`/tasks/${taskId}`).send({ notes: "Some notes" });
+
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ notes: "" })
+        .expect(200);
+      expect(res.body.notes).toBe("");
+    });
+
     test("updates ecd", async () => {
       const res = await request(app)
         .put(`/tasks/${taskId}`)
@@ -299,11 +323,91 @@ describe("Tasks CRUD", () => {
       );
     });
 
+    test("createdAt is not changed by a PUT", async () => {
+      const before = await request(app).get(`/tasks?headerId=${headerId}`).expect(200);
+      const beforeTask = before.body.find((t) => t._id === taskId);
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      await request(app).put(`/tasks/${taskId}`).send({ name: "Rename" }).expect(200);
+
+      const after = await request(app).get(`/tasks?headerId=${headerId}`).expect(200);
+      const afterTask = after.body.find((t) => t._id === taskId);
+
+      expect(afterTask.createdAt).toBe(beforeTask.createdAt);
+    });
+
     test("returns 404 for nonexistent id", async () => {
       await request(app)
         .put("/tasks/000000000000000000000000")
         .send({ name: "Ghost" })
         .expect(404);
+    });
+
+    test("empty body returns current task unchanged", async () => {
+      const current = await request(app)
+        .get(`/tasks?headerId=${headerId}`)
+        .expect(200);
+      const t = current.body.find((task) => task._id === taskId);
+
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({})
+        .expect(200);
+
+      expect(res.body.name).toBe(t.name);
+      expect(res.body.priority).toBe(t.priority);
+      expect(res.body.done).toBe(t.done);
+    });
+
+    test("same priority value is a no-op (no shifting)", async () => {
+      const current = await request(app)
+        .get(`/tasks?headerId=${headerId}`)
+        .expect(200);
+      const t = current.body.find((task) => task._id === taskId);
+
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ priority: t.priority })
+        .expect(200);
+
+      expect(res.body.priority).toBe(t.priority);
+
+      // All other task priorities should be unchanged
+      const after = await request(app)
+        .get(`/tasks?headerId=${headerId}`)
+        .expect(200);
+      const priorities = after.body.map((t2) => t2.priority).sort((a, b) => a - b);
+      expect(priorities).toEqual([...Array(priorities.length).keys()]);
+    });
+
+    test("can update done and name in the same request", async () => {
+      // Ensure task is undone first
+      await request(app).put(`/tasks/${taskId}`).send({ done: false });
+
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ done: true, name: "Done and renamed" })
+        .expect(200);
+
+      expect(res.body.done).toBe(true);
+      expect(res.body.name).toBe("Done and renamed");
+    });
+
+    test("setting ecd to null clears the ecd field", async () => {
+      // First set an ECD
+      await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ ecd: { type: "date", value: "2026-12-31" } })
+        .expect(200);
+
+      // Now clear it
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ ecd: null })
+        .expect(200);
+
+      expect(res.body.ecd).toBeNull();
     });
   });
 

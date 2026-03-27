@@ -1,30 +1,41 @@
 # TaskAtHand Backend
 
-Node.js and Express backend for TaskAtHand application with MongoDB.
+Node.js/Express REST API backend for the TaskAtHand application, backed by MongoDB. Organises tasks into user-defined **Headers** with priority ordering, optional Expected Completion Dates (ECD), and a daily cron job for automated task maintenance.
 
 ## Features
 
-- Express.js server
-- MongoDB database connection
-- Environment-based configuration
-- Automatic test database suffix (-Test) for testing environment
-- CORS enabled
-- Error handling middleware
+- **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
+- **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
+- **Daily cron job** — auto-resets recurring tasks, cleans up expired ones, and re-sorts by upcoming ECD
+- **Swagger UI** — interactive API docs served at `/api-docs`
+- **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
+- **CORS enabled** — accepts requests from any origin
 
 ## Project Structure
 
 ```
 TaskAtHandBE/
 ├── src/
-│   ├── server.js           # Main server file
+│   ├── server.js               # Express app & route wiring
 │   ├── config/
-│   │   └── db.js           # MongoDB configuration
-│   ├── routes/             # API routes
-│   ├── controllers/        # Business logic
-│   ├── models/             # Database models
-│   └── middleware/         # Custom middleware
-├── .env                    # Environment variables
-├── .gitignore
+│   │   ├── db.js               # MongoDB connection
+│   │   └── swagger.js          # OpenAPI spec generation
+│   ├── controllers/
+│   │   ├── headerController.js
+│   │   └── taskController.js
+│   ├── cron/
+│   │   └── cronJob.js          # Daily cron logic (6 steps)
+│   ├── models/
+│   │   ├── Header.js
+│   │   └── Task.js             # ECD validation lives here
+│   ├── middleware/
+│   └── routes/
+│       ├── headerRoutes.js
+│       └── taskRoutes.js
+├── tests/                      # Jest test suite
+├── scripts/
+│   └── cleartest.js            # Wipe test collections
+├── .env
 └── package.json
 ```
 
@@ -36,116 +47,128 @@ TaskAtHandBE/
    npm install
    ```
 
-2. Configure environment variables:
-   - Copy `.env` file and update `DB_PASSWORD` with your actual MongoDB password
-   - The MongoDB URI uses Cluster0 at: `mongodb+srv://dhruvaws8:<db_password>@cluster0.znyjnot.mongodb.net/?appName=Cluster0`
-   - Set `USE_TEST_DB=true` to use test databases, or `USE_TEST_DB=false` for production databases
+2. Create a `.env` file in the project root:
 
-3. Database Naming Convention:
-   - **Production**: Set `USE_TEST_DB=false` to use regular database names (e.g., `Office`)
-   - **Testing**: Set `USE_TEST_DB=true` to automatically append `-Test` suffix (e.g., `Office-Test`)
-   - Switch between environments by changing the `USE_TEST_DB` value in `.env`
+   ```
+   MONGO_URI=mongodb+srv://<user>:<password>@cluster0.znyjnot.mongodb.net/?appName=Cluster0
+   PORT=3002
+   NODE_ENV=development
+   USE_TEST_DB=false
+   ```
+
+3. Replace `<user>` and `<password>` with your MongoDB Atlas credentials.
 
 ## Running the Application
 
-### Development Mode (with auto-restart)
+### Development (auto-restart via nodemon)
 
 ```bash
 npm run dev
 ```
 
-### Production Mode
+### Production
 
 ```bash
 npm start
 ```
 
-### Test Mode (uses -Test databases)
+Server listens on **port 3002** by default.
+
+## Environment Variables
+
+| Variable      | Default       | Description                                            |
+| ------------- | ------------- | ------------------------------------------------------ |
+| `MONGO_URI`   | —             | MongoDB connection string (required)                   |
+| `PORT`        | `3002`        | HTTP port                                              |
+| `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
+| `USE_TEST_DB` | `false`       | `true` → use `Headers-Test` / `Tasks-Test` collections |
+
+## API Endpoints
+
+### System
+
+| Method | Path        | Description                       |
+| ------ | ----------- | --------------------------------- |
+| `GET`  | `/`         | API status                        |
+| `GET`  | `/health`   | Health check                      |
+| `GET`  | `/api-docs` | Interactive Swagger documentation |
+
+### Headers
+
+| Method   | Path           | Description                               |
+| -------- | -------------- | ----------------------------------------- |
+| `GET`    | `/headers`     | List all headers (sorted by priority)     |
+| `POST`   | `/headers`     | Create a header                           |
+| `PUT`    | `/headers/:id` | Update header name and/or priority        |
+| `DELETE` | `/headers/:id` | Delete header and all its tasks (cascade) |
+
+### Tasks
+
+| Method   | Path         | Description                                     |
+| -------- | ------------ | ----------------------------------------------- |
+| `GET`    | `/tasks`     | List tasks for a header (`?headerId=` required) |
+| `POST`   | `/tasks`     | Create a task                                   |
+| `PUT`    | `/tasks/:id` | Update task fields, done status, or priority    |
+| `DELETE` | `/tasks/:id` | Delete a task                                   |
+
+### Cron
+
+| Method | Path           | Description                                             |
+| ------ | -------------- | ------------------------------------------------------- |
+| `POST` | `/cron/run`    | Manually trigger the cron job (accepts `date` override) |
+| `GET`  | `/cron/status` | Stats from the most recent cron run                     |
+
+For full request/response schemas, error codes, and examples see [API_REFERENCE.md](API_REFERENCE.md).
+
+## API Documentation
+
+Once the server is running, interactive docs are available at:
+
+**http://localhost:3002/api-docs**
+
+## Testing
+
+Tests use `USE_TEST_DB=true` so they operate on isolated `*-Test` collections and never touch production data.
+
+### Run all tests
 
 ```bash
 npm test
 ```
 
-## Environment Variables
+### Watch mode
 
-- `DB_PASSWORD`: MongoDB password
-- `MONGO_URI`: MongoDB connection string
-- `PORT`: Server port (default: 3002)
-- `NODE_ENV`: Environment mode (development/production/test)
-- `USE_TEST_DB`: Set to `true` to use test databases (adds -Test suffix), `false` for production databases
-
-## API Endpoints
-
-### System Endpoints
-
-- `GET /` - API welcome message with documentation link
-- `GET /health` - Health check endpoint
-- `GET /api-docs` - **Interactive Swagger API Documentation**
-
-### Todos
-
-- `GET /api/todos` - Get all todos
-- `GET /api/todos/count` - Get todo count
-- `GET /api/todos/:id` - Get todo by ID
-- `POST /api/todos` - Create new todo
-- `PUT /api/todos/:id` - Update todo
-- `DELETE /api/todos/:id` - Delete todo
-- `DELETE /api/todos/chron` - Delete all done todos
-
-### Habits
-
-- `GET /api/habbits` - Get all habits
-- `GET /api/habbits/count` - Get habit count
-- `GET /api/habbits/:id` - Get habit by ID
-- `POST /api/habbits` - Create new habit
-- `PUT /api/habbits/:id` - Update habit
-- `DELETE /api/habbits/:id` - Delete habit
-- `DELETE /api/habbits/chron` - Delete all done habits
-
-### Office Tasks
-
-- `GET /api/office` - Get all office tasks
-- `GET /api/office/count` - Get office task count
-- `GET /api/office/:id` - Get office task by ID
-- `POST /api/office` - Create new office task
-- `PUT /api/office/:id` - Update office task
-- `DELETE /api/office/:id` - Delete office task
-- `DELETE /api/office/chron` - Delete all done office tasks
-
-## API Documentation
-
-### Interactive Swagger Documentation
-
-Once the server is running, access the interactive API documentation at:
-
-**http://localhost:3002/api-docs**
-
-The Swagger UI provides:
-
-- Complete API reference with request/response schemas
-- Interactive testing interface (try endpoints directly from browser)
-- Request examples and response samples
-- OpenAPI 3.0 specification
-
-### Quick Reference Guide
-
-For a detailed markdown reference with cURL examples, see [API.md](API.md)
-
-## Database Usage Example
-
-```javascript
-const { getDatabase } = require("./config/db");
-
-// With USE_TEST_DB=false (production)
-const db = await getDatabase("Office"); // Connects to 'Office' database
-
-// With USE_TEST_DB=true (testing)
-const db = await getDatabase("Office"); // Connects to 'Office-Test' database
+```bash
+npm run test:watch
 ```
+
+### Run a specific test file
+
+```bash
+USE_TEST_DB=true NODE_ENV=test npx jest tests/crud.test.js --forceExit
+```
+
+### Clear test collections (`Headers-Test` and `Tasks-Test`)
+
+```bash
+npm run cleartest
+```
+
+### Test files
+
+| File                     | Coverage area                                   |
+| ------------------------ | ----------------------------------------------- |
+| `crud.test.js`           | Basic CRUD for headers and tasks                |
+| `business-logic.test.js` | Priority reordering, done/undone toggling       |
+| `ecd-validation.test.js` | ECD type/value validation rules                 |
+| `cron-api.test.js`       | `/cron/run` and `/cron/status` endpoints        |
+| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder) |
+| `collections.test.js`    | Test/production collection switching            |
+| `error-handling.test.js` | 400/404/500 error responses                     |
 
 ## Notes
 
-- The `.env` file is gitignored for security
-- Always use environment variables for sensitive data
-- MongoDB connection is established on server startup
-- Collections follow the same naming convention as databases for test/prod separation
+- `.env` is gitignored — never commit credentials
+- `headerId` is immutable after task creation
+- Priority values are 0-based and always kept contiguous by the model layer
+- Cron runs daily at UTC midnight; in production it uses `node-cron` with a setInterval fallback
