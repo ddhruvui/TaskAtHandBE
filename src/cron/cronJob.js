@@ -127,12 +127,17 @@ async function step1ClampDayOfMonth(tasksCol, today) {
 }
 
 /**
- * Step 2 — Clamp & increment day_of_year (runs on Jan 1st).
+ * Step 2 — Mark undone: day_of_year (runs daily).
+ * - If today's month/day matches a task's ECD month/day and the ECD year is
+ *   in the past, the task is marked undone and the year is advanced to today.
+ * - On Feb 28 of a non-leap year, any task with Feb 29 of a past year is
+ *   clamped to Feb 28 of the current year and marked undone.
  * @returns {Promise<{clamped: number, markedUndone: number}>}
  */
 async function step2IncrementDayOfYear(tasksCol, today) {
-  if (today.getUTCMonth() !== 0 || today.getUTCDate() !== 1)
-    return { clamped: 0, markedUndone: 0 };
+  const todayYear = today.getUTCFullYear();
+  const todayMonth = today.getUTCMonth() + 1; // 1-indexed
+  const todayDate = today.getUTCDate();
 
   const tasks = await tasksCol.find({ "ecd.type": "day_of_year" }).toArray();
 
@@ -140,28 +145,45 @@ async function step2IncrementDayOfYear(tasksCol, today) {
   let markedUndone = 0;
   for (const task of tasks) {
     const { day, month, year } = parseDayOfYear(task.ecd.value);
-    const newYear = year + 1;
+
+    // Skip tasks already set to the current year or a future year
+    if (year >= todayYear) continue;
 
     let finalDay = day;
+    let shouldUpdate = false;
 
-    // Clamp Feb 29 in non-leap years
-    if (month === 2 && day === 29 && !isLeapYear(newYear)) {
+    // Case 1: Feb 28 of a non-leap year — clamp past Feb 29 tasks
+    if (
+      todayMonth === 2 &&
+      todayDate === 28 &&
+      !isLeapYear(todayYear) &&
+      month === 2 &&
+      day === 29
+    ) {
       finalDay = 28;
+      shouldUpdate = true;
       clamped++;
     }
 
-    const newValue = `${finalDay}/${month}/${newYear}`;
-    await tasksCol.updateOne(
-      { _id: task._id },
-      {
-        $set: {
-          "ecd.value": newValue,
-          done: false,
-          updatedAt: new Date(),
+    // Case 2: Today's month/day matches the task's scheduled month/day
+    if (month === todayMonth && day === todayDate) {
+      shouldUpdate = true;
+    }
+
+    if (shouldUpdate) {
+      const newValue = `${finalDay}/${month}/${todayYear}`;
+      await tasksCol.updateOne(
+        { _id: task._id },
+        {
+          $set: {
+            "ecd.value": newValue,
+            done: false,
+            updatedAt: new Date(),
+          },
         },
-      },
-    );
-    if (task.done) markedUndone++;
+      );
+      if (task.done) markedUndone++;
+    }
   }
   return { clamped, markedUndone };
 }
@@ -195,12 +217,15 @@ async function step4MarkUndoneDayOfMonth(tasksCol, today) {
 }
 
 /**
- * Step 5 — Delete completed date tasks
+ * Step 5 — Delete completed date tasks and completed no-ECD tasks
  * @returns {Promise<number>} Number of tasks deleted
  */
 async function step5DeleteDoneDateTasks(tasksCol) {
   const tasks = await tasksCol
-    .find({ "ecd.type": "date", done: true })
+    .find({
+      done: true,
+      $or: [{ "ecd.type": "date" }, { ecd: null }, { ecd: { $exists: false } }],
+    })
     .toArray();
 
   if (tasks.length === 0) return 0;

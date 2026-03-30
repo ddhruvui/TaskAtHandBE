@@ -32,7 +32,7 @@ describe("Cron Job", () => {
     await clearCollections();
   });
 
-  describe("Step 5 — Delete done date tasks", () => {
+  describe("Step 5 — Delete done date/no-ecd tasks", () => {
     test("deletes done date tasks and leaves undone date tasks", async () => {
       const h = await createHeader("H");
       const t1 = await createTask({
@@ -59,12 +59,34 @@ describe("Cron Job", () => {
       const tasks = await getTasksForHeader(h._id);
       const ids = tasks.map((t) => t._id);
 
-      expect(ids).not.toContain(t1._id); // deleted
-      expect(ids).toContain(t2._id); // kept (undone)
-      expect(ids).toContain(t3._id); // kept (no ecd)
+      expect(ids).not.toContain(t1._id); // deleted (done date task)
+      expect(ids).toContain(t2._id); // kept (undone date task)
+      expect(ids).toContain(t3._id); // kept (undone no-ecd task)
     });
 
-    test("does not delete done non-date tasks", async () => {
+    test("deletes done no-ecd tasks", async () => {
+      const h = await createHeader("H");
+      const doneNoEcd = await createTask({
+        name: "Done no-ecd",
+        headerId: h._id,
+      });
+      const undoneNoEcd = await createTask({
+        name: "Undone no-ecd",
+        headerId: h._id,
+      });
+
+      await request(app).put(`/tasks/${doneNoEcd._id}`).send({ done: true });
+
+      await request(app).post("/cron/run").send({}).expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const ids = tasks.map((t) => t._id);
+
+      expect(ids).not.toContain(doneNoEcd._id); // deleted
+      expect(ids).toContain(undoneNoEcd._id); // kept
+    });
+
+    test("does not delete done recurring tasks (dow, dom, doy)", async () => {
       const h = await createHeader("H");
 
       const dow = await createTask({
@@ -82,10 +104,9 @@ describe("Cron Job", () => {
         headerId: h._id,
         ecd: { type: "day_of_year", value: "1/1/2030" },
       });
-      const noEcd = await createTask({ name: "Done no-ecd", headerId: h._id });
 
       // Mark all done
-      for (const t of [dow, dom, doy, noEcd]) {
+      for (const t of [dow, dom, doy]) {
         await request(app).put(`/tasks/${t._id}`).send({ done: true });
       }
 
@@ -97,7 +118,6 @@ describe("Cron Job", () => {
       expect(ids).toContain(dow._id);
       expect(ids).toContain(dom._id);
       expect(ids).toContain(doy._id);
-      expect(ids).toContain(noEcd._id);
     });
   });
 
@@ -177,31 +197,53 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 2 — Increment day_of_year (Jan 1st)", () => {
-    test("increments year and sets done=false on Jan 1st", async () => {
+  describe("Step 2 — Mark undone: day_of_year (daily check)", () => {
+    test("updates year and marks undone when today matches task month/day", async () => {
       const h = await createHeader("H");
       const t = await createTask({
         name: "Annual task",
         headerId: h._id,
-        ecd: { type: "day_of_year", value: "7/3/2026" },
+        ecd: { type: "day_of_year", value: "7/3/2025" },
       });
 
       // Mark done
       await request(app).put(`/tasks/${t._id}`).send({ done: true });
 
-      // Run cron with Jan 1 2027
+      // Run cron on the matching day in the next year
       await request(app)
         .post("/cron/run")
-        .send({ date: "2027-01-01" })
+        .send({ date: "2026-03-07" })
         .expect(200);
 
       const tasks = await getTasksForHeader(h._id);
       const updated = tasks.find((task) => task._id === t._id);
-      expect(updated.ecd.value).toBe("7/3/2027");
+      expect(updated.ecd.value).toBe("7/3/2026");
       expect(updated.done).toBe(false);
     });
 
-    test("clamps Feb 29 to Feb 28 in non-leap years on Jan 1st", async () => {
+    test("does not update task when today does not match task month/day", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "Annual task other day",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "7/3/2025" },
+      });
+
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      // Run cron on a different day
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-08" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.ecd.value).toBe("7/3/2025"); // unchanged
+      expect(updated.done).toBe(true); // stays done
+    });
+
+    test("clamps Feb 29 to Feb 28 on Feb 28 of a non-leap year", async () => {
       const h = await createHeader("H");
       const t = await createTask({
         name: "Leap day task",
@@ -209,15 +251,15 @@ describe("Cron Job", () => {
         ecd: { type: "day_of_year", value: "29/2/2024" }, // 2024 was a leap year
       });
 
-      // Run cron with Jan 1 2025 (2025 is not a leap year)
+      // Run cron on Feb 28 2026 (non-leap year)
       await request(app)
         .post("/cron/run")
-        .send({ date: "2025-01-01" })
+        .send({ date: "2026-02-28" })
         .expect(200);
 
       const tasks = await getTasksForHeader(h._id);
       const updated = tasks.find((task) => task._id === t._id);
-      expect(updated.ecd.value).toBe("28/2/2025"); // clamped
+      expect(updated.ecd.value).toBe("28/2/2026"); // clamped
       expect(updated.done).toBe(false);
     });
   });
