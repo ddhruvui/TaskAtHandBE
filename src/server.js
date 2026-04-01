@@ -75,7 +75,47 @@ app.get("/health", (req, res) => {
 app.use("/headers", require("./routes/headerRoutes"));
 app.use("/tasks", require("./routes/taskRoutes"));
 
-// Manual cron trigger
+/**
+ * @openapi
+ * /cron/run:
+ *   post:
+ *     tags: [Cron]
+ *     summary: Manually trigger the cron job (POST with optional date override)
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 description: ISO date string to run cron as if it were that date
+ *                 example: "2026-01-01T00:00:00.000Z"
+ *     responses:
+ *       200:
+ *         description: Cron ran successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CronStats'
+ *       500:
+ *         description: Internal error
+ *   get:
+ *     tags: [Cron]
+ *     summary: Manually trigger the cron job (GET, no body required)
+ *     responses:
+ *       200:
+ *         description: Cron ran successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CronStats'
+ *       500:
+ *         description: Internal error
+ */
+
+// Manual cron trigger (POST with optional date body)
 app.post("/cron/run", async (req, res) => {
   try {
     const overrideDate =
@@ -88,8 +128,61 @@ app.post("/cron/run", async (req, res) => {
   }
 });
 
+// Manual cron trigger (GET)
+app.get("/cron/run", async (req, res) => {
+  try {
+    const stats = await runCron();
+    res.json(stats);
+  } catch (error) {
+    console.error("Error running cron:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /cron/status:
+ *   get:
+ *     tags: [Cron]
+ *     summary: Stats from the most recent cron run
+ *     responses:
+ *       200:
+ *         description: Last run stats
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CronStatus'
+ *       404:
+ *         description: Cron has never run
+ */
 // Cron status
 app.get("/cron/status", (req, res) => {
+  const last = getLastRun();
+  if (!last) {
+    return res.status(404).json({ error: "Cron has not run yet" });
+  }
+  const { ranAt, ...rest } = last;
+  res.json({ lastRanAt: ranAt, ...rest });
+});
+
+/**
+ * @openapi
+ * /cron/details:
+ *   get:
+ *     tags: [Cron]
+ *     summary: Details of the most recent cron run (alias for /cron/status)
+ *     responses:
+ *       200:
+ *         description: Last run stats
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CronStatus'
+ *       404:
+ *         description: Cron has never run
+ */
+// Cron details (alias for /cron/status)
+app.get("/cron/details", (req, res) => {
   const last = getLastRun();
   if (!last) {
     return res.status(404).json({ error: "Cron has not run yet" });

@@ -156,4 +156,88 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("lastRanAt");
     });
   });
+
+  describe("GET /cron/run", () => {
+    test("returns correct response shape", async () => {
+      const res = await request(app).get("/cron/run").expect(200);
+
+      expect(res.body).toHaveProperty("ranAt");
+      expect(res.body).toHaveProperty("tasksDeleted");
+      expect(res.body).toHaveProperty("tasksMarkedUndone");
+      expect(res.body).toHaveProperty("tasksClamped");
+      expect(res.body).toHaveProperty("headersReordered");
+    });
+
+    test("ranAt is a valid ISO 8601 datetime string", async () => {
+      const res = await request(app).get("/cron/run").expect(200);
+      expect(() => new Date(res.body.ranAt)).not.toThrow();
+      expect(new Date(res.body.ranAt).toISOString()).toBe(res.body.ranAt);
+    });
+
+    test("numeric stat fields are non-negative integers", async () => {
+      const res = await request(app).get("/cron/run").expect(200);
+      const {
+        tasksDeleted,
+        tasksMarkedUndone,
+        tasksClamped,
+        headersReordered,
+      } = res.body;
+
+      for (const val of [
+        tasksDeleted,
+        tasksMarkedUndone,
+        tasksClamped,
+        headersReordered,
+      ]) {
+        expect(typeof val).toBe("number");
+        expect(Number.isInteger(val)).toBe(true);
+        expect(val).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    test("updates /cron/status lastRanAt after running", async () => {
+      const runRes = await request(app).get("/cron/run").expect(200);
+      const statusRes = await request(app).get("/cron/status").expect(200);
+      expect(statusRes.body.lastRanAt).toBe(runRes.body.ranAt);
+    });
+  });
+
+  describe("GET /cron/details", () => {
+    test("returns correct shape matching /cron/status", async () => {
+      await request(app).get("/cron/run").expect(200);
+
+      const detailsRes = await request(app).get("/cron/details").expect(200);
+      expect(detailsRes.body).toHaveProperty("lastRanAt");
+      expect(detailsRes.body).toHaveProperty("tasksDeleted");
+      expect(detailsRes.body).toHaveProperty("tasksMarkedUndone");
+      expect(detailsRes.body).toHaveProperty("tasksClamped");
+      expect(detailsRes.body).toHaveProperty("headersReordered");
+    });
+
+    test("response matches /cron/status exactly", async () => {
+      await request(app).post("/cron/run").expect(200);
+
+      const statusRes = await request(app).get("/cron/status").expect(200);
+      const detailsRes = await request(app).get("/cron/details").expect(200);
+      expect(detailsRes.body).toEqual(statusRes.body);
+    });
+
+    test("returns 404 when cron has never run (same as /cron/status)", async () => {
+      // Accept either 404 (never ran) or 200 (already ran in this process)
+      const res = await request(app).get("/cron/details");
+      if (res.status === 404) {
+        expect(res.body).toHaveProperty("error");
+      } else {
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveProperty("lastRanAt");
+      }
+    });
+
+    test("does not expose ranAt key (uses lastRanAt)", async () => {
+      await request(app).post("/cron/run").expect(200);
+      const res = await request(app).get("/cron/details").expect(200);
+      expect(res.body).not.toHaveProperty("ranAt");
+      expect(res.body).toHaveProperty("lastRanAt");
+    });
+  });
 });

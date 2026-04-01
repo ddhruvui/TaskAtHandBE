@@ -113,10 +113,12 @@ Server listens on **port 3002** by default.
 
 ### Cron
 
-| Method | Path           | Description                                             |
-| ------ | -------------- | ------------------------------------------------------- |
-| `POST` | `/cron/run`    | Manually trigger the cron job (accepts `date` override) |
-| `GET`  | `/cron/status` | Stats from the most recent cron run                     |
+| Method | Path            | Description                                             |
+| ------ | --------------- | ------------------------------------------------------- |
+| `POST` | `/cron/run`     | Manually trigger the cron job (accepts `date` override) |
+| `GET`  | `/cron/run`     | Manually trigger the cron job (no body needed)          |
+| `GET`  | `/cron/status`  | Stats from the most recent cron run                     |
+| `GET`  | `/cron/details` | Stats from the most recent cron run (alias for status)  |
 
 For full request/response schemas, error codes, and examples see [API_REFERENCE.md](API_REFERENCE.md).
 
@@ -156,15 +158,15 @@ npm run cleartest
 
 ### Test files
 
-| File                     | Coverage area                                   |
-| ------------------------ | ----------------------------------------------- |
-| `crud.test.js`           | Basic CRUD for headers and tasks                |
-| `business-logic.test.js` | Priority reordering, done/undone toggling       |
-| `ecd-validation.test.js` | ECD type/value validation rules                 |
-| `cron-api.test.js`       | `/cron/run` and `/cron/status` endpoints        |
-| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder) |
-| `collections.test.js`    | Test/production collection switching            |
-| `error-handling.test.js` | 400/404/500 error responses                     |
+| File                     | Coverage area                                              |
+| ------------------------ | ---------------------------------------------------------- |
+| `crud.test.js`           | Basic CRUD for headers and tasks                           |
+| `business-logic.test.js` | Priority reordering, done/undone toggling                  |
+| `ecd-validation.test.js` | ECD type/value validation rules                            |
+| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
+| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder)            |
+| `collections.test.js`    | Test/production collection switching                       |
+| `error-handling.test.js` | 400/404/500 error responses                                |
 
 ## Notes
 

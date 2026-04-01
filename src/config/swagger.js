@@ -74,6 +74,34 @@ const options = {
             message: { type: "string" },
           },
         },
+        CronStats: {
+          type: "object",
+          properties: {
+            ranAt: {
+              type: "string",
+              format: "date-time",
+              example: "2026-01-01T00:00:00.000Z",
+            },
+            tasksDeleted: { type: "integer", example: 2 },
+            tasksMarkedUndone: { type: "integer", example: 3 },
+            tasksClamped: { type: "integer", example: 1 },
+            headersReordered: { type: "integer", example: 4 },
+          },
+        },
+        CronStatus: {
+          type: "object",
+          properties: {
+            lastRanAt: {
+              type: "string",
+              format: "date-time",
+              example: "2026-01-01T00:00:00.000Z",
+            },
+            tasksDeleted: { type: "integer", example: 2 },
+            tasksMarkedUndone: { type: "integer", example: 3 },
+            tasksClamped: { type: "integer", example: 1 },
+            headersReordered: { type: "integer", example: 4 },
+          },
+        },
       },
     },
   },

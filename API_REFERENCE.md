@@ -446,7 +446,7 @@ Returns stats from the most recent cron run.
 
 ### `POST /cron/run`
 
-Manually triggers the cron job. Accepts an optional date override.
+Manually triggers the cron job with an optional date override in the request body.
 
 **Request Body:**
 
@@ -476,6 +476,54 @@ Manually triggers the cron job. Accepts an optional date override.
 
 ```json
 { "error": "..." }
+```
+
+---
+
+### `GET /cron/run`
+
+Manually triggers the cron job. No request body needed.
+
+**Response `200`:**
+
+```json
+{
+  "ranAt": "2026-01-01T00:00:00.000Z",
+  "tasksDeleted": 2,
+  "tasksMarkedUndone": 3,
+  "tasksClamped": 1,
+  "headersReordered": 4
+}
+```
+
+**Error `500`:**
+
+```json
+{ "error": "..." }
+```
+
+---
+
+### `GET /cron/details`
+
+Returns stats from the most recent cron run. Alias for `GET /cron/status`.
+
+**Response `200`:**
+
+```json
+{
+  "lastRanAt": "2026-01-01T00:00:00.000Z",
+  "tasksDeleted": 2,
+  "tasksMarkedUndone": 3,
+  "tasksClamped": 1,
+  "headersReordered": 4
+}
+```
+
+**Error `404`** — cron has never run:
+
+```json
+{ "error": "Cron has not run yet" }
 ```
 
 ---

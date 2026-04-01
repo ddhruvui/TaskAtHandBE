@@ -266,7 +266,7 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 
 ## tests/cron-api.test.js
 
-Tests the two cron HTTP endpoints.
+Tests the four cron HTTP endpoints.
 
 | Test                                                    | What it checks                                                                                  |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -280,3 +280,11 @@ Tests the two cron HTTP endpoints.
 | lastRanAt matches the most recent POST /cron/run ranAt  | Status `lastRanAt` equals the last run's `ranAt`                                                |
 | status numeric fields match the last run stats          | All 4 counters in status match what the last run returned                                       |
 | lastRanAt does not contain the ranAt key (no duplicate) | Status response has `lastRanAt` but not `ranAt`                                                 |
+| GET /cron/run returns correct response shape            | `GET /cron/run` → same `{ ranAt, ... }` shape as POST, no body needed                           |
+| GET /cron/run ranAt is a valid ISO 8601 datetime string | `ranAt` parses and round-trips correctly                                                        |
+| GET /cron/run numeric stat fields are non-negative      | All 4 stat fields are integers ≥ 0                                                              |
+| GET /cron/run updates /cron/status lastRanAt            | After `GET /cron/run`, status `lastRanAt` reflects the new run                                  |
+| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered }`                |
+| GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
+| GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
+| GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
