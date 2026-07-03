@@ -1,5 +1,6 @@
 const { getDatabase } = require("../config/db");
 const { ObjectId } = require("mongodb");
+const Archive = require("./Archive");
 
 const VALID_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -77,7 +78,30 @@ function validateEcd(ecd) {
   return ecd;
 }
 
+/**
+ * True when an ECD change moves a one-time date further into the future —
+ * the classic "push it to later" reschedule.
+ */
+function isPushedLater(fromEcd, toEcd) {
+  if (!fromEcd || !toEcd) return false;
+  if (fromEcd.type !== "date" || toEcd.type !== "date") return false;
+  return toEcd.value > fromEcd.value; // YYYY-MM-DD compares lexicographically
+}
+
 class Task {
+  /**
+   * Look up the header for a task, tolerating missing/invalid ids.
+   * @param {string} headerId
+   * @returns {Promise<Object|null>}
+   */
+  static async getHeaderForTask(headerId) {
+    try {
+      const Header = require("./Header");
+      return await Header.findById(headerId);
+    } catch (_err) {
+      return null;
+    }
+  }
   /**
    * Get the Tasks collection for the current environment
    * @returns {Promise<Collection>}
@@ -140,6 +164,7 @@ class Task {
       priority: undoneCount,
       ecd: ecd || null,
       done: false,
+      doneAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -169,6 +194,21 @@ class Task {
     if (data.notes !== undefined) updates.notes = data.notes;
     if (data.ecd !== undefined) {
       updates.ecd = validateEcd(data.ecd);
+
+      // Archive ECD changes so reschedules (procrastination signal) are visible
+      if (JSON.stringify(updates.ecd) !== JSON.stringify(current.ecd || null)) {
+        const header = await this.getHeaderForTask(current.headerId);
+        await Archive.log({
+          type: "task_rescheduled",
+          taskId: current._id.toString(),
+          taskName: current.name,
+          headerId: current.headerId,
+          headerName: header ? header.name : null,
+          fromEcd: current.ecd || null,
+          toEcd: updates.ecd,
+          pushedLater: isPushedLater(current.ecd, updates.ecd),
+        });
+      }
     }
 
     // Handle done toggle
@@ -193,6 +233,7 @@ class Task {
 
         updates.priority = newPriority;
         updates.done = true;
+        updates.doneAt = new Date();
       } else {
         // Marking not done: move to just before first done task in header
         const undoneCount = await collection.countDocuments({
@@ -216,6 +257,7 @@ class Task {
 
         updates.priority = insertPos;
         updates.done = false;
+        updates.doneAt = null;
       }
     } else if (
       data.priority !== undefined &&

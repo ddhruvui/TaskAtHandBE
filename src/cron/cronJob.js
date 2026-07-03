@@ -1,4 +1,5 @@
 const { getDatabase } = require("../config/db");
+const Archive = require("../models/Archive");
 
 // ─── Date / Day helpers ───────────────────────────────────────────────────────
 
@@ -96,7 +97,102 @@ async function getCollections() {
   return { tasksCol, headersCol };
 }
 
+/** Format a Date as a "YYYY-MM-DD" UTC calendar-day string */
+function utcDayString(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+/** Build a headerId → headerName map for archive denormalization */
+async function getHeaderNameMap(headersCol) {
+  const headers = await headersCol.find({}).toArray();
+  const map = {};
+  for (const h of headers) map[h._id.toString()] = h.name;
+  return map;
+}
+
 // ─── Cron Steps ───────────────────────────────────────────────────────────────
+
+/**
+ * Step 0 — Archive yesterday's recurring-task outcomes (runs before any reset).
+ * A task scheduled for day X is reset to undone at X 00:00 and completed during
+ * X, so its outcome is only knowable at the following midnight. Idempotent:
+ * tasks already archived for that dueDate are skipped, so manual cron runs
+ * don't double-log.
+ * @returns {Promise<number>} Number of outcome events logged
+ */
+async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yDow = DOW_NAMES[yesterday.getUTCDay()];
+  const yDom = yesterday.getUTCDate();
+  const yMonth = yesterday.getUTCMonth() + 1;
+  const dueDate = utcDayString(yesterday);
+
+  // Idempotency guard: skip tasks already archived for this dueDate
+  const archiveCol = await Archive.getCollection();
+  const existing = await archiveCol
+    .find(
+      { type: { $in: ["habit_result", "task_result"] }, dueDate },
+      { projection: { taskId: 1 } },
+    )
+    .toArray();
+  const alreadyLogged = new Set(existing.map((e) => e.taskId));
+
+  const events = [];
+  const baseFields = (task) => ({
+    taskId: task._id.toString(),
+    taskName: task.name,
+    headerId: task.headerId,
+    headerName: headerNames[task.headerId] || null,
+    dueDate,
+    completed: task.done === true,
+    doneAt: task.doneAt || null,
+  });
+
+  // Habits: day_of_week tasks scheduled yesterday
+  const habits = await tasksCol
+    .find({ "ecd.type": "day_of_week", "ecd.value": yDow })
+    .toArray();
+  for (const task of habits) {
+    if (alreadyLogged.has(task._id.toString())) continue;
+    events.push({
+      type: "habit_result",
+      ...baseFields(task),
+      scheduledDays: task.ecd.value,
+    });
+  }
+
+  // Recurring tasks: day_of_month due yesterday
+  const monthly = await tasksCol
+    .find({ "ecd.type": "day_of_month", "ecd.value": yDom })
+    .toArray();
+  for (const task of monthly) {
+    if (alreadyLogged.has(task._id.toString())) continue;
+    events.push({
+      type: "task_result",
+      ...baseFields(task),
+      ecdType: "day_of_month",
+      ecdValue: task.ecd.value,
+    });
+  }
+
+  // Recurring tasks: day_of_year due yesterday (match day/month, any year)
+  const yearly = await tasksCol.find({ "ecd.type": "day_of_year" }).toArray();
+  for (const task of yearly) {
+    const { day, month } = parseDayOfYear(task.ecd.value);
+    if (day !== yDom || month !== yMonth) continue;
+    if (alreadyLogged.has(task._id.toString())) continue;
+    events.push({
+      type: "task_result",
+      ...baseFields(task),
+      ecdType: "day_of_year",
+      ecdValue: task.ecd.value,
+    });
+  }
+
+  await Archive.logMany(events);
+  return events.length;
+}
 
 /**
  * Step 1 — Clamp day_of_month values (runs on the 1st of every month).
@@ -178,6 +274,7 @@ async function step2IncrementDayOfYear(tasksCol, today) {
           $set: {
             "ecd.value": newValue,
             done: false,
+            doneAt: null,
             updatedAt: new Date(),
           },
         },
@@ -197,7 +294,7 @@ async function step3MarkUndoneDayOfWeek(tasksCol, today) {
 
   const result = await tasksCol.updateMany(
     { "ecd.type": "day_of_week", "ecd.value": todayDow, done: true },
-    { $set: { done: false, updatedAt: new Date() } },
+    { $set: { done: false, doneAt: null, updatedAt: new Date() } },
   );
   return result.modifiedCount;
 }
@@ -211,16 +308,17 @@ async function step4MarkUndoneDayOfMonth(tasksCol, today) {
 
   const result = await tasksCol.updateMany(
     { "ecd.type": "day_of_month", "ecd.value": todayDate, done: true },
-    { $set: { done: false, updatedAt: new Date() } },
+    { $set: { done: false, doneAt: null, updatedAt: new Date() } },
   );
   return result.modifiedCount;
 }
 
 /**
- * Step 5 — Delete completed date tasks and completed no-ECD tasks
+ * Step 5 — Delete completed date tasks and completed no-ECD tasks.
+ * Each deleted task is archived first so completion history is preserved.
  * @returns {Promise<number>} Number of tasks deleted
  */
-async function step5DeleteDoneDateTasks(tasksCol) {
+async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
   const tasks = await tasksCol
     .find({
       done: true,
@@ -229,6 +327,20 @@ async function step5DeleteDoneDateTasks(tasksCol) {
     .toArray();
 
   if (tasks.length === 0) return 0;
+
+  await Archive.logMany(
+    tasks.map((task) => ({
+      type: "task_completed",
+      taskId: task._id.toString(),
+      taskName: task.name,
+      headerId: task.headerId,
+      headerName: headerNames[task.headerId] || null,
+      ecdType: task.ecd ? task.ecd.type : null,
+      plannedFor: task.ecd && task.ecd.type === "date" ? task.ecd.value : null,
+      taskCreatedAt: task.createdAt || null,
+      doneAt: task.doneAt || null,
+    })),
+  );
 
   const ids = tasks.map((t) => t._id);
   const result = await tasksCol.deleteMany({ _id: { $in: ids } });
@@ -300,13 +412,19 @@ async function runCron(now) {
   console.log(`[Cron] Running at ${today.toISOString()}`);
 
   const { tasksCol, headersCol } = await getCollections();
+  const headerNames = await getHeaderNameMap(headersCol);
 
+  const outcomesArchived = await step0ArchiveYesterdayResults(
+    tasksCol,
+    headerNames,
+    today,
+  );
   const tasksClamped1 = await step1ClampDayOfMonth(tasksCol, today);
   const { clamped: tasksClamped2, markedUndone: markedUndone2 } =
     await step2IncrementDayOfYear(tasksCol, today);
   const markedUndone3 = await step3MarkUndoneDayOfWeek(tasksCol, today);
   const markedUndone4 = await step4MarkUndoneDayOfMonth(tasksCol, today);
-  const tasksDeleted = await step5DeleteDoneDateTasks(tasksCol);
+  const tasksDeleted = await step5DeleteDoneDateTasks(tasksCol, headerNames);
   const headersReordered = await step6ReorderPriorities(
     tasksCol,
     headersCol,
@@ -319,7 +437,20 @@ async function runCron(now) {
     tasksMarkedUndone: markedUndone2 + markedUndone3 + markedUndone4,
     tasksClamped: tasksClamped1 + tasksClamped2,
     headersReordered,
+    outcomesArchived,
   };
+
+  // Generate the daily AI insight report (skipped in tests / without an API key)
+  if (process.env.NODE_ENV !== "test" && process.env.ANTHROPIC_API_KEY) {
+    try {
+      const { generateInsights } = require("../services/insightsService");
+      const insight = await generateInsights();
+      stats.insightGenerated = Boolean(insight);
+    } catch (error) {
+      console.error("[Cron] Insight generation failed:", error.message);
+      stats.insightGenerated = false;
+    }
+  }
 
   lastRun = stats;
   console.log("[Cron] Done", stats);
@@ -338,20 +469,20 @@ function getLastRun() {
 function scheduleCron() {
   try {
     const cron = require("node-cron");
-    cron.schedule("0 0 * * *", () => runCron(), { timezone: "system" });
-    console.log("[Cron] Scheduled daily at midnight via node-cron");
+    cron.schedule("0 0 * * *", () => runCron(), { timezone: "Etc/UTC" });
+    console.log("[Cron] Scheduled daily at UTC midnight via node-cron");
   } catch (_err) {
-    // node-cron not installed — fall back to a simple interval check
+    // node-cron not installed — fall back to a simple interval check (UTC)
     const MS_PER_MINUTE = 60000;
     let lastRan = null;
 
     setInterval(() => {
       const now = new Date();
       const todayMidnight = new Date(now);
-      todayMidnight.setHours(0, 0, 0, 0);
+      todayMidnight.setUTCHours(0, 0, 0, 0);
 
       if (!lastRan || lastRan < todayMidnight) {
-        if (now.getHours() === 0) {
+        if (now.getUTCHours() === 0) {
           lastRan = todayMidnight;
           runCron(new Date(todayMidnight));
         }
@@ -359,7 +490,7 @@ function scheduleCron() {
     }, MS_PER_MINUTE);
 
     console.log(
-      "[Cron] Scheduled via interval fallback (install node-cron for precision)",
+      "[Cron] Scheduled via UTC interval fallback (install node-cron for precision)",
     );
   }
 }
