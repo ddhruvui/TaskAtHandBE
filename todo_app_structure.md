@@ -104,7 +104,7 @@
 ```
 
 - `value` is a date string in `D/M/YYYY` format
-- The year increments by 1 every Jan 1st
+- The year is advanced to the current year by the daily cron when today matches the stored month/day (see Cron Step 2)
 
 ---
 
@@ -217,13 +217,11 @@ outcome is only knowable at the following midnight:
   - For each value in `ecd.value`, if the value exceeds the number of days in the month, clamp it to the last day of the month
   - If any value was changed, update `updatedAt`
 
-#### Step 2 — Clamp & increment `day_of_year` _(runs on Jan 1st only)_
+#### Step 2 — Mark undone: `day_of_year` _(runs daily)_
 
-- For every task with `ecd.type === "day_of_year"`:
-  - Increment the year in `ecd.value` by 1 (e.g. `7/3/2006` → `7/3/2007`)
-  - If the resulting date is Feb 29 and the new year is not a leap year, clamp to Feb 28
-  - Set `done = false`, `doneAt = null`
-  - Update `updatedAt`
+- For every task with `ecd.type === "day_of_year"` whose stored year is in the **past** (tasks already set to the current or a future year are skipped):
+  - If today's month/day matches the task's month/day: advance the year to **today's year** (e.g. `7/3/2006` → `7/3/2026` when run on March 7 2026), set `done = false`, `doneAt = null`, update `updatedAt`
+  - If today is Feb 28 of a non-leap year and the task is scheduled for Feb 29: clamp to `28/2/<today's year>` and reset the same way
 
 #### Step 3 — Mark undone: `day_of_week`
 
@@ -242,7 +240,7 @@ outcome is only knowable at the following midnight:
 #### Step 5 — Delete completed `date` tasks
 
 - For every task with `ecd.type === "date"` (or no ECD):
-  - If `done === true` → archive a `task_completed` event (preserving `plannedFor`, `createdAt`, `doneAt`, `headerName`), then **delete** the task
+  - If `done === true` → archive a `task_completed` event (preserving `plannedFor`, `taskCreatedAt`, `doneAt`, `headerName`), then **delete** the task
   - If `done === false` → do nothing
 
 #### Step 6 — Reorder priorities per header _(runs last)_
@@ -368,6 +366,7 @@ Returns all tasks for a given header, sorted by `priority` ascending.
     "priority": 0,
     "ecd": { "type": "date", "value": "2026-04-10" },
     "done": false,
+    "doneAt": null,
     "createdAt": "2026-03-26T00:00:00Z",
     "updatedAt": "2026-03-26T00:00:00Z"
   }
@@ -510,7 +509,7 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
 
 0. Archive yesterday's habit/recurring outcomes (idempotent)
 1. Clamp `day_of_month` values _(if today is the 1st)_
-2. Clamp & increment `day_of_year` _(if today is Jan 1st)_
+2. Mark undone: `day_of_year` _(daily — advance year and reset when today matches the task's month/day)_
 3. Mark undone: `day_of_week`
 4. Mark undone: `day_of_month`
 5. Archive + delete completed `date` tasks

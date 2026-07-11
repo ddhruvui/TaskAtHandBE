@@ -22,8 +22,35 @@ This query searches for all documents where the `name` field contains the text "
 **Example Usage in MongoDB:**
 
 ```javascript
-db.headers.find({ name: { $regex: "Mauli", $options: "i" } });
-db.tasks.find({ name: { $regex: "Mauli", $options: "i" } });
+db.Headers.find({ name: { $regex: "Mauli", $options: "i" } });
+db.Tasks.find({ name: { $regex: "Mauli", $options: "i" } });
+```
+
+> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
+
+---
+
+## Headers & Tasks Queries
+
+### All headers in display order
+
+```javascript
+db.Headers.find().sort({ priority: 1 });
+```
+
+### All tasks for one header in display order
+
+```javascript
+db.Tasks.find({ headerId: "<header _id as string>" }).sort({ priority: 1 });
+```
+
+### All done tasks that the next cron run will delete (date or no ECD)
+
+```javascript
+db.Tasks.find({
+  done: true,
+  $or: [{ "ecd.type": "date" }, { ecd: null }],
+});
 ```
 
 ---

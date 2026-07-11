@@ -18,6 +18,8 @@ const options = {
       { name: "Tasks", description: "Task management endpoints" },
       { name: "Events", description: "Event template management endpoints" },
       { name: "Cron", description: "Cron job trigger endpoint" },
+      { name: "Archive", description: "Task history (TaskArchive) endpoints" },
+      { name: "Insights", description: "Stats and AI insight report endpoints" },
       { name: "System", description: "System health endpoints" },
     ],
     components: {
@@ -64,6 +66,12 @@ const options = {
             },
             ecd: { $ref: "#/components/schemas/ECD", nullable: true },
             done: { type: "boolean", example: false },
+            doneAt: {
+              type: "string",
+              format: "date-time",
+              nullable: true,
+              description: "Set when done flips to true; cleared on undo/cron reset",
+            },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },

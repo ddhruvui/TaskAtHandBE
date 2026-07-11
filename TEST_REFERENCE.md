@@ -274,18 +274,20 @@ Checks DB-level concerns and cross-header isolation.
 
 Tests every step of the cron job using direct `runCron()` calls with a date override.
 
-| Test                                                           | What it checks                                                   |
-| -------------------------------------------------------------- | ---------------------------------------------------------------- |
-| deletes done date tasks and leaves undone date tasks           | Step 5: done `date` tasks deleted; undone `date` tasks untouched |
-| does not delete done non-date tasks                            | Step 5: only `ecd.type === "date"` tasks are deleted             |
-| marks done day_of_week tasks undone when today's day matches   | Step 3: `done: true` → `done: false` when day name matches       |
-| does not affect day_of_week tasks whose day does not match     | Step 3: no change when today's day is not in `ecd.value`         |
-| marks done day_of_month tasks undone when today's date matches | Step 4: same logic for day-of-month                              |
-| increments year and sets done=false on Jan 1st                 | Step 2: `7/3/2006` → `7/3/2007`, `done` reset to false           |
-| clamps Feb 29 to Feb 28 in non-leap years on Jan 1st           | Step 2: `29/2/2024` → `28/2/2025`                                |
-| clamps values exceeding days in that month on the 1st          | Step 1: `[15, 30, 31]` in February → `[15, 28, 28]`              |
-| does NOT clamp on non-1st of month                             | Step 1: skipped except on the 1st                                |
-| undone tasks are sorted before done tasks after cron           | Step 6: all undone tasks have lower priority than all done tasks |
+| Test                                                            | What it checks                                                         |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| deletes done date tasks and leaves undone date tasks            | Step 5: done `date` tasks deleted; undone `date` tasks untouched       |
+| deletes done no-ecd tasks                                       | Step 5: done tasks with `ecd: null` are also archived and deleted      |
+| does not delete done recurring tasks (dow, dom, doy)            | Step 5: recurring ECD types are never deleted, even when done          |
+| marks done day_of_week tasks undone when today's day matches    | Step 3: `done: true` → `done: false` when day name matches             |
+| does not affect day_of_week tasks whose day does not match      | Step 3: no change when today's day is not in `ecd.value`               |
+| marks done day_of_month tasks undone when today's date matches  | Step 4: same logic for day-of-month                                    |
+| updates year and marks undone when today matches task month/day | Step 2: past-year value advanced to today's year, `done` reset to false |
+| does not update task when today does not match task month/day   | Step 2: non-matching day → ECD value and `done` untouched              |
+| clamps Feb 29 to Feb 28 on Feb 28 of a non-leap year            | Step 2: `29/2/<past year>` → `28/2/<current year>` and reset           |
+| clamps values exceeding days in that month on the 1st           | Step 1: `[15, 30, 31]` in February → `[15, 28, 28]`                    |
+| does NOT clamp on non-1st of month                              | Step 1: skipped except on the 1st                                      |
+| undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
 
 ---
 
