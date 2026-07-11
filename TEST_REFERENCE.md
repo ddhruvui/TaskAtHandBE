@@ -80,6 +80,35 @@ Events CRUD — reusable task bundles (templates only; scheduling happens client
 
 ---
 
+## tests/goals.test.js
+
+Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side).
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| returns empty array when no goals exist               | `GET /goals` returns `[]` on a clean DB                                        |
+| creates a goal with a step list                       | `POST /goals` returns 201 with `_id`, `name`, `steps`, timestamps; omitted step status defaults to `pending` |
+| creates a goal without steps (defaults to empty list) | `POST /goals { name }` → 201 with `steps: []`                                  |
+| rejects missing name                                  | `POST /goals { steps }` → 400                                                  |
+| rejects empty name                                    | `{ name: "  " }` → 400                                                         |
+| rejects steps that are not an array                   | `{ steps: "Wake up at 6" }` → 400                                              |
+| rejects steps that are plain strings                  | `{ steps: ["Wake up at 6"] }` → 400 (steps must be objects)                    |
+| rejects steps with empty names                        | `{ steps: [{ name: "  " }] }` → 400                                            |
+| rejects steps with an invalid status                  | `{ status: "done" }` → 400 (must be `pending`/`under_progress`)                |
+| normalizes legacy statuses (achieved, active) to under_progress | `{ status: "achieved" }` and `{ status: "active" }` → 201 with `status: "under_progress"` (pre-rename data stays editable) |
+| trims whitespace from name and step names             | `"  Trimmed  "` → `"Trimmed"`; step names trimmed too                          |
+| returns all goals sorted by name ascending            | `GET /goals` array is ascending by `name`                                      |
+| updates goal name                                     | `PUT /goals/:id { name }` → 200, steps untouched                               |
+| updates goal steps (replace wholesale)                | `PUT /goals/:id { steps }` → 200, name untouched; status changes persist       |
+| allows clearing steps with an empty array             | `{ steps: [] }` → 200 with `steps: []` (unlike events)                         |
+| rejects steps with an invalid status (PUT)            | `{ status: "started" }` → 400                                                  |
+| rejects empty name (PUT)                              | `{ name: "" }` → 400                                                           |
+| returns 404 for unknown id (PUT)                      | Fake ObjectId → 404                                                            |
+| deletes a goal                                        | `DELETE /goals/:id` → `{ deleted: id }`                                        |
+| returns 404 when deleting again                       | Second delete → 404                                                            |
+
+---
+
 ## tests/business-logic.test.js
 
 Validates the priority/ordering rules the spec defines.

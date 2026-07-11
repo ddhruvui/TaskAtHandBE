@@ -134,6 +134,41 @@
 
 ---
 
+### Goal (habit backlog, built one step at a time)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "steps": [{ "name": "string", "status": "pending | under_progress" }],
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- `steps` is an ordered array (may be empty; defaults to `[]` on create) of
+  objects with a non-empty `name` (trimmed) and a `status` of `pending`
+  (backlog/paused) or `under_progress` (started — a lifelong daily habit);
+  defaults to `pending`. Legacy values `active` and `achieved` are accepted
+  and normalized to `under_progress`
+- `steps` is replaced wholesale on update — clients send the full list to
+  add, rename, reorder, remove or change the status of steps
+- Goals are **roadmaps only** — the backend never turns steps into tasks.
+  Clients start a step by posting a daily recurring Task (`day_of_week`, all
+  seven days) under a Header named **"One Step At A Time"** — an existing
+  header with that name is reused; a new one is created only when none exists
+  (same find-or-create pattern as event scheduling). The task stays for life;
+  pausing a step deletes it client-side, and clients also flip steps back to
+  `pending` when the task (or the whole header) is deleted from the todo,
+  keeping both views in sync
+- Deleting a goal never touches headers or tasks created from its steps
+- The cron job ignores the Goals collection entirely
+
+---
+
 ### TaskArchive (event log)
 
 Append-only history collection (`TaskArchive`, or `TaskArchive-Test` in test
@@ -490,6 +525,73 @@ the same as on create when present.
 #### `DELETE /events/:id`
 
 Deletes an event template. Headers/tasks previously created from it remain.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
+### Goals
+
+#### `GET /goals`
+
+Returns all goals sorted by `name` ascending.
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Improve Health",
+    "steps": [
+      { "name": "Wake up at 6", "status": "under_progress" },
+      { "name": "Have 1 fruit a day", "status": "pending" }
+    ],
+    "createdAt": "2026-07-11T00:00:00Z",
+    "updatedAt": "2026-07-11T00:00:00Z"
+  }
+]
+```
+
+---
+
+#### `POST /goals`
+
+Creates a new goal. `steps` is optional (defaults to `[]`); each step's
+`status` defaults to `pending`.
+
+**Request body**
+
+```json
+{
+  "name": "string",
+  "steps": [{ "name": "string", "status": "pending | under_progress" }]
+}
+```
+
+**Response `201`** — returns created goal with timestamps
+
+---
+
+#### `PUT /goals/:id`
+
+Updates a goal's name and/or step list. Fields are optional but validated
+the same as on create when present. `steps` is replaced wholesale (an empty
+array clears it).
+
+**Response `200`** — returns updated goal
+
+---
+
+#### `DELETE /goals/:id`
+
+Deletes a goal. Headers/tasks previously created from its steps remain.
 
 **Response `200`**
 

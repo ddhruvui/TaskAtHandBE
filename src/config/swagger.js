@@ -17,6 +17,10 @@ const options = {
       { name: "Headers", description: "Header management endpoints" },
       { name: "Tasks", description: "Task management endpoints" },
       { name: "Events", description: "Event template management endpoints" },
+      {
+        name: "Goals",
+        description: "Goal and step (habit backlog) management endpoints",
+      },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "Archive", description: "Task history (TaskArchive) endpoints" },
       { name: "Insights", description: "Stats and AI insight report endpoints" },
@@ -85,6 +89,38 @@ const options = {
               type: "array",
               items: { type: "string" },
               example: ["Procure onion", "Procure bun", "Procure patty"],
+            },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        GoalStep: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string", example: "Wake up at 6" },
+            status: {
+              type: "string",
+              enum: ["pending", "under_progress"],
+              default: "pending",
+              description:
+                'pending = backlog/paused, under_progress = started — its daily task lives in the "One Step At A Time" todo header and is kept for life. Legacy values "active" and "achieved" are normalized to "under_progress".',
+              example: "pending",
+            },
+          },
+        },
+        Goal: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Improve Health" },
+            steps: {
+              type: "array",
+              items: { $ref: "#/components/schemas/GoalStep" },
+              example: [
+                { name: "Wake up at 6", status: "under_progress" },
+                { name: "Have 1 fruit a day", status: "pending" },
+              ],
             },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },

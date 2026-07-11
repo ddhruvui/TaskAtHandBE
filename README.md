@@ -6,6 +6,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 
 - **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
 - **Events** — reusable task bundles (e.g. "Burger Night" with its shopping list); clients schedule them as dated tasks under a header named after the event (reused if it exists, created otherwise)
+- **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong daily habit); clients start one step at a time as a daily task under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
 - **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
@@ -27,6 +28,7 @@ TaskAtHandBE/
 │   │   ├── headerController.js
 │   │   ├── taskController.js
 │   │   ├── eventController.js
+│   │   ├── goalController.js
 │   │   └── insightController.js
 │   ├── cron/
 │   │   └── cronJob.js          # Daily cron logic (steps 0–6 + AI report)
@@ -34,6 +36,7 @@ TaskAtHandBE/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
 │   │   ├── Event.js            # Reusable task bundles (templates)
+│   │   ├── Goal.js             # Habit backlogs built one step at a time
 │   │   ├── Archive.js          # TaskArchive event log
 │   │   └── Insight.js          # Stored AI reports
 │   ├── services/
@@ -43,6 +46,7 @@ TaskAtHandBE/
 │       ├── headerRoutes.js
 │       ├── taskRoutes.js
 │       ├── eventRoutes.js
+│       ├── goalRoutes.js
 │       ├── archiveRoutes.js
 │       └── insightRoutes.js
 ├── tests/                      # Jest test suite
@@ -95,7 +99,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, TaskArchive, Insights) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, Goals, TaskArchive, Insights) |
 | `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
@@ -134,6 +138,15 @@ Server listens on **port 3002** by default.
 | `POST`   | `/events`     | Create an event (`{ name, tasks: [string] }`)   |
 | `PUT`    | `/events/:id` | Update event name and/or task list              |
 | `DELETE` | `/events/:id` | Delete an event template (created tasks remain) |
+
+### Goals
+
+| Method   | Path         | Description                                                     |
+| -------- | ------------ | --------------------------------------------------------------- |
+| `GET`    | `/goals`     | List all goals (sorted by name)                                 |
+| `POST`   | `/goals`     | Create a goal (`{ name, steps?: [{ name, status? }] }`)         |
+| `PUT`    | `/goals/:id` | Update goal name and/or steps (steps replaced wholesale)        |
+| `DELETE` | `/goals/:id` | Delete a goal (created tasks remain)                            |
 
 ### Cron
 
@@ -196,6 +209,7 @@ npm run cleartest
 | ------------------------ | ---------------------------------------------------------- |
 | `crud.test.js`           | Basic CRUD for headers and tasks                           |
 | `events.test.js`         | Events CRUD, validation, trimming, and sorting             |
+| `goals.test.js`          | Goals CRUD, step/status validation, trimming, and sorting  |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |

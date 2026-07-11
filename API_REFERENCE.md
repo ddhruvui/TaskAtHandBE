@@ -80,6 +80,39 @@ touches created headers or tasks.
 
 ---
 
+### Goal
+
+```typescript
+type GoalStepStatus = "pending" | "under_progress";
+
+interface GoalStep {
+  name: string; // Step/habit name (required), e.g. "Wake up at 6"
+  status: GoalStepStatus; // Defaults to "pending"
+}
+
+interface Goal {
+  _id: string; // MongoDB ObjectId
+  name: string; // Goal name (required), e.g. "Improve Health"
+  steps: GoalStep[]; // Ordered habit backlog (may be empty)
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+Goals are long-term aims broken into small steps/habits to build **one at a
+time**. A step is either `pending` (backlog/paused) or `under_progress`
+(started — a lifelong daily habit). The backend only stores the roadmap; the
+connection to the todo is maintained client-side: starting a step creates a
+daily recurring Task (`day_of_week`, all seven days) under a header named
+**"One Step At A Time"** (reused when one already exists, created otherwise,
+mirroring how events are scheduled), pausing a step removes that task, and
+deleting the task (or that header) from the todo flips the matching steps
+back to `pending`. Legacy status values `active` and `achieved` are accepted
+on write and normalized to `under_progress`. Deleting a goal never touches
+created headers or tasks.
+
+---
+
 ## Error Response Format
 
 All errors return a JSON object with an `error` field:
@@ -502,6 +535,90 @@ Deletes an event template. Tasks previously added to the todo are untouched.
 
 ---
 
+## Goals API
+
+Base path: `/goals`
+
+### `GET /goals`
+
+Returns all goals sorted by `name` ascending.
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "name": "Improve Health",
+    "steps": [
+      { "name": "Wake up at 6", "status": "under_progress" },
+      { "name": "Have 1 fruit a day", "status": "pending" }
+    ],
+    "createdAt": "2026-07-11T00:00:00.000Z",
+    "updatedAt": "2026-07-11T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `POST /goals`
+
+Creates a new goal.
+
+**Request Body:**
+
+```json
+{
+  "name": "Improve Health",
+  "steps": [
+    { "name": "Wake up at 6", "status": "under_progress" },
+    { "name": "Have 1 fruit a day" }
+  ]
+}
+```
+
+| Field   | Required | Type       | Notes                                                                             |
+| ------- | -------- | ---------- | --------------------------------------------------------------------------------- |
+| `name`  | Yes      | string     | Non-empty; trimmed                                                                 |
+| `steps` | No       | GoalStep[] | Defaults to `[]`. Each step needs a non-empty `name` (trimmed); `status` optional (`pending`/`under_progress`, defaults to `pending`; legacy `active`/`achieved` normalized to `under_progress`) |
+
+**Response `201`:** the created goal.
+
+**Error `400`:**
+
+```json
+{ "error": "Step status must be one of: pending, under_progress" }
+```
+
+---
+
+### `PUT /goals/:id`
+
+Updates a goal's `name` and/or `steps`. Both fields are optional but must
+pass the same validation as `POST /goals` when present. `steps` is replaced
+wholesale — send the full list to add, rename, reorder, remove or change the
+status of steps (an empty array clears them).
+
+**Response `200`:** the updated goal.
+**Error `404`:** goal not found.
+
+---
+
+### `DELETE /goals/:id`
+
+Deletes a goal. Tasks previously added to the todo from its steps are untouched.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** goal not found.
+
+---
+
 ## Cron Job
 
 The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/UTC` timezone) and performs the following steps to maintain task state and history.
@@ -790,10 +907,10 @@ Valid day abbreviations: `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`
 
 ## Collections
 
-| Environment               | Headers        | Tasks        | Events        | Archive            | Insights        |
-| ------------------------- | -------------- | ------------ | ------------- | ------------------ | --------------- |
-| Production                | `Headers`      | `Tasks`      | `Events`      | `TaskArchive`      | `Insights`      |
-| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `TaskArchive-Test` | `Insights-Test` |
+| Environment               | Headers        | Tasks        | Events        | Goals        | Archive            | Insights        |
+| ------------------------- | -------------- | ------------ | ------------- | ------------ | ------------------ | --------------- |
+| Production                | `Headers`      | `Tasks`      | `Events`      | `Goals`      | `TaskArchive`      | `Insights`      |
+| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `Goals-Test` | `TaskArchive-Test` | `Insights-Test` |
 
 ---
 
