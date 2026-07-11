@@ -108,6 +108,32 @@
 
 ---
 
+### Event (reusable task bundle)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "tasks": ["string"],
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- `tasks` must be a non-empty array of non-empty strings (each trimmed)
+- Events are **templates only** — the backend never turns them into tasks.
+  Clients schedule an event by posting one Task per selected entry (with a
+  `date` ECD for the chosen day) under a Header named after the event — an
+  existing header with that name is reused so later additions join it; a new
+  one is created only when none exists
+- Deleting an event never touches headers or tasks created from it
+- The cron job ignores the Events collection entirely
+
+---
+
 ### TaskArchive (event log)
 
 Append-only history collection (`TaskArchive`, or `TaskArchive-Test` in test
@@ -403,6 +429,68 @@ Updates a task. Handles the following cases:
 #### `DELETE /tasks/:id`
 
 Deletes a task. Shifts priorities of remaining tasks in the same header down to keep contiguous.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
+### Events
+
+#### `GET /events`
+
+Returns all event templates sorted by `name` ascending.
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Burger Night",
+    "tasks": ["Procure onion", "Procure bun"],
+    "createdAt": "2026-07-10T00:00:00Z",
+    "updatedAt": "2026-07-10T00:00:00Z"
+  }
+]
+```
+
+---
+
+#### `POST /events`
+
+Creates a new event template.
+
+**Request body**
+
+```json
+{
+  "name": "string",
+  "tasks": ["string"]
+}
+```
+
+**Response `201`** — returns created event with timestamps
+
+---
+
+#### `PUT /events/:id`
+
+Updates an event's name and/or task list. Fields are optional but validated
+the same as on create when present.
+
+**Response `200`** — returns updated event
+
+---
+
+#### `DELETE /events/:id`
+
+Deletes an event template. Headers/tasks previously created from it remain.
 
 **Response `200`**
 

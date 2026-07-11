@@ -14,7 +14,7 @@ beforeAll(async () => {
   try {
     const db = await getDatabase();
 
-    const testCollections = ["Headers-Test", "Tasks-Test"];
+    const testCollections = ["Headers-Test", "Tasks-Test", "Events-Test"];
 
     await Promise.all(
       testCollections.map((col) => db.collection(col).deleteMany({})),

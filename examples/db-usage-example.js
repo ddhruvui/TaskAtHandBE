@@ -2,8 +2,8 @@
  * Example: How to use the database with prod/test switching
  *
  * The USE_TEST_DB environment variable controls which collections to use:
- * - USE_TEST_DB=false → Uses production collections ('Headers', 'Tasks')
- * - USE_TEST_DB=true  → Uses test collections ('Headers-Test', 'Tasks-Test')
+ * - USE_TEST_DB=false → Uses production collections ('Headers', 'Tasks', 'Events')
+ * - USE_TEST_DB=true  → Uses test collections ('Headers-Test', 'Tasks-Test', 'Events-Test')
  */
 
 const { getDatabase } = require("../src/config/db");

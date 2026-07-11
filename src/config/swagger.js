@@ -16,6 +16,7 @@ const options = {
     tags: [
       { name: "Headers", description: "Header management endpoints" },
       { name: "Tasks", description: "Task management endpoints" },
+      { name: "Events", description: "Event template management endpoints" },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "System", description: "System health endpoints" },
     ],
@@ -63,6 +64,20 @@ const options = {
             },
             ecd: { $ref: "#/components/schemas/ECD", nullable: true },
             done: { type: "boolean", example: false },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        Event: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Burger Night" },
+            tasks: {
+              type: "array",
+              items: { type: "string" },
+              example: ["Procure onion", "Procure bun", "Procure patty"],
+            },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },

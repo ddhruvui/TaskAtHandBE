@@ -60,6 +60,26 @@ interface Task {
 
 ---
 
+### Event
+
+```typescript
+interface Event {
+  _id: string; // MongoDB ObjectId
+  name: string; // Event name (required), e.g. "Burger Night"
+  tasks: string[]; // Task names bundled by this event (non-empty)
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+Events are reusable task bundles. They are templates only — scheduling an
+event is done client-side by creating Tasks (with a `date` ECD) under a
+header named after the event (reused when one already exists, created
+otherwise, so later additions join the same header). Deleting an event never
+touches created headers or tasks.
+
+---
+
 ## Error Response Format
 
 All errors return a JSON object with an `error` field:
@@ -406,6 +426,82 @@ Deletes a task. Remaining tasks in the same header are shifted to keep prioritie
 
 ---
 
+## Events API
+
+Base path: `/events`
+
+### `GET /events`
+
+Returns all events sorted by `name` ascending.
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "name": "Burger Night",
+    "tasks": ["Procure onion", "Procure bun", "Procure patty"],
+    "createdAt": "2026-07-10T00:00:00.000Z",
+    "updatedAt": "2026-07-10T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `POST /events`
+
+Creates a new event template.
+
+**Request Body:**
+
+```json
+{
+  "name": "Burger Night",
+  "tasks": ["Procure onion", "Procure bun", "Procure patty"]
+}
+```
+
+| Field   | Required | Type     | Notes                                            |
+| ------- | -------- | -------- | ------------------------------------------------ |
+| `name`  | Yes      | string   | Non-empty; trimmed                               |
+| `tasks` | Yes      | string[] | Non-empty array of non-empty strings; trimmed    |
+
+**Response `201`:** the created event.
+
+**Error `400`:**
+
+```json
+{ "error": "tasks must be a non-empty array of strings" }
+```
+
+---
+
+### `PUT /events/:id`
+
+Updates an event's `name` and/or `tasks`. Both fields are optional but must
+pass the same validation as `POST /events` when present.
+
+**Response `200`:** the updated event.
+**Error `404`:** event not found.
+
+---
+
+### `DELETE /events/:id`
+
+Deletes an event template. Tasks previously added to the todo are untouched.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** event not found.
+
+---
+
 ## Cron Job
 
 The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/UTC` timezone) and performs the following steps to maintain task state and history.
@@ -694,10 +790,10 @@ Valid day abbreviations: `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`
 
 ## Collections
 
-| Environment               | Headers        | Tasks        | Archive            | Insights        |
-| ------------------------- | -------------- | ------------ | ------------------ | --------------- |
-| Production                | `Headers`      | `Tasks`      | `TaskArchive`      | `Insights`      |
-| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `TaskArchive-Test` | `Insights-Test` |
+| Environment               | Headers        | Tasks        | Events        | Archive            | Insights        |
+| ------------------------- | -------------- | ------------ | ------------- | ------------------ | --------------- |
+| Production                | `Headers`      | `Tasks`      | `Events`      | `TaskArchive`      | `Insights`      |
+| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `TaskArchive-Test` | `Insights-Test` |
 
 ---
 

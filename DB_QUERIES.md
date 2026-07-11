@@ -68,6 +68,28 @@ db.TaskArchive.find(
 
 ---
 
+## Events Queries
+
+The `Events` collection (`Events-Test` when `USE_TEST_DB=true`) stores
+reusable task bundles: `{ name, tasks: [string], createdAt, updatedAt }`.
+They are templates only — scheduling one adds tasks under a header named
+after the event (reused if it exists, created otherwise), so nothing here
+references Headers or Tasks.
+
+### All events, alphabetical
+
+```javascript
+db.Events.find().sort({ name: 1 });
+```
+
+### Events containing a given task
+
+```javascript
+db.Events.find({ tasks: { $regex: "onion", $options: "i" } });
+```
+
+---
+
 ## Insights Queries
 
 The `Insights` collection (`Insights-Test` in test mode) stores the daily AI

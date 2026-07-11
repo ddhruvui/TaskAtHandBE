@@ -55,6 +55,31 @@ Basic API contract — does each endpoint accept the right input and return the 
 
 ---
 
+## tests/events.test.js
+
+Events CRUD — reusable task bundles (templates only; scheduling happens client-side).
+
+| Test                                          | What it checks                                                              |
+| --------------------------------------------- | ---------------------------------------------------------------------------- |
+| returns empty array when no events exist      | `GET /events` returns `[]` on a clean DB                                     |
+| creates an event with a task list             | `POST /events` returns 201 with `_id`, `name`, `tasks`, timestamps           |
+| rejects missing name                          | `POST /events { tasks }` → 400                                               |
+| rejects empty name                            | `{ name: "  " }` → 400                                                       |
+| rejects missing tasks                         | `POST /events { name }` → 400                                                |
+| rejects empty tasks array                     | `{ tasks: [] }` → 400                                                        |
+| rejects tasks containing empty strings        | `{ tasks: ["Fine", "  "] }` → 400                                            |
+| trims whitespace from name and tasks          | `"  Trimmed  "` → `"Trimmed"`; task entries trimmed too                      |
+| returns all events sorted by name ascending   | `GET /events` array is ascending by `name`                                   |
+| updates event name                            | `PUT /events/:id { name }` → 200, tasks untouched                            |
+| updates event tasks                           | `PUT /events/:id { tasks }` → 200, name untouched                            |
+| rejects empty tasks array (PUT)               | `{ tasks: [] }` → 400                                                        |
+| rejects empty name (PUT)                      | `{ name: "" }` → 400                                                         |
+| returns 404 for unknown id (PUT)              | Fake ObjectId → 404                                                          |
+| deletes an event                              | `DELETE /events/:id` → `{ deleted: id }`                                     |
+| returns 404 when deleting again               | Second delete → 404                                                          |
+
+---
+
 ## tests/business-logic.test.js
 
 Validates the priority/ordering rules the spec defines.

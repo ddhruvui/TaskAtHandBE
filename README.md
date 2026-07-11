@@ -5,6 +5,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 ## Features
 
 - **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
+- **Events** — reusable task bundles (e.g. "Burger Night" with its shopping list); clients schedule them as dated tasks under a header named after the event (reused if it exists, created otherwise)
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
 - **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
@@ -25,12 +26,14 @@ TaskAtHandBE/
 │   ├── controllers/
 │   │   ├── headerController.js
 │   │   ├── taskController.js
+│   │   ├── eventController.js
 │   │   └── insightController.js
 │   ├── cron/
 │   │   └── cronJob.js          # Daily cron logic (steps 0–6 + AI report)
 │   ├── models/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
+│   │   ├── Event.js            # Reusable task bundles (templates)
 │   │   ├── Archive.js          # TaskArchive event log
 │   │   └── Insight.js          # Stored AI reports
 │   ├── services/
@@ -39,6 +42,7 @@ TaskAtHandBE/
 │   └── routes/
 │       ├── headerRoutes.js
 │       ├── taskRoutes.js
+│       ├── eventRoutes.js
 │       ├── archiveRoutes.js
 │       └── insightRoutes.js
 ├── tests/                      # Jest test suite
@@ -91,7 +95,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, TaskArchive, Insights) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, TaskArchive, Insights) |
 | `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
@@ -121,6 +125,15 @@ Server listens on **port 3002** by default.
 | `POST`   | `/tasks`     | Create a task                                   |
 | `PUT`    | `/tasks/:id` | Update task fields, done status, or priority    |
 | `DELETE` | `/tasks/:id` | Delete a task                                   |
+
+### Events
+
+| Method   | Path          | Description                                     |
+| -------- | ------------- | ----------------------------------------------- |
+| `GET`    | `/events`     | List all event templates (sorted by name)       |
+| `POST`   | `/events`     | Create an event (`{ name, tasks: [string] }`)   |
+| `PUT`    | `/events/:id` | Update event name and/or task list              |
+| `DELETE` | `/events/:id` | Delete an event template (created tasks remain) |
 
 ### Cron
 
@@ -182,6 +195,7 @@ npm run cleartest
 | File                     | Coverage area                                              |
 | ------------------------ | ---------------------------------------------------------- |
 | `crud.test.js`           | Basic CRUD for headers and tasks                           |
+| `events.test.js`         | Events CRUD, validation, trimming, and sorting             |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
