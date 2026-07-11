@@ -6,7 +6,9 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 
 - **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
-- **Daily cron job** — auto-resets recurring tasks, cleans up expired ones, and re-sorts by upcoming ECD
+- **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
+- **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
+- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, suggestions) generated via the Anthropic API (`claude-opus-4-8`) and stored in the `Insights` collection
 - **Swagger UI** — interactive API docs served at `/api-docs`
 - **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
 - **CORS enabled** — accepts requests from any origin
@@ -22,16 +24,23 @@ TaskAtHandBE/
 │   │   └── swagger.js          # OpenAPI spec generation
 │   ├── controllers/
 │   │   ├── headerController.js
-│   │   └── taskController.js
+│   │   ├── taskController.js
+│   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (6 steps)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–6 + AI report)
 │   ├── models/
 │   │   ├── Header.js
-│   │   └── Task.js             # ECD validation lives here
+│   │   ├── Task.js             # ECD validation lives here
+│   │   ├── Archive.js          # TaskArchive event log
+│   │   └── Insight.js          # Stored AI reports
+│   ├── services/
+│   │   └── insightsService.js  # Stats computation + Anthropic API call
 │   ├── middleware/
 │   └── routes/
 │       ├── headerRoutes.js
-│       └── taskRoutes.js
+│       ├── taskRoutes.js
+│       ├── archiveRoutes.js
+│       └── insightRoutes.js
 ├── tests/                      # Jest test suite
 ├── scripts/
 │   └── cleartest.js            # Wipe test collections
@@ -54,9 +63,10 @@ TaskAtHandBE/
    PORT=3002
    NODE_ENV=development
    USE_TEST_DB=false
+   ANTHROPIC_API_KEY=sk-ant-...
    ```
 
-3. Replace `<user>` and `<password>` with your MongoDB Atlas credentials.
+3. Replace `<user>` and `<password>` with your MongoDB Atlas credentials, and set `ANTHROPIC_API_KEY` to a key from [platform.claude.com](https://platform.claude.com) (required for AI insight reports; everything else works without it).
 
 ## Running the Application
 
@@ -81,7 +91,8 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `Headers-Test` / `Tasks-Test` collections |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, TaskArchive, Insights) |
+| `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
 
@@ -120,6 +131,16 @@ Server listens on **port 3002** by default.
 | `GET`  | `/cron/status`  | Stats from the most recent cron run                     |
 | `GET`  | `/cron/details` | Stats from the most recent cron run (alias for status)  |
 
+### Archive & Insights
+
+| Method | Path                 | Description                                                        |
+| ------ | -------------------- | ------------------------------------------------------------------ |
+| `GET`  | `/archive`           | Raw task-history events (`?days=28&type=habit_result` optional)    |
+| `GET`  | `/insights/stats`    | Exact computed stats: habit rates, streaks, slippage, reschedules  |
+| `GET`  | `/insights/latest`   | Most recent AI insight report                                      |
+| `GET`  | `/insights/history`  | Recent AI reports, newest first (`?limit=14`)                      |
+| `POST` | `/insights/generate` | Generate a fresh AI report now (`{days}` optional, default 28)     |
+
 For full request/response schemas, error codes, and examples see [API_REFERENCE.md](API_REFERENCE.md).
 
 ## API Documentation
@@ -150,7 +171,7 @@ npm run test:watch
 USE_TEST_DB=true NODE_ENV=test npx jest tests/crud.test.js --forceExit
 ```
 
-### Clear test collections (`Headers-Test` and `Tasks-Test`)
+### Clear test collections (`Headers-Test`, `Tasks-Test`, etc.)
 
 ```bash
 npm run cleartest
@@ -173,4 +194,6 @@ npm run cleartest
 - `.env` is gitignored — never commit credentials
 - `headerId` is immutable after task creation
 - Priority values are 0-based and always kept contiguous by the model layer
-- Cron runs daily at UTC midnight; in production it uses `node-cron` with a setInterval fallback
+- Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
+- Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events
+- Insight generation runs at the end of each cron run when `ANTHROPIC_API_KEY` is set (skipped in tests); archive writes never throw, so they can't break task operations

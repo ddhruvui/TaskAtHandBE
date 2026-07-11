@@ -4,7 +4,7 @@
 
 **API Docs (Swagger UI):** `http://localhost:3002/api-docs`
 
-The API is organized around two collections: **Headers** and **Tasks**. Headers are top-level containers; Tasks belong to a Header and are scoped to it.
+The API is organized around four collections: **Headers** and **Tasks** (the live todo data), **TaskArchive** (append-only history written by the cron and the Task model), and **Insights** (stored AI coaching reports). Headers are top-level containers; Tasks belong to a Header and are scoped to it.
 
 ---
 
@@ -43,6 +43,7 @@ interface Task {
   headerId: string; // Parent Header ObjectId (required, immutable)
   priority: number; // 0-based priority within the header; auto-managed
   done: boolean; // Completion status (default: false)
+  doneAt: string | null; // When the task was marked done; cleared on undo/cron reset
   ecd: ECD | null; // Expected Completion Date (optional)
   createdAt: string; // ISO 8601 timestamp
   updatedAt: string; // ISO 8601 timestamp
@@ -330,6 +331,8 @@ Updates a task. All body fields are optional — send only what needs to change.
 
 > `headerId` is **not** updatable after creation.
 
+> Changing `ecd` also logs a `task_rescheduled` event to the TaskArchive (with a `pushedLater` flag when a one-time date moves later). Toggling `done` sets/clears `doneAt`.
+
 **Request Body (mark done):**
 
 ```json
@@ -405,18 +408,20 @@ Deletes a task. Remaining tasks in the same header are shifted to keep prioritie
 
 ## Cron Job
 
-The cron job runs daily at UTC midnight and performs 6 steps to maintain task state.
+The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/UTC` timezone) and performs the following steps to maintain task state and history.
 
 ### Cron Steps
 
 | Step | Trigger            | Action                                                                          |
 | ---- | ------------------ | ------------------------------------------------------------------------------- |
+| 0    | Every day          | Archive **yesterday's** habit (`day_of_week`) and recurring (`day_of_month` / `day_of_year`) outcomes to TaskArchive (idempotent per dueDate) |
 | 1    | 1st of every month | Clamp `day_of_month` ECD values that exceed the month's maximum days            |
 | 2    | January 1st only   | Advance `day_of_year` ECDs by 1 year and mark those tasks undone                |
-| 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone                    |
-| 4    | 1st of month       | Mark tasks with a `day_of_month` ECD containing today's date as undone          |
-| 5    | Every day          | Delete tasks that are **done** and have a `date` ECD (regardless of date value) |
+| 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone (`doneAt` cleared) |
+| 4    | Every day          | Mark tasks with a `day_of_month` ECD containing today's date as undone (`doneAt` cleared) |
+| 5    | Every day          | Archive then delete tasks that are **done** and have a `date` ECD or no ECD     |
 | 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
+| 7    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
 
 All date operations in the cron run in UTC.
 
@@ -468,7 +473,9 @@ Manually triggers the cron job with an optional date override in the request bod
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
-  "headersReordered": 4
+  "headersReordered": 4,
+  "outcomesArchived": 5,
+  "insightGenerated": true
 }
 ```
 
@@ -492,7 +499,9 @@ Manually triggers the cron job. No request body needed.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
-  "headersReordered": 4
+  "headersReordered": 4,
+  "outcomesArchived": 5,
+  "insightGenerated": true
 }
 ```
 
@@ -528,6 +537,148 @@ Returns stats from the most recent cron run. Alias for `GET /cron/status`.
 
 ---
 
+## Archive API
+
+Base path: `/archive`
+
+### `GET /archive?days=28&type=habit_result`
+
+Returns raw TaskArchive events for the period, oldest first.
+
+**Query Parameters:**
+
+| Parameter | Required | Description                                                                  |
+| --------- | -------- | ---------------------------------------------------------------------------- |
+| `days`    | No       | How many days back to fetch (default 28, max 365)                            |
+| `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`  |
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "type": "habit_result",
+    "taskId": "...",
+    "taskName": "Meditate",
+    "headerId": "...",
+    "headerName": "Health",
+    "scheduledDays": ["Mon", "Wed", "Fri"],
+    "dueDate": "2026-07-03",
+    "completed": true,
+    "doneAt": "2026-07-03T14:05:00.000Z",
+    "at": "2026-07-04T00:00:01.000Z"
+  }
+]
+```
+
+---
+
+## Insights API
+
+Base path: `/insights`
+
+### `GET /insights/stats?days=28`
+
+Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, and per-header rollups.
+
+**Response `200`** (abridged):
+
+```json
+{
+  "periodDays": 28,
+  "eventCount": 42,
+  "habits": [
+    {
+      "taskName": "Meditate",
+      "headerName": "Health",
+      "scheduledDays": ["Mon", "Wed", "Fri"],
+      "scheduled": 12,
+      "completed": 10,
+      "completionRate": 83,
+      "currentStreak": 4,
+      "longestStreak": 7,
+      "missedByDow": { "Fri": 2 },
+      "recentResults": [{ "dueDate": "2026-07-03", "completed": true }]
+    }
+  ],
+  "recurringTasks": [],
+  "oneTimeTasks": { "completedCount": 9, "avgSlippageDays": 1.4, "recent": [] },
+  "reschedules": [
+    { "taskName": "Write blog", "headerName": "Health", "total": 3, "pushedLater": 3 }
+  ],
+  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3 } }
+}
+```
+
+---
+
+### `GET /insights/latest`
+
+Most recent stored AI report.
+
+**Response `200`:**
+
+```json
+{
+  "_id": "...",
+  "generatedAt": "2026-07-04T00:00:46.000Z",
+  "periodDays": 28,
+  "model": "claude-opus-4-8",
+  "stats": { "...": "stats the report was based on" },
+  "report": {
+    "summary": "string",
+    "habitsOnTrack": ["string"],
+    "habitsSlipping": ["string"],
+    "taskInsights": ["string"],
+    "procrastinationFlags": ["string"],
+    "suggestions": ["string"]
+  }
+}
+```
+
+**Error `404`:**
+
+```json
+{ "error": "No insight report generated yet" }
+```
+
+---
+
+### `GET /insights/history?limit=14`
+
+Recent AI reports, newest first. `limit` defaults to 14 (max 100).
+
+**Response `200`:** Array of insight objects (same shape as `/insights/latest`).
+
+---
+
+### `POST /insights/generate`
+
+Generates a fresh AI report now and stores it.
+
+**Request Body (optional):**
+
+```json
+{ "days": 28 }
+```
+
+**Response `201`:** The stored insight object.
+
+**Error `404`** — archive is empty:
+
+```json
+{ "error": "No archive data to analyze yet — complete some tasks and let the nightly cron run first" }
+```
+
+**Error `503`** — no API key configured:
+
+```json
+{ "error": "ANTHROPIC_API_KEY is not configured on the server" }
+```
+
+---
+
 ## ECD Validation Rules
 
 | Type           | Valid `value`                              | Invalid examples               |
@@ -543,10 +694,10 @@ Valid day abbreviations: `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`
 
 ## Collections
 
-| Environment               | Headers Collection | Tasks Collection |
-| ------------------------- | ------------------ | ---------------- |
-| Production                | `Headers`          | `Tasks`          |
-| Test (`USE_TEST_DB=true`) | `Headers-Test`     | `Tasks-Test`     |
+| Environment               | Headers        | Tasks        | Archive            | Insights        |
+| ------------------------- | -------------- | ------------ | ------------------ | --------------- |
+| Production                | `Headers`      | `Tasks`      | `TaskArchive`      | `Insights`      |
+| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `TaskArchive-Test` | `Insights-Test` |
 
 ---
 

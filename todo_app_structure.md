@@ -35,6 +35,7 @@
     "value": "see ECD Types below"
   },
   "done": "boolean (default: false)",
+  "doneAt": "ISO 8601 datetime | null (set when done → true, cleared on undo/reset)",
   "createdAt": "ISO 8601 datetime",
   "updatedAt": "ISO 8601 datetime"
 }
@@ -44,6 +45,8 @@
 
 - `priority` is scoped per `headerId` — two tasks in different headers can share the same priority value
 - `updatedAt` must be refreshed on every write (toggling `done`, changing priority, editing any field)
+- `doneAt` records **when** a task was completed: set to the current time when `done` flips to `true`, set back to `null` when `done` flips to `false` (by the user or by a cron reset)
+- Every ECD change is logged to the `TaskArchive` collection as a `task_rescheduled` event (see Archive below)
 
 **Priority assignment:**
 
@@ -105,11 +108,81 @@
 
 ---
 
+### TaskArchive (event log)
+
+Append-only history collection (`TaskArchive`, or `TaskArchive-Test` in test
+mode). All events carry `type`, `at` (insertion time), and a denormalized
+`headerName` so history stays readable after headers are renamed or deleted.
+Archive writes never throw — they can't break the operation that triggered
+them.
+
+| Event type         | Written by            | Meaning                                                          |
+| ------------------ | --------------------- | ---------------------------------------------------------------- |
+| `habit_result`     | Cron step 0           | A `day_of_week` task's done/missed outcome for one scheduled day |
+| `task_result`      | Cron step 0           | A `day_of_month` / `day_of_year` task's outcome for one cycle    |
+| `task_completed`   | Cron step 5           | A one-time task captured (with `plannedFor`, `doneAt`) before deletion |
+| `task_rescheduled` | `Task.update`         | An ECD change, with `fromEcd`, `toEcd`, and `pushedLater` flag   |
+
+```json
+{
+  "type": "habit_result",
+  "taskId": "uuid",
+  "taskName": "Meditate",
+  "headerId": "uuid",
+  "headerName": "Health",
+  "scheduledDays": ["Mon", "Wed", "Fri"],
+  "dueDate": "2026-07-03",
+  "completed": true,
+  "doneAt": "2026-07-03T14:05:00Z",
+  "at": "2026-07-04T00:00:01Z"
+}
+```
+
+---
+
+### Insight (AI reports)
+
+The `Insights` collection stores one AI coaching report per generation:
+
+```json
+{
+  "generatedAt": "ISO 8601 datetime",
+  "periodDays": 28,
+  "model": "claude-opus-4-8",
+  "stats": "exact computed stats the report was based on",
+  "report": {
+    "summary": "string",
+    "habitsOnTrack": ["string"],
+    "habitsSlipping": ["string"],
+    "taskInsights": ["string"],
+    "procrastinationFlags": ["string"],
+    "suggestions": ["string"]
+  }
+}
+```
+
+Reports are generated at the end of every cron run (when `ANTHROPIC_API_KEY`
+is set) and on demand via `POST /insights/generate`. The previous report is
+fed into the next generation so suggestions build on each other. Tasks
+scheduled by `day_of_week` are treated as **habits**; everything else is a
+task.
+
+---
+
 ## Cron Job
 
-**Schedule:** Runs once daily at midnight (start of day)
+**Schedule:** Runs once daily at UTC midnight (`node-cron`, `Etc/UTC` timezone; UTC setInterval fallback). All day computations use UTC.
 
 ### Step-by-step Execution Order
+
+#### Step 0 — Archive yesterday's recurring-task outcomes _(runs before any reset)_
+
+A task scheduled for day X is reset at X 00:00 and completed during X, so its
+outcome is only knowable at the following midnight:
+
+- For every `day_of_week` task scheduled **yesterday**: log a `habit_result` event with `completed = task.done` and the task's `doneAt`
+- For every `day_of_month` / `day_of_year` task due **yesterday**: log a `task_result` event the same way
+- Idempotent: tasks already archived for that `dueDate` are skipped, so manual cron runs don't double-log
 
 #### Step 1 — Clamp `day_of_month` values _(runs on the 1st of every month only)_
 
@@ -123,27 +196,27 @@
 - For every task with `ecd.type === "day_of_year"`:
   - Increment the year in `ecd.value` by 1 (e.g. `7/3/2006` → `7/3/2007`)
   - If the resulting date is Feb 29 and the new year is not a leap year, clamp to Feb 28
-  - Set `done = false`
+  - Set `done = false`, `doneAt = null`
   - Update `updatedAt`
 
 #### Step 3 — Mark undone: `day_of_week`
 
 - For every task with `ecd.type === "day_of_week"`:
   - If today's day name (e.g. `"Mon"`) is in `ecd.value`:
-    - Set `done = false`
+    - Set `done = false`, `doneAt = null`
     - Update `updatedAt`
 
 #### Step 4 — Mark undone: `day_of_month`
 
 - For every task with `ecd.type === "day_of_month"`:
   - If today's date number (1–31) is in `ecd.value`:
-    - Set `done = false`
+    - Set `done = false`, `doneAt = null`
     - Update `updatedAt`
 
 #### Step 5 — Delete completed `date` tasks
 
-- For every task with `ecd.type === "date"`:
-  - If `done === true` → **delete** the task
+- For every task with `ecd.type === "date"` (or no ECD):
+  - If `done === true` → archive a `task_completed` event (preserving `plannedFor`, `createdAt`, `doneAt`, `headerName`), then **delete** the task
   - If `done === false` → do nothing
 
 #### Step 6 — Reorder priorities per header _(runs last)_
@@ -161,6 +234,14 @@
 | `day_of_week`  | The nearest upcoming day from the `value` array                               |
 | `day_of_month` | The nearest upcoming date in the current or next month from the `value` array |
 | `day_of_year`  | The date stored in `value` (e.g. `7/3/2007`)                                  |
+
+#### Final step — Generate the daily AI insight report
+
+- After step 6, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+  - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts)
+  - Send stats + recent events + the previous report to `claude-opus-4-8` with a structured-output schema
+  - Store the result in the `Insights` collection
+- Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
 
 ---
 
@@ -339,12 +420,14 @@ Deletes a task. Shifts priorities of remaining tasks in the same header down to 
 
 Manually triggers the cron job. Accepts an optional `date` body override. Runs all steps in order:
 
+0. Archive yesterday's habit/recurring outcomes (idempotent)
 1. Clamp `day_of_month` values _(if today is the 1st)_
 2. Clamp & increment `day_of_year` _(if today is Jan 1st)_
 3. Mark undone: `day_of_week`
 4. Mark undone: `day_of_month`
-5. Delete completed `date` tasks
+5. Archive + delete completed `date` tasks
 6. Reorder priorities per header
+7. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set)_
 
 **Response `200`**
 
@@ -354,7 +437,9 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
-  "headersReordered": 3
+  "headersReordered": 3,
+  "outcomesArchived": 4,
+  "insightGenerated": true
 }
 ```
 
@@ -411,6 +496,35 @@ Returns metadata about the last cron run. Alias for `GET /cron/status`.
   "headersReordered": 3
 }
 ```
+
+---
+
+### Archive & Insights
+
+#### `GET /archive?days=28&type=habit_result`
+
+Returns raw `TaskArchive` events for the period, oldest first. Both query
+params optional (`days` defaults to 28; `type` filters by event type).
+
+#### `GET /insights/stats?days=28`
+
+Exact computed stats (no AI): per-habit completion rates, current/longest
+streaks, missed-by-weekday, one-time-task slippage, reschedule counts, and
+per-header rollups.
+
+#### `GET /insights/latest`
+
+Most recent stored AI report. `404` if none has been generated yet.
+
+#### `GET /insights/history?limit=14`
+
+Recent AI reports, newest first.
+
+#### `POST /insights/generate`
+
+Generates a fresh AI report now. Optional body `{ "days": 28 }`. Returns
+`201` with the stored report, `404` if the archive is empty, `503` if
+`ANTHROPIC_API_KEY` is not configured.
 
 ---
 
