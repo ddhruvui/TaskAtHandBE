@@ -196,6 +196,14 @@ describe("Error Handling", () => {
       expect(res.body).toHaveProperty("error");
     });
 
+    test("400 when name is an empty string", async () => {
+      const res = await request(app)
+        .put(`/tasks/${taskId}`)
+        .send({ name: "   " })
+        .expect(400);
+      expect(res.body).toHaveProperty("error");
+    });
+
     test("400 for invalid ecd on update", async () => {
       const res = await request(app)
         .put(`/tasks/${taskId}`)

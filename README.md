@@ -202,6 +202,10 @@ npm run cleartest
 | `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder)            |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
+| `archive.test.js`        | TaskArchive event log: cron archiving, reschedule logging, `GET /archive` |
+| `insights.test.js`       | Stats computation and the four `/insights` endpoints       |
+| `done-at.test.js`        | `doneAt` lifecycle (set on done, cleared on undo/cron reset) |
+| `system.test.js`         | `GET /` and `GET /health` endpoints                        |
 
 ## Notes
 

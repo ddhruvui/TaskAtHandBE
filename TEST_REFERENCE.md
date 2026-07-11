@@ -243,6 +243,7 @@ Ensures every error case returns the right HTTP status and `{ error: "..." }` sh
 | --------------------- | ------ |
 | nonexistent id        | 404    |
 | done not a boolean    | 400    |
+| name empty string     | 400    |
 | invalid ecd on update | 400    |
 | priority too large    | 400    |
 | priority negative     | 400    |
@@ -288,6 +289,7 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | clamps values exceeding days in that month on the 1st           | Step 1: `[15, 30, 31]` in February → `[15, 28, 28]`                    |
 | does NOT clamp on non-1st of month                              | Step 1: skipped except on the 1st                                      |
 | undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
+| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 6: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
 
 ---
 
@@ -315,3 +317,117 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
+
+---
+
+## tests/archive.test.js
+
+Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logging from `PUT /tasks/:id`, and the `GET /archive` endpoint. Cron runs use the date override `2026-03-08` (a Sunday), so "yesterday" is Sat `2026-03-07`.
+
+### Cron Step 0 — archive yesterday's outcomes
+
+| Test                                                                            | What it checks                                                                        |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| logs habit_result with completed=true and doneAt for a done day_of_week task    | Full event shape: `taskId`, `taskName`, `headerName`, `scheduledDays`, `dueDate`, `at` |
+| logs habit_result with completed=false and doneAt=null for a missed task        | Missed habits are logged too, with `doneAt: null`                                      |
+| does not log habit_result for day_of_week tasks not scheduled yesterday         | Only yesterday's scheduled habits get an outcome event                                 |
+| logs task_result for a day_of_month task due yesterday                          | `ecdType: "day_of_month"`, `ecdValue`, correct `dueDate`                               |
+| logs task_result for a day_of_year task whose month/day matched yesterday       | Year in the stored value is ignored for the match                                      |
+| is idempotent — rerunning the cron for the same date does not double-log        | Same taskId + dueDate is skipped on re-run for all three types (dow, dom, doy)         |
+
+### Cron Step 5 — task_completed archived before deletion
+
+| Test                                                                          | What it checks                                                              |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| archives a done date task with plannedFor, taskCreatedAt, and doneAt          | Event written with `ecdType: "date"`, `plannedFor` = ECD value; task deleted |
+| archives a done no-ecd task with ecdType=null and plannedFor=null             | No-ECD tasks are captured the same way                                       |
+
+### task_rescheduled — logged on ECD change
+
+| Test                                                        | What it checks                                                  |
+| ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| logs fromEcd/toEcd with pushedLater=true when a date moves later | The procrastination signal: `2026-07-20` → `2026-07-25`       |
+| pushedLater=false when a date moves earlier                 | Pulling a date in is not a "push"                                 |
+| pushedLater=false when the ECD type changes away from date  | `date` → `day_of_week` logs the change but not as pushed later    |
+| does not log when the ECD is unchanged                      | Sending the identical ECD writes no archive event                 |
+
+### GET /archive
+
+| Test                                                  | What it checks                                    |
+| ------------------------------------------------------ | --------------------------------------------------- |
+| returns events from the period, oldest first          | Sorted ascending by `at`                            |
+| filters by type                                       | `?type=task_completed` returns only that event type |
+| excludes events older than the requested window       | `?days=28` drops a 40-day-old event                 |
+| falls back to the default period for an invalid days param | `?days=0` behaves like the default 28            |
+
+---
+
+## tests/insights.test.js
+
+Tests the stats engine (via `GET /insights/stats` with seeded archive events) and the insight report endpoints.
+
+### GET /insights/stats — computed stats
+
+| Test                                                              | What it checks                                                                 |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| aggregates habit completion rate, streaks, and missed-by-weekday  | 4 results (3 done, Tue missed) → rate 75, currentStreak 2, longestStreak 2, `missedByDow: { Tue: 1 }` |
+| aggregates recurring task_result events into scheduled/completed counts | 2 scheduled, 1 completed → completionRate 50                              |
+| computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
+| counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
+| rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types                                        |
+| respects the days query param                                     | `?days=7` → `periodDays: 7`                                                      |
+
+### GET /insights/latest
+
+| Test                                          | What it checks                          |
+| ----------------------------------------------- | ----------------------------------------- |
+| returns 404 when no report has been generated | Empty Insights collection → 404 `{ error }` |
+| returns the most recent report                | Two seeded reports → newest one returned |
+
+### GET /insights/history
+
+| Test                                            | What it checks                          |
+| ------------------------------------------------- | ----------------------------------------- |
+| returns reports newest first                    | Seeded 3 reports → descending `generatedAt` |
+| respects the limit param                        | `?limit=2` → 2 newest                     |
+| falls back to the default limit for invalid values | `?limit=abc` → all 3 (default 14)      |
+
+### POST /insights/generate
+
+| Test                                                        | What it checks                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| returns 503 when ANTHROPIC_API_KEY is not configured        | Key removed from env → 503 with explanatory error      |
+| returns 404 when the archive is empty (no API call is made) | Dummy key + empty archive → 404 before any API request |
+
+### Insight model
+
+| Test                                          | What it checks                                        |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| save persists a report and returns it with an _id | `Insight.save()` inserts; `Insight.latest()` reads it back |
+
+---
+
+## tests/done-at.test.js
+
+Tests the `doneAt` timestamp lifecycle across user toggles and cron resets.
+
+| Test                                          | What it checks                                                    |
+| ----------------------------------------------- | ------------------------------------------------------------------- |
+| a new task is created with doneAt null        | `POST /tasks` → `doneAt: null`                                      |
+| marking done sets doneAt to a current timestamp | `PUT { done: true }` → valid ISO datetime close to now            |
+| marking undone clears doneAt back to null     | `PUT { done: false }` → `doneAt: null`                              |
+| re-sending done=true does not move doneAt     | Done→done is a no-op; timestamp unchanged                           |
+| cron day_of_week reset clears doneAt          | Step 3 reset → `done: false`, `doneAt: null`                        |
+| cron day_of_year reset clears doneAt          | Step 2 reset → `done: false`, `doneAt: null`, year advanced to today's |
+
+---
+
+## tests/system.test.js
+
+| Test                                                    | What it checks                                        |
+| --------------------------------------------------------- | ------------------------------------------------------- |
+| returns API info with message, environment, and docs link | `GET /` → message, `environment: "test"`, `/api-docs` |
+| returns ok status with a valid timestamp                | `GET /health` → `status: "ok"`, timestamp within 10s    |
+| GET /cron/details returns 404 when cron has not run in this process | The never-ran branch of `/cron/details` (cron never runs in this file) |
+| unknown routes return 404 Route not found               | The catch-all 404 handler                               |
+| malformed JSON bodies hit the error middleware          | Invalid JSON → 500 `"Something went wrong!"`            |

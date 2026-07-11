@@ -3,7 +3,13 @@ const { getDatabase, closeConnection } = require("../src/config/db");
 process.env.USE_TEST_DB = "true";
 process.env.NODE_ENV = "test";
 
-const testCollections = ["Headers-Test", "Tasks-Test", "Events-Test"];
+const testCollections = [
+  "Headers-Test",
+  "Tasks-Test",
+  "Events-Test",
+  "TaskArchive-Test",
+  "Insights-Test",
+];
 
 (async () => {
   try {

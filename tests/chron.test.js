@@ -341,5 +341,54 @@ describe("Cron Job", () => {
       const after2 = tasks.find((t) => t._id === t2._id);
       expect(after3.priority).toBeLessThan(after2.priority);
     });
+
+    test("undone tasks are ordered by soonest upcoming ECD across all types, null ECD last", async () => {
+      const h = await createHeader("H");
+
+      // Cron runs as 2026-07-15 (a Wednesday). Next due dates:
+      //   E date 2026-07-16      → Jul 16 (soonest)
+      //   B day_of_week ["Fri"]  → Jul 17
+      //   C day_of_month [20]    → Jul 20
+      //   A date 2026-08-01      → Aug 1
+      //   F day_of_month [10]    → Aug 10 (the 10th already passed → next month)
+      //   D no ECD               → Infinity (last)
+      const a = await createTask({
+        name: "A-later-date",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-08-01" },
+      });
+      const b = await createTask({
+        name: "B-friday",
+        headerId: h._id,
+        ecd: { type: "day_of_week", value: ["Fri"] },
+      });
+      const c = await createTask({
+        name: "C-dom20",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [20] },
+      });
+      const d = await createTask({ name: "D-no-ecd", headerId: h._id });
+      const e = await createTask({
+        name: "E-soon-date",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-16" },
+      });
+      const f = await createTask({
+        name: "F-dom10-next-month",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [10] },
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-15" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const orderedIds = tasks
+        .sort((x, y) => x.priority - y.priority)
+        .map((t) => t._id);
+      expect(orderedIds).toEqual([e._id, b._id, c._id, a._id, f._id, d._id]);
+    });
   });
 });
