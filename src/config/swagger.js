@@ -18,6 +18,10 @@ const options = {
       { name: "Tasks", description: "Task management endpoints" },
       { name: "Events", description: "Event template management endpoints" },
       {
+        name: "Affirmations",
+        description: "Daily affirmation management endpoints",
+      },
+      {
         name: "Goals",
         description: "Goal and step (habit backlog) management endpoints",
       },
@@ -90,6 +94,15 @@ const options = {
               items: { type: "string" },
               example: ["Procure onion", "Procure bun", "Procure patty"],
             },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        Affirmation: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Thank you blessing" },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },

@@ -7,6 +7,7 @@ const testCollections = [
   "Headers-Test",
   "Tasks-Test",
   "Events-Test",
+  "Affirmations-Test",
   "Goals-Test",
   "TaskArchive-Test",
   "Insights-Test",

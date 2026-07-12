@@ -134,6 +134,27 @@
 
 ---
 
+### Affirmation (daily short line)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- Affirmations are single short lines the user reads daily (e.g. "Thank you
+  blessing") — completely independent of Headers and Tasks
+- Listed in the order they were added (`createdAt` ascending)
+- The cron job ignores the Affirmations collection entirely
+
+---
+
 ### Goal (habit backlog, built one step at a time)
 
 ```json
@@ -525,6 +546,65 @@ the same as on create when present.
 #### `DELETE /events/:id`
 
 Deletes an event template. Headers/tasks previously created from it remain.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
+### Affirmations
+
+#### `GET /affirmations`
+
+Returns all affirmations sorted by `createdAt` ascending (order added).
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Thank you blessing",
+    "createdAt": "2026-07-10T00:00:00Z",
+    "updatedAt": "2026-07-10T00:00:00Z"
+  }
+]
+```
+
+---
+
+#### `POST /affirmations`
+
+Creates a new affirmation.
+
+**Request body**
+
+```json
+{
+  "name": "string"
+}
+```
+
+**Response `201`** — returns created affirmation with timestamps
+
+---
+
+#### `PUT /affirmations/:id`
+
+Updates an affirmation's name. Validated the same as on create.
+
+**Response `200`** — returns updated affirmation
+
+---
+
+#### `DELETE /affirmations/:id`
+
+Deletes an affirmation.
 
 **Response `200`**
 

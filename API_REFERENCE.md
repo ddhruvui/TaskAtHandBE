@@ -80,6 +80,23 @@ touches created headers or tasks.
 
 ---
 
+### Affirmation
+
+```typescript
+interface Affirmation {
+  _id: string; // MongoDB ObjectId
+  name: string; // Affirmation text (required), e.g. "Thank you blessing"
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+Affirmations are single short lines the user reads daily. They are completely
+independent of Headers and Tasks — the cron job ignores them, and no other
+collection references them.
+
+---
+
 ### Goal
 
 ```typescript
@@ -535,6 +552,80 @@ Deletes an event template. Tasks previously added to the todo are untouched.
 
 ---
 
+## Affirmations API
+
+Base path: `/affirmations`
+
+### `GET /affirmations`
+
+Returns all affirmations sorted by `createdAt` ascending (order added).
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "name": "Thank you blessing",
+    "createdAt": "2026-07-10T00:00:00.000Z",
+    "updatedAt": "2026-07-10T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `POST /affirmations`
+
+Creates a new affirmation.
+
+**Request Body:**
+
+```json
+{
+  "name": "Thank you blessing"
+}
+```
+
+| Field  | Required | Type   | Notes              |
+| ------ | -------- | ------ | ------------------ |
+| `name` | Yes      | string | Non-empty; trimmed |
+
+**Response `201`:** the created affirmation.
+
+**Error `400`:**
+
+```json
+{ "error": "Affirmation name must be a non-empty string" }
+```
+
+---
+
+### `PUT /affirmations/:id`
+
+Updates an affirmation's `name`. It must pass the same validation as
+`POST /affirmations`.
+
+**Response `200`:** the updated affirmation.
+**Error `400`:** invalid name.
+**Error `404`:** affirmation not found.
+
+---
+
+### `DELETE /affirmations/:id`
+
+Deletes an affirmation.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** affirmation not found.
+
+---
+
 ## Goals API
 
 Base path: `/goals`
@@ -907,10 +998,10 @@ Valid day abbreviations: `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`
 
 ## Collections
 
-| Environment               | Headers        | Tasks        | Events        | Goals        | Archive            | Insights        |
-| ------------------------- | -------------- | ------------ | ------------- | ------------ | ------------------ | --------------- |
-| Production                | `Headers`      | `Tasks`      | `Events`      | `Goals`      | `TaskArchive`      | `Insights`      |
-| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `Goals-Test` | `TaskArchive-Test` | `Insights-Test` |
+| Environment               | Headers        | Tasks        | Events        | Affirmations        | Goals        | Archive            | Insights        |
+| ------------------------- | -------------- | ------------ | ------------- | ------------------- | ------------ | ------------------ | --------------- |
+| Production                | `Headers`      | `Tasks`      | `Events`      | `Affirmations`      | `Goals`      | `TaskArchive`      | `Insights`      |
+| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `Affirmations-Test` | `Goals-Test` | `TaskArchive-Test` | `Insights-Test` |
 
 ---
 

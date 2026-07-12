@@ -26,7 +26,7 @@ db.Headers.find({ name: { $regex: "Mauli", $options: "i" } });
 db.Tasks.find({ name: { $regex: "Mauli", $options: "i" } });
 ```
 
-> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
+> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `Affirmations`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
 
 ---
 
@@ -113,6 +113,27 @@ db.Events.find().sort({ name: 1 });
 
 ```javascript
 db.Events.find({ tasks: { $regex: "onion", $options: "i" } });
+```
+
+---
+
+## Affirmations Queries
+
+The `Affirmations` collection (`Affirmations-Test` when `USE_TEST_DB=true`)
+stores single short lines the user reads daily:
+`{ name, createdAt, updatedAt }`. Completely independent of Headers and
+Tasks — nothing here references any other collection.
+
+### All affirmations in display order (order added)
+
+```javascript
+db.Affirmations.find().sort({ createdAt: 1 });
+```
+
+### Affirmations containing a given word
+
+```javascript
+db.Affirmations.find({ name: { $regex: "blessing", $options: "i" } });
 ```
 
 ---

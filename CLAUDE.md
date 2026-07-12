@@ -10,7 +10,7 @@ Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoos
 
 ## Environment
 
-`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `Goals-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
+`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `Affirmations-Test`, `Goals-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
 
 ## Architecture rules
 
@@ -45,6 +45,7 @@ Where tests live, by change type:
 | done/doneAt behavior           | `done-at.test.js`                                          |
 | Archive logging                | `archive.test.js`                                          |
 | Events                         | `events.test.js`                                           |
+| Affirmations                   | `affirmations.test.js`                                     |
 | Goals                          | `goals.test.js`                                            |
 | Insights/stats                 | `insights.test.js`                                         |
 | Header↔Task cascade/isolation  | `collections.test.js`                                      |

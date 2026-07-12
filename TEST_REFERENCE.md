@@ -80,6 +80,27 @@ Events CRUD — reusable task bundles (templates only; scheduling happens client
 
 ---
 
+## tests/affirmations.test.js
+
+Affirmations CRUD — single short lines the user reads daily (completely independent of tasks/headers).
+
+| Test                                                  | What it checks                                                              |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| returns empty array when no affirmations exist        | `GET /affirmations` returns `[]` on a clean DB                                |
+| creates an affirmation                                | `POST /affirmations` returns 201 with `_id`, `name`, timestamps               |
+| rejects missing name                                  | `POST /affirmations {}` → 400                                                 |
+| rejects empty name                                    | `{ name: "  " }` → 400                                                        |
+| rejects non-string name                               | `{ name: 42 }` → 400                                                          |
+| trims whitespace from name                            | `"  I am at peace  "` → `"I am at peace"`                                     |
+| returns all affirmations sorted by createdAt ascending | `GET /affirmations` array is ascending by `createdAt` (order added)          |
+| updates affirmation name                              | `PUT /affirmations/:id { name }` → 200 with new name                          |
+| rejects empty name (PUT)                              | `{ name: "" }` → 400                                                          |
+| returns 404 for unknown id (PUT)                      | Fake ObjectId → 404                                                           |
+| deletes an affirmation                                | `DELETE /affirmations/:id` → `{ deleted: id }`                                |
+| returns 404 when deleting again                       | Second delete → 404                                                           |
+
+---
+
 ## tests/goals.test.js
 
 Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side).
