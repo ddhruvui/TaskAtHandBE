@@ -26,7 +26,7 @@ db.Headers.find({ name: { $regex: "Mauli", $options: "i" } });
 db.Tasks.find({ name: { $regex: "Mauli", $options: "i" } });
 ```
 
-> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `Affirmations`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
+> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `Affirmations`, `Calls`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
 
 ---
 
@@ -59,8 +59,9 @@ db.Tasks.find({
 
 The `TaskArchive` collection (`TaskArchive-Test` when `USE_TEST_DB=true`) is an
 append-only event log written by the daily cron and the Task model. Event
-types: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`.
-All events carry `at` (insertion time) and `headerName` (denormalized).
+types: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`,
+`call_result`. All events carry `at` (insertion time); task events also carry
+`headerName` (denormalized), while `call_result` events have no header fields.
 
 ### Habit results for one task, newest first
 
@@ -82,6 +83,12 @@ db.TaskArchive.find({
 
 ```javascript
 db.TaskArchive.find({ type: "task_rescheduled", pushedLater: true });
+```
+
+### Missed call periods per person (call_result, logged at each period boundary)
+
+```javascript
+db.TaskArchive.find({ type: "call_result", completed: false }).sort({ dueDate: -1 });
 ```
 
 ### Completed one-time tasks with their planned vs. done dates
@@ -134,6 +141,35 @@ db.Affirmations.find().sort({ createdAt: 1 });
 
 ```javascript
 db.Affirmations.find({ name: { $regex: "blessing", $options: "i" } });
+```
+
+---
+
+## Calls Queries
+
+The `Calls` collection (`Calls-Test` when `USE_TEST_DB=true`) stores people
+the user must call biweekly or monthly:
+`{ name, frequency, done, doneAt, createdAt, updatedAt }`. Completely
+independent of Headers and Tasks — nothing here references any other
+collection. Cron step 7 resets `done` on the 15th (biweekly) and the last
+day of the month (all).
+
+### All calls in display order (order added)
+
+```javascript
+db.Calls.find().sort({ createdAt: 1 });
+```
+
+### Calls still due this period
+
+```javascript
+db.Calls.find({ done: false });
+```
+
+### Done biweekly calls the next 15th-of-month cron run will reset
+
+```javascript
+db.Calls.find({ frequency: "biweekly", done: true });
 ```
 
 ---

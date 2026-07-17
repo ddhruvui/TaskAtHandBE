@@ -76,6 +76,7 @@ app.use("/headers", require("./routes/headerRoutes"));
 app.use("/tasks", require("./routes/taskRoutes"));
 app.use("/events", require("./routes/eventRoutes"));
 app.use("/affirmations", require("./routes/affirmationRoutes"));
+app.use("/calls", require("./routes/callRoutes"));
 app.use("/goals", require("./routes/goalRoutes"));
 app.use("/archive", require("./routes/archiveRoutes"));
 app.use("/insights", require("./routes/insightRoutes"));

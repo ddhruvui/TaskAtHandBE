@@ -94,7 +94,8 @@ async function getCollections() {
   const useTestDB = process.env.USE_TEST_DB === "true";
   const tasksCol = db.collection(useTestDB ? "Tasks-Test" : "Tasks");
   const headersCol = db.collection(useTestDB ? "Headers-Test" : "Headers");
-  return { tasksCol, headersCol };
+  const callsCol = db.collection(useTestDB ? "Calls-Test" : "Calls");
+  return { tasksCol, headersCol, callsCol };
 }
 
 /** Format a Date as a "YYYY-MM-DD" UTC calendar-day string */
@@ -394,6 +395,65 @@ async function step6ReorderPriorities(tasksCol, headersCol, today) {
   return headersReordered;
 }
 
+/**
+ * Step 7 — Archive call outcomes and reset done calls at period boundaries
+ * (independent of tasks/headers).
+ * Biweekly calls are due twice per month (periods 1st–14th and 15th–end),
+ * monthly calls once; the reset clears the "called" checkmark at each period
+ * boundary so the person shows up as due again.
+ * - On the 15th (UTC): archive + reset "biweekly" calls.
+ * - On the LAST day of the month (UTC): archive + reset ALL calls.
+ * - Any other day: no-op.
+ * Before resetting, a `call_result` event is archived for EVERY call due at
+ * the boundary (completed or missed) so insights can track miss patterns.
+ * Idempotent: calls already archived for this dueDate are skipped, so manual
+ * cron re-runs don't double-log.
+ * @returns {Promise<number>} Number of calls reset
+ */
+async function step7ResetCalls(callsCol, today) {
+  const todayDate = today.getUTCDate();
+  const lastDay = daysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
+
+  let dueFilter;
+  if (todayDate === 15) {
+    dueFilter = { frequency: "biweekly" };
+  } else if (todayDate === lastDay) {
+    dueFilter = {};
+  } else {
+    return 0;
+  }
+
+  const dueDate = utcDayString(today);
+  const dueCalls = await callsCol.find(dueFilter).toArray();
+
+  // Idempotency guard: skip calls already archived for this dueDate
+  const archiveCol = await Archive.getCollection();
+  const existing = await archiveCol
+    .find({ type: "call_result", dueDate }, { projection: { callId: 1 } })
+    .toArray();
+  const alreadyLogged = new Set(existing.map((e) => e.callId));
+
+  await Archive.logMany(
+    dueCalls
+      .filter((call) => !alreadyLogged.has(call._id.toString()))
+      .map((call) => ({
+        type: "call_result",
+        callId: call._id.toString(),
+        callName: call.name,
+        frequency: call.frequency,
+        dueDate,
+        completed: call.done === true,
+        doneAt: call.doneAt || null,
+      })),
+  );
+
+  const result = await callsCol.updateMany(
+    { ...dueFilter, done: true },
+    { $set: { done: false, doneAt: null, updatedAt: new Date() } },
+  );
+  return result.modifiedCount;
+}
+
 // ─── Main runner ──────────────────────────────────────────────────────────────
 
 /** Persisted result of the most recent cron run (in-memory). */
@@ -411,7 +471,7 @@ async function runCron(now) {
 
   console.log(`[Cron] Running at ${today.toISOString()}`);
 
-  const { tasksCol, headersCol } = await getCollections();
+  const { tasksCol, headersCol, callsCol } = await getCollections();
   const headerNames = await getHeaderNameMap(headersCol);
 
   const outcomesArchived = await step0ArchiveYesterdayResults(
@@ -430,6 +490,7 @@ async function runCron(now) {
     headersCol,
     today,
   );
+  const callsReset = await step7ResetCalls(callsCol, today);
 
   const stats = {
     ranAt: today.toISOString(),
@@ -438,6 +499,7 @@ async function runCron(now) {
     tasksClamped: tasksClamped1 + tasksClamped2,
     headersReordered,
     outcomesArchived,
+    callsReset,
   };
 
   // Generate the daily AI insight report (skipped in tests / without an API key)

@@ -40,6 +40,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("callsReset");
     });
 
     test("ranAt is a valid ISO 8601 datetime string", async () => {
@@ -55,6 +56,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        callsReset,
       } = res.body;
 
       for (const val of [
@@ -62,6 +64,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        callsReset,
       ]) {
         expect(typeof val).toBe("number");
         expect(Number.isInteger(val)).toBe(true);
@@ -124,6 +127,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("callsReset");
     });
 
     test("lastRanAt matches the most recent POST /cron/run ranAt", async () => {
@@ -145,6 +149,7 @@ describe("Cron API Endpoints", () => {
       expect(statusRes.body.headersReordered).toBe(
         runRes.body.headersReordered,
       );
+      expect(statusRes.body.callsReset).toBe(runRes.body.callsReset);
     });
 
     test("lastRanAt does not contain the ranAt key (no duplicate)", async () => {
@@ -166,6 +171,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("callsReset");
     });
 
     test("ranAt is a valid ISO 8601 datetime string", async () => {
@@ -181,6 +187,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        callsReset,
       } = res.body;
 
       for (const val of [
@@ -188,6 +195,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        callsReset,
       ]) {
         expect(typeof val).toBe("number");
         expect(Number.isInteger(val)).toBe(true);
@@ -212,6 +220,7 @@ describe("Cron API Endpoints", () => {
       expect(detailsRes.body).toHaveProperty("tasksMarkedUndone");
       expect(detailsRes.body).toHaveProperty("tasksClamped");
       expect(detailsRes.body).toHaveProperty("headersReordered");
+      expect(detailsRes.body).toHaveProperty("callsReset");
     });
 
     test("response matches /cron/status exactly", async () => {

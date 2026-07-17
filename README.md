@@ -7,11 +7,12 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
 - **Events** — reusable task bundles (e.g. "Burger Night" with its shopping list); clients schedule them as dated tasks under a header named after the event (reused if it exists, created otherwise)
 - **Affirmations** — single short lines the user reads daily (e.g. "Thank you blessing"); completely independent of tasks and headers
+- **Calls** — people the user must call biweekly or monthly (e.g. "Grandma"); completely independent of tasks and headers, with the "called" checkmark auto-reset by the cron at each period boundary (the 15th and the last day of the month)
 - **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong daily habit); clients start one step at a time as a daily task under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
 - **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
-- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, suggestions) generated via the Anthropic API (`claude-opus-4-8`) and stored in the `Insights` collection
+- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Anthropic API (`claude-opus-4-8`) and stored in the `Insights` collection
 - **Swagger UI** — interactive API docs served at `/api-docs`
 - **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
 - **CORS enabled** — accepts requests from any origin
@@ -30,15 +31,17 @@ TaskAtHandBE/
 │   │   ├── taskController.js
 │   │   ├── eventController.js
 │   │   ├── affirmationController.js
+│   │   ├── callController.js
 │   │   ├── goalController.js
 │   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (steps 0–6 + AI report)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–7 + AI report)
 │   ├── models/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
 │   │   ├── Event.js            # Reusable task bundles (templates)
 │   │   ├── Affirmation.js      # Daily short lines (independent of tasks)
+│   │   ├── Call.js             # Biweekly/monthly call reminders (independent of tasks)
 │   │   ├── Goal.js             # Habit backlogs built one step at a time
 │   │   ├── Archive.js          # TaskArchive event log
 │   │   └── Insight.js          # Stored AI reports
@@ -50,6 +53,7 @@ TaskAtHandBE/
 │       ├── taskRoutes.js
 │       ├── eventRoutes.js
 │       ├── affirmationRoutes.js
+│       ├── callRoutes.js
 │       ├── goalRoutes.js
 │       ├── archiveRoutes.js
 │       └── insightRoutes.js
@@ -103,7 +107,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, Affirmations, Goals, TaskArchive, Insights) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, Affirmations, Calls, Goals, TaskArchive, Insights) |
 | `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
@@ -151,6 +155,15 @@ Server listens on **port 3002** by default.
 | `POST`   | `/affirmations`     | Create an affirmation (`{ name }`)                   |
 | `PUT`    | `/affirmations/:id` | Update an affirmation's name                         |
 | `DELETE` | `/affirmations/:id` | Delete an affirmation                                |
+
+### Calls
+
+| Method   | Path         | Description                                                     |
+| -------- | ------------ | --------------------------------------------------------------- |
+| `GET`    | `/calls`     | List all calls (sorted by createdAt, order added)               |
+| `POST`   | `/calls`     | Create a call (`{ name, frequency: "biweekly" \| "monthly" }`)  |
+| `PUT`    | `/calls/:id` | Update a call's name, frequency, and/or done state              |
+| `DELETE` | `/calls/:id` | Delete a call                                                   |
 
 ### Goals
 
@@ -223,11 +236,12 @@ npm run cleartest
 | `crud.test.js`           | Basic CRUD for headers and tasks                           |
 | `events.test.js`         | Events CRUD, validation, trimming, and sorting             |
 | `affirmations.test.js`   | Affirmations CRUD, validation, trimming, and sorting       |
+| `calls.test.js`          | Calls CRUD, validation, doneAt lifecycle, and sorting      |
 | `goals.test.js`          | Goals CRUD, step/status validation, trimming, and sorting  |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
-| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder)            |
+| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder, call resets) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule logging, `GET /archive` |

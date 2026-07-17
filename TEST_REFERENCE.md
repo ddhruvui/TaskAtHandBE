@@ -101,6 +101,37 @@ Affirmations CRUD — single short lines the user reads daily (completely indepe
 
 ---
 
+## tests/calls.test.js
+
+Calls CRUD — people the user must call biweekly or monthly (completely independent of tasks/headers; done checkmarks are reset by cron step 7).
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| returns empty array when no calls exist               | `GET /calls` returns `[]` on a clean DB                                        |
+| creates a call with done=false and doneAt=null        | `POST /calls` returns 201 with `_id`, `name`, `frequency`, `done: false`, `doneAt: null`, timestamps |
+| creates a monthly call                                | `frequency: "monthly"` persists                                                |
+| rejects missing name                                  | `POST /calls { frequency }` → 400                                              |
+| rejects empty name                                    | `{ name: "  " }` → 400                                                         |
+| rejects non-string name                               | `{ name: 42 }` → 400                                                           |
+| rejects missing frequency                             | `POST /calls { name }` → 400                                                   |
+| rejects invalid frequency                             | `{ frequency: "weekly" }` → 400                                                |
+| trims whitespace from name                            | `"  Aunt May  "` → `"Aunt May"`                                                |
+| returns all calls sorted by createdAt ascending       | `GET /calls` array is ascending by `createdAt` (order added)                   |
+| updates call name                                     | `PUT /calls/:id { name }` → 200 with new name, frequency untouched             |
+| updates call frequency                                | `PUT /calls/:id { frequency }` → 200 with new frequency                        |
+| setting done=true stamps doneAt with an ISO datetime  | `{ done: true }` → `doneAt` is a valid ISO string                              |
+| setting done=false clears doneAt                      | `{ done: false }` → `doneAt: null`                                             |
+| rejects empty name (PUT)                              | `{ name: "" }` → 400                                                           |
+| rejects invalid frequency (PUT)                       | `{ frequency: "daily" }` → 400                                                 |
+| rejects non-boolean done (PUT)                        | `{ done: "yes" }` → 400                                                        |
+| returns 404 for unknown id (PUT)                      | Fake ObjectId → 404                                                            |
+| returns 500 for a malformed ObjectId (PUT)            | `not-a-valid-id` throws in the model → 500 `{ error }`                         |
+| deletes a call                                        | `DELETE /calls/:id` → `{ deleted: id }`                                        |
+| returns 404 when deleting again                       | Second delete → 404                                                            |
+| returns 500 for a malformed ObjectId (DELETE)         | `not-a-valid-id` → 500 `{ error }`                                             |
+
+---
+
 ## tests/goals.test.js
 
 Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side).
@@ -340,6 +371,15 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | does NOT clamp on non-1st of month                              | Step 1: skipped except on the 1st                                      |
 | undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
 | undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 6: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
+| resets done biweekly calls on the 15th, monthly untouched       | Step 7: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
+| resets ALL done calls on the last day of the month              | Step 7: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
+| treats Feb 28 as the last day of a non-leap February            | Step 7: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
+| does not reset any calls mid-month                              | Step 7: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
+| leaves undone calls untouched on the 15th                       | Step 7: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
+| archives call_result for due biweekly calls (done and missed) on the 15th | Step 7: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
+| archives call_result for ALL calls on the last day of the month | Step 7: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
+| does not double-log call_result when cron re-runs for the same date | Step 7: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
+| logs no call_result mid-month                                   | Step 7: run on `2026-03-10` → zero `call_result` events                        |
 
 ---
 
@@ -350,20 +390,20 @@ Tests the four cron HTTP endpoints.
 | Test                                                    | What it checks                                                                                  |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | returns 404 when cron has never run                     | `GET /cron/status` before any run → 404 with `{ error }`                                        |
-| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered }` |
+| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, callsReset }` |
 | ranAt is a valid ISO 8601 datetime string               | `ranAt` parses as a valid date and round-trips via `.toISOString()`                             |
-| numeric stat fields are non-negative integers           | All 4 stat fields are integers ≥ 0                                                              |
+| numeric stat fields are non-negative integers           | All 5 stat fields (including `callsReset`) are integers ≥ 0                                     |
 | accepts an optional date override in body               | `{ date: "2026-01-01T00:00:00.000Z" }` → `ranAt` reflects that date                             |
 | tasksDeleted reflects done date tasks removed           | Creates a done `date` task, runs cron, confirms it's gone and `tasksDeleted ≥ 1`                |
-| returns 200 with correct shape after cron has run       | `GET /cron/status` after a run → 200 with all 5 fields                                          |
+| returns 200 with correct shape after cron has run       | `GET /cron/status` after a run → 200 with all 6 fields (including `callsReset`)                 |
 | lastRanAt matches the most recent POST /cron/run ranAt  | Status `lastRanAt` equals the last run's `ranAt`                                                |
-| status numeric fields match the last run stats          | All 4 counters in status match what the last run returned                                       |
+| status numeric fields match the last run stats          | All 5 counters in status (including `callsReset`) match what the last run returned              |
 | lastRanAt does not contain the ranAt key (no duplicate) | Status response has `lastRanAt` but not `ranAt`                                                 |
 | GET /cron/run returns correct response shape            | `GET /cron/run` → same `{ ranAt, ... }` shape as POST, no body needed                           |
 | GET /cron/run ranAt is a valid ISO 8601 datetime string | `ranAt` parses and round-trips correctly                                                        |
-| GET /cron/run numeric stat fields are non-negative      | All 4 stat fields are integers ≥ 0                                                              |
+| GET /cron/run numeric stat fields are non-negative      | All 5 stat fields (including `callsReset`) are integers ≥ 0                                     |
 | GET /cron/run updates /cron/status lastRanAt            | After `GET /cron/run`, status `lastRanAt` reflects the new run                                  |
-| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered }`                |
+| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, callsReset }`    |
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
@@ -422,6 +462,8 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | aggregates habit completion rate, streaks, and missed-by-weekday  | 4 results (3 done, Tue missed) → rate 75, currentStreak 2, longestStreak 2, `missedByDow: { Tue: 1 }` |
 | aggregates recurring task_result events into scheduled/completed counts | 2 scheduled, 1 completed → completionRate 50                              |
+| aggregates call_result events into per-person rates and miss streaks | 3 periods (1 done, 2 recent misses) → rate 33, `currentMissStreak: 2`, sorted `recentResults`; calls excluded from `byHeader` |
+| returns an empty calls array when there are no call_result events | Habit-only archive → `calls: []`                                              |
 | computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
 | counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
 | rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types                                        |

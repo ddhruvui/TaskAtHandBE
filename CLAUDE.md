@@ -10,7 +10,7 @@ Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoos
 
 ## Environment
 
-`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `Affirmations-Test`, `Goals-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
+`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `Affirmations-Test`, `Calls-Test`, `Goals-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
 
 ## Architecture rules
 
@@ -26,7 +26,7 @@ Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoos
 - **Cron step 6 re-sorts all task priorities nightly** (undone by soonest ECD, then done). Manual priority edits don't survive the next cron run.
 - **ECD types**: `date` (`"YYYY-MM-DD"`, one-time), `day_of_week` (array of `"Sun".."Sat"`), `day_of_month` (array of 1–31, clamped monthly), `day_of_year` (`"D/M/YYYY"`, auto-advanced yearly), or `null`.
 - **`doneAt`**: set when `done` flips true, cleared on undo and on cron resets.
-- **Cron runs at UTC midnight**, steps 0–6 in order (archive yesterday → clamp DOM → advance DOY → mark undone DOW/DOM → delete done date/no-ECD tasks after archiving → reorder), then AI report generation (not a numbered step). All date math is UTC.
+- **Cron runs at UTC midnight**, steps 0–7 in order (archive yesterday → clamp DOM → advance DOY → mark undone DOW/DOM → delete done date/no-ECD tasks after archiving → reorder → reset done calls on the 15th (biweekly) / last day of month (all)), then AI report generation (not a numbered step). All date math is UTC.
 - **TaskArchive is append-only** with event types `habit_result`, `task_result`, `task_completed`, `task_rescheduled`. `Archive.log()` never throws — archive failures are silent by design.
 - **Header delete cascades** to its tasks (controller-level). Event deletion does NOT touch tasks created from it.
 
@@ -40,12 +40,13 @@ Where tests live, by change type:
 | ------------------------------ | ---------------------------------------------------------- |
 | CRUD endpoints / basic priority| `crud.test.js`, `error-handling.test.js`                   |
 | Priority/reorder business logic| `business-logic.test.js` (+ `crud.test.js` basics)         |
-| Cron algorithm (steps 0–6)     | `chron.test.js` AND `cron-api.test.js` (API contract side) |
+| Cron algorithm (steps 0–7)     | `chron.test.js` AND `cron-api.test.js` (API contract side) |
 | ECD types/validation           | `ecd-validation.test.js` + `chron.test.js` (step handling) |
 | done/doneAt behavior           | `done-at.test.js`                                          |
 | Archive logging                | `archive.test.js`                                          |
 | Events                         | `events.test.js`                                           |
 | Affirmations                   | `affirmations.test.js`                                     |
+| Calls                          | `calls.test.js` (+ `chron.test.js` for step 7 resets)      |
 | Goals                          | `goals.test.js`                                            |
 | Insights/stats                 | `insights.test.js`                                         |
 | Header↔Task cascade/isolation  | `collections.test.js`                                      |

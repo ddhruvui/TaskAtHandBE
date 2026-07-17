@@ -16,6 +16,7 @@ function computeStats(events) {
   const completedTasks = [];
   const reschedulesByTask = {};
   const byHeader = {};
+  const callsByPerson = {};
 
   const headerBucket = (name) => {
     const key = name || "(no header)";
@@ -82,6 +83,24 @@ function computeStats(events) {
         headerBucket(e.headerName).completed++;
         break;
       }
+      case "call_result": {
+        const key = e.callId || e.callName;
+        if (!callsByPerson[key]) {
+          callsByPerson[key] = {
+            callName: e.callName,
+            frequency: e.frequency,
+            results: [], // { dueDate, completed } oldest first
+          };
+        }
+        callsByPerson[key].callName = e.callName;
+        callsByPerson[key].frequency = e.frequency;
+        callsByPerson[key].results.push({
+          dueDate: e.dueDate,
+          completed: e.completed,
+        });
+        // Calls have no header — deliberately not counted in byHeader
+        break;
+      }
       case "task_rescheduled": {
         const key = e.taskId || e.taskName;
         if (!reschedulesByTask[key]) {
@@ -143,6 +162,29 @@ function computeStats(events) {
     };
   });
 
+  // Finalize call metrics: rate and current miss streak per person
+  const callStats = Object.values(callsByPerson).map((c) => {
+    const results = c.results.sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
+    const scheduled = results.length;
+    const completed = results.filter((r) => r.completed).length;
+
+    let currentMissStreak = 0;
+    for (let i = results.length - 1; i >= 0; i--) {
+      if (results[i].completed) break;
+      currentMissStreak++;
+    }
+
+    return {
+      callName: c.callName,
+      frequency: c.frequency,
+      scheduled,
+      completed,
+      completionRate: scheduled ? Math.round((completed / scheduled) * 100) : 0,
+      currentMissStreak,
+      recentResults: results.slice(-8),
+    };
+  });
+
   const slippages = completedTasks
     .map((t) => t.slippageDays)
     .filter((s) => s !== null);
@@ -168,6 +210,7 @@ function computeStats(events) {
       (a, b) => b.total - a.total,
     ),
     byHeader,
+    calls: callStats,
   };
 }
 
@@ -204,6 +247,12 @@ const REPORT_SCHEMA = {
       description:
         "Tasks showing avoidance (repeated reschedules, chronic misses) and the likely cause",
     },
+    callReminders: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "People the user should call: not yet called this period (with how soon the period resets), repeat-miss patterns across periods, and brief acknowledgment of consistent callers. Empty array if the user has no calls set up.",
+    },
     suggestions: {
       type: "array",
       items: { type: "string" },
@@ -217,6 +266,7 @@ const REPORT_SCHEMA = {
     "habitsSlipping",
     "taskInsights",
     "procrastinationFlags",
+    "callReminders",
     "suggestions",
   ],
   additionalProperties: false,
@@ -227,6 +277,7 @@ const SYSTEM_PROMPT = `You are a personal productivity coach analyzing task-comp
 Definitions:
 - "Habits" are tasks scheduled on days of the week (day_of_week). They reset daily and their hit/miss history is the core signal.
 - Everything else (one-time dated tasks, day_of_month, day_of_year) are "tasks".
+- "Calls" are people the user must phone on a cadence: "biweekly" means twice a month (periods 1st–14th and 15th–month-end), "monthly" means once a month. The called checkmark resets at each period boundary; a call_result with completed=false means that person was NOT called that period. currentCalls shows the live status for the current period.
 - A reschedule that pushes a date later is a procrastination signal, especially when repeated on the same task.
 
 Rules:
@@ -235,6 +286,7 @@ Rules:
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
 - If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (repeatedly ignored advice is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
+- For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.
 - Keep every list item to one or two sentences.`;
 
 /**
@@ -256,6 +308,15 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   const stats = computeStats(events);
   const previous = await Insight.latest();
 
+  // Live call status for the current period (archive only has past boundaries)
+  const Call = require("../models/Call");
+  const currentCalls = (await Call.findAll()).map((c) => ({
+    name: c.name,
+    frequency: c.frequency,
+    done: c.done,
+    doneAt: c.doneAt,
+  }));
+
   // Cap raw events so the prompt stays small; stats carry the exact totals
   const recentEvents = events.slice(-300).map(({ _id, ...rest }) => rest);
 
@@ -274,6 +335,7 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
           today: to.toISOString().slice(0, 10),
           periodDays,
           precomputedStats: stats,
+          currentCalls,
           recentEvents,
           previousReport: previous
             ? {

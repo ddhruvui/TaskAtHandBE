@@ -97,6 +97,30 @@ collection references them.
 
 ---
 
+### Call
+
+```typescript
+type CallFrequency = "biweekly" | "monthly";
+
+interface Call {
+  _id: string; // MongoDB ObjectId
+  name: string; // Person to call (required), e.g. "Grandma"
+  frequency: CallFrequency; // biweekly = twice per month, monthly = once
+  done: boolean; // Called this period? (default: false)
+  doneAt: string | null; // When done flipped to true; cleared on undo/cron reset
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+Calls are people the user must phone biweekly or monthly. They are completely
+independent of Headers and Tasks (no `headerId`, no `priority`). Biweekly
+calls are due twice per month (periods 1st–14th and 15th–end), monthly calls
+once; cron step 7 clears the `done` checkmark at each period boundary (the
+15th for biweekly, the last day of the month for both).
+
+---
+
 ### Goal
 
 ```typescript
@@ -626,6 +650,87 @@ Deletes an affirmation.
 
 ---
 
+## Calls API
+
+Base path: `/calls`
+
+### `GET /calls`
+
+Returns all calls sorted by `createdAt` ascending (order added).
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "name": "Grandma",
+    "frequency": "biweekly",
+    "done": false,
+    "doneAt": null,
+    "createdAt": "2026-07-10T00:00:00.000Z",
+    "updatedAt": "2026-07-10T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `POST /calls`
+
+Creates a new call. New calls start undone (`done: false`, `doneAt: null`).
+
+**Request Body:**
+
+```json
+{
+  "name": "Grandma",
+  "frequency": "biweekly"
+}
+```
+
+| Field       | Required | Type   | Notes                             |
+| ----------- | -------- | ------ | --------------------------------- |
+| `name`      | Yes      | string | Non-empty; trimmed                |
+| `frequency` | Yes      | string | Exactly `biweekly` or `monthly`   |
+
+**Response `201`:** the created call.
+
+**Error `400`:**
+
+```json
+{ "error": "Call frequency must be \"biweekly\" or \"monthly\"" }
+```
+
+---
+
+### `PUT /calls/:id`
+
+Updates a call's `name`, `frequency`, and/or `done`. All fields are optional
+but must pass the same validation as `POST /calls` when present (`done` must
+be a boolean). Setting `done` to `true` stamps `doneAt` with the current ISO
+time; setting `done` to `false` clears it to `null` (mirrors Task semantics).
+
+**Response `200`:** the updated call.
+**Error `400`:** invalid name, frequency, or done.
+**Error `404`:** call not found.
+
+---
+
+### `DELETE /calls/:id`
+
+Deletes a call.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** call not found.
+
+---
+
 ## Goals API
 
 Base path: `/goals`
@@ -725,7 +830,8 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 4    | Every day          | Mark tasks with a `day_of_month` ECD containing today's date as undone (`doneAt` cleared) |
 | 5    | Every day          | Archive then delete tasks that are **done** and have a `date` ECD or no ECD     |
 | 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
-| 7    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
+| 7    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
+| —    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
 
 All date operations in the cron run in UTC.
 
@@ -741,7 +847,8 @@ Returns stats from the most recent cron run.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
-  "headersReordered": 4
+  "headersReordered": 4,
+  "callsReset": 0
 }
 ```
 
@@ -779,6 +886,7 @@ Manually triggers the cron job with an optional date override in the request bod
   "tasksClamped": 1,
   "headersReordered": 4,
   "outcomesArchived": 5,
+  "callsReset": 0,
   "insightGenerated": true
 }
 ```
@@ -805,6 +913,7 @@ Manually triggers the cron job. No request body needed.
   "tasksClamped": 1,
   "headersReordered": 4,
   "outcomesArchived": 5,
+  "callsReset": 0,
   "insightGenerated": true
 }
 ```
@@ -829,7 +938,8 @@ Returns stats from the most recent cron run. Alias for `GET /cron/status`.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
-  "headersReordered": 4
+  "headersReordered": 4,
+  "callsReset": 0
 }
 ```
 
@@ -854,7 +964,7 @@ Returns raw TaskArchive events for the period, oldest first.
 | Parameter | Required | Description                                                                  |
 | --------- | -------- | ---------------------------------------------------------------------------- |
 | `days`    | No       | How many days back to fetch (default 28, max 365)                            |
-| `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`  |
+| `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`, `call_result` |
 
 **Response `200`:**
 
@@ -876,6 +986,22 @@ Returns raw TaskArchive events for the period, oldest first.
 ]
 ```
 
+`call_result` events (logged by cron step 7 at each period boundary, before the reset) have no header fields:
+
+```json
+{
+  "_id": "...",
+  "type": "call_result",
+  "callId": "...",
+  "callName": "Grandma",
+  "frequency": "biweekly",
+  "dueDate": "2026-07-15",
+  "completed": false,
+  "doneAt": null,
+  "at": "2026-07-15T00:00:01.000Z"
+}
+```
+
 ---
 
 ## Insights API
@@ -884,7 +1010,7 @@ Base path: `/insights`
 
 ### `GET /insights/stats?days=28`
 
-Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, and per-header rollups.
+Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, per-header rollups, and per-person call completion (`calls` — from `call_result` events; calls are excluded from `byHeader` since they have no header).
 
 **Response `200`** (abridged):
 
@@ -911,7 +1037,18 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
   "reschedules": [
     { "taskName": "Write blog", "headerName": "Health", "total": 3, "pushedLater": 3 }
   ],
-  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3 } }
+  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3 } },
+  "calls": [
+    {
+      "callName": "Grandma",
+      "frequency": "biweekly",
+      "scheduled": 4,
+      "completed": 2,
+      "completionRate": 50,
+      "currentMissStreak": 2,
+      "recentResults": [{ "dueDate": "2026-07-15", "completed": false }]
+    }
+  ]
 }
 ```
 
@@ -936,10 +1073,13 @@ Most recent stored AI report.
     "habitsSlipping": ["string"],
     "taskInsights": ["string"],
     "procrastinationFlags": ["string"],
+    "callReminders": ["string"],
     "suggestions": ["string"]
   }
 }
 ```
+
+> `callReminders` (people to call: not yet called this period, repeat misses) is required in newly generated reports — an empty array when no calls are set up — but absent from reports stored before the Calls feature; clients must tolerate its absence.
 
 **Error `404`:**
 

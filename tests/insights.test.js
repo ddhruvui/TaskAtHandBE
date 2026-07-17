@@ -71,6 +71,45 @@ describe("Insights", () => {
       expect(task.completionRate).toBe(50);
     });
 
+    test("aggregates call_result events into per-person rates and miss streaks", async () => {
+      await seedArchive([
+        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-06-15", completed: true, doneAt: "2026-06-10T12:00:00.000Z" },
+        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-06-30", completed: false, doneAt: null },
+        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-07-15", completed: false, doneAt: null },
+        { type: "call_result", callId: "c2", callName: "Dentist", frequency: "monthly", dueDate: "2026-06-30", completed: true, doneAt: "2026-06-28T09:00:00.000Z" },
+      ]);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      expect(res.body.calls).toHaveLength(2);
+
+      const grandma = res.body.calls.find((c) => c.callName === "Grandma");
+      expect(grandma.frequency).toBe("biweekly");
+      expect(grandma.scheduled).toBe(3);
+      expect(grandma.completed).toBe(1);
+      expect(grandma.completionRate).toBe(33);
+      expect(grandma.currentMissStreak).toBe(2); // missed 06-30 and 07-15
+      expect(grandma.recentResults).toEqual([
+        { dueDate: "2026-06-15", completed: true },
+        { dueDate: "2026-06-30", completed: false },
+        { dueDate: "2026-07-15", completed: false },
+      ]);
+
+      const dentist = res.body.calls.find((c) => c.callName === "Dentist");
+      expect(dentist.frequency).toBe("monthly");
+      expect(dentist.completionRate).toBe(100);
+      expect(dentist.currentMissStreak).toBe(0);
+
+      // Calls have no header and must not leak into the per-header rollup
+      expect(res.body.byHeader).toEqual({});
+    });
+
+    test("returns an empty calls array when there are no call_result events", async () => {
+      await seedArchive(habitEvents);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      expect(res.body.calls).toEqual([]);
+    });
+
     test("computes one-time task slippage from plannedFor vs doneAt", async () => {
       await seedArchive([
         { type: "task_completed", taskId: "t1", taskName: "Ship report", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-08T00:00:00Z" },

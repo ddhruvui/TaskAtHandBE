@@ -25,6 +25,10 @@ const options = {
         name: "Goals",
         description: "Goal and step (habit backlog) management endpoints",
       },
+      {
+        name: "Calls",
+        description: "Biweekly/monthly call reminder management endpoints",
+      },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "Archive", description: "Task history (TaskArchive) endpoints" },
       { name: "Insights", description: "Stats and AI insight report endpoints" },
@@ -139,6 +143,29 @@ const options = {
             updatedAt: { type: "string", format: "date-time" },
           },
         },
+        Call: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Grandma" },
+            frequency: {
+              type: "string",
+              enum: ["biweekly", "monthly"],
+              description:
+                "biweekly = call twice per month (periods 1st–14th and 15th–end); monthly = call once per month",
+              example: "biweekly",
+            },
+            done: { type: "boolean", example: false },
+            doneAt: {
+              type: "string",
+              format: "date-time",
+              nullable: true,
+              description: "Set when done flips to true; cleared on undo/cron reset",
+            },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
         Error: {
           type: "object",
           properties: {
@@ -158,6 +185,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersReordered: { type: "integer", example: 4 },
+            callsReset: { type: "integer", example: 0 },
           },
         },
         CronStatus: {
@@ -172,6 +200,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersReordered: { type: "integer", example: 4 },
+            callsReset: { type: "integer", example: 0 },
           },
         },
       },

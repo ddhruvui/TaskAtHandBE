@@ -155,6 +155,35 @@
 
 ---
 
+### Call (biweekly/monthly call reminder)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "frequency": "enum: biweekly | monthly",
+  "done": "boolean (default: false)",
+  "doneAt": "ISO 8601 datetime | null (set when done → true, cleared on undo/reset)",
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- `frequency` must be exactly `biweekly` (call twice per month — periods
+  1st–14th and 15th–end) or `monthly` (call once per month)
+- Calls are people the user must phone regularly — completely independent of
+  Headers and Tasks (no `headerId`, no `priority`)
+- `doneAt` mirrors Task semantics: set to the current time when `done` flips
+  to `true`, set back to `null` when `done` flips to `false` (by the user or
+  by a cron reset)
+- Listed in the order they were added (`createdAt` ascending)
+- The daily cron resets done calls at period boundaries (see Cron Step 7)
+
+---
+
 ### Goal (habit backlog, built one step at a time)
 
 ```json
@@ -204,6 +233,7 @@ them.
 | `task_result`      | Cron step 0           | A `day_of_month` / `day_of_year` task's outcome for one cycle    |
 | `task_completed`   | Cron step 5           | A one-time task captured (with `plannedFor`, `doneAt`) before deletion |
 | `task_rescheduled` | `Task.update`         | An ECD change, with `fromEcd`, `toEcd`, and `pushedLater` flag   |
+| `call_result`      | Cron step 7           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
 
 ```json
 {
@@ -238,6 +268,7 @@ The `Insights` collection stores one AI coaching report per generation:
     "habitsSlipping": ["string"],
     "taskInsights": ["string"],
     "procrastinationFlags": ["string"],
+    "callReminders": ["string"],
     "suggestions": ["string"]
   }
 }
@@ -247,7 +278,13 @@ Reports are generated at the end of every cron run (when `ANTHROPIC_API_KEY`
 is set) and on demand via `POST /insights/generate`. The previous report is
 fed into the next generation so suggestions build on each other. Tasks
 scheduled by `day_of_week` are treated as **habits**; everything else is a
-task.
+task. Calls feed in two ways: `call_result` archive events become a `calls`
+stats array (per person: `scheduled`, `completed`, `completionRate`,
+`currentMissStreak`, `recentResults`), and the live call list is sent as
+`currentCalls` so the report can flag people not yet called this period.
+`callReminders` is required in newly generated reports (empty array when no
+calls are set up) but absent from reports stored before the feature — clients
+must tolerate its absence.
 
 ---
 
@@ -299,7 +336,7 @@ outcome is only knowable at the following midnight:
   - If `done === true` → archive a `task_completed` event (preserving `plannedFor`, `taskCreatedAt`, `doneAt`, `headerName`), then **delete** the task
   - If `done === false` → do nothing
 
-#### Step 6 — Reorder priorities per header _(runs last)_
+#### Step 6 — Reorder priorities per header
 
 - For each header, collect all its tasks and sort as follows:
   1. **Undone tasks** (`done === false`) — sorted by next upcoming ECD date **ascending** → assigned priorities `0, 1, 2, ...` (sooner = closer to 0)
@@ -315,10 +352,24 @@ outcome is only knowable at the following midnight:
 | `day_of_month` | The nearest upcoming date in the current or next month from the `value` array |
 | `day_of_year`  | The date stored in `value` (e.g. `7/3/2007`)                                  |
 
+#### Step 7 — Archive call outcomes and reset calls at period boundaries _(runs last)_
+
+Calls are independent of tasks/headers, so this step runs after all task
+steps. Biweekly calls are due twice per month (periods 1st–14th and
+15th–end), monthly calls once; the reset clears the "called" checkmark at
+each period boundary:
+
+- If today (UTC) is the **15th** of the month: `biweekly` calls are due
+- If today (UTC) is the **last day** of the month: **all** calls are due, both `biweekly` and `monthly`
+- On any other day: no-op
+- For every due call (done **and** missed): log a `call_result` archive event `{ callId, callName, frequency, dueDate: today, completed: call.done, doneAt }` **before** resetting, so insights can track miss patterns. Idempotent: calls already archived for this `dueDate` are skipped on manual re-runs.
+- Then reset every due call that is done → `done = false`, `doneAt = null`, update `updatedAt` (the `callsReset` stat counts only these resets, not archive events)
+
 #### Final step — Generate the daily AI insight report
 
-- After step 6, when `ANTHROPIC_API_KEY` is set (and not in test mode):
-  - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts)
+- After step 7, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+  - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
+  - Fetch the live call list and include it as `currentCalls` in the prompt payload
   - Send stats + recent events + the previous report to `claude-opus-4-8` with a structured-output schema
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
@@ -616,6 +667,71 @@ Deletes an affirmation.
 
 ---
 
+### Calls
+
+#### `GET /calls`
+
+Returns all calls sorted by `createdAt` ascending (order added).
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Grandma",
+    "frequency": "biweekly",
+    "done": false,
+    "doneAt": null,
+    "createdAt": "2026-07-10T00:00:00Z",
+    "updatedAt": "2026-07-10T00:00:00Z"
+  }
+]
+```
+
+---
+
+#### `POST /calls`
+
+Creates a new call. New calls start undone (`done = false`, `doneAt = null`).
+
+**Request body**
+
+```json
+{
+  "name": "string",
+  "frequency": "biweekly | monthly"
+}
+```
+
+**Response `201`** — returns created call with timestamps
+
+---
+
+#### `PUT /calls/:id`
+
+Updates a call's name, frequency, and/or done state. Fields are optional but
+validated the same as on create when present (`done` must be a boolean).
+Setting `done = true` stamps `doneAt`; setting `done = false` clears it.
+
+**Response `200`** — returns updated call
+
+---
+
+#### `DELETE /calls/:id`
+
+Deletes a call.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
 ### Goals
 
 #### `GET /goals`
@@ -696,7 +812,8 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
 4. Mark undone: `day_of_month`
 5. Archive + delete completed `date` tasks
 6. Reorder priorities per header
-7. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set)_
+7. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
+8. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set — not a numbered step)_
 
 **Response `200`**
 
@@ -708,6 +825,7 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
   "tasksClamped": 1,
   "headersReordered": 3,
   "outcomesArchived": 4,
+  "callsReset": 0,
   "insightGenerated": true
 }
 ```
@@ -726,7 +844,8 @@ Manually triggers the cron job. No request body required. Runs the same steps as
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
-  "headersReordered": 3
+  "headersReordered": 3,
+  "callsReset": 0
 }
 ```
 
@@ -744,7 +863,8 @@ Returns metadata about the last cron run.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
-  "headersReordered": 3
+  "headersReordered": 3,
+  "callsReset": 0
 }
 ```
 
@@ -762,7 +882,8 @@ Returns metadata about the last cron run. Alias for `GET /cron/status`.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
-  "headersReordered": 3
+  "headersReordered": 3,
+  "callsReset": 0
 }
 ```
 

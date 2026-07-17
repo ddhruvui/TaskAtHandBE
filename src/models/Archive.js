@@ -14,6 +14,9 @@ const { getDatabase } = require("../config/db");
  *        taskCreatedAt, doneAt }
  *  - task_rescheduled: a task's ECD was changed by the user
  *      { taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater }
+ *  - call_result:     a call's outcome for one period, logged by cron step 7
+ *      at the period boundary before the reset (dueDate = the reset day)
+ *      { callId, callName, frequency, dueDate, completed, doneAt }
  *
  * All events additionally carry { type, at } where `at` is the insertion time.
  * dueDate / plannedFor are "YYYY-MM-DD" UTC calendar-day strings.

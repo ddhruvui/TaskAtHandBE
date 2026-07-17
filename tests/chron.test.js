@@ -6,6 +6,16 @@ async function clearCollections() {
   const db = await getDatabase();
   await db.collection("Headers-Test").deleteMany({});
   await db.collection("Tasks-Test").deleteMany({});
+  await db.collection("Calls-Test").deleteMany({});
+  await db.collection("TaskArchive-Test").deleteMany({});
+}
+
+async function getCallResultEvents() {
+  const db = await getDatabase();
+  return db
+    .collection("TaskArchive-Test")
+    .find({ type: "call_result" })
+    .toArray();
 }
 
 async function createHeader(name) {
@@ -20,6 +30,16 @@ async function createTask(data) {
 
 async function getTasksForHeader(headerId) {
   const res = await request(app).get(`/tasks?headerId=${headerId}`);
+  return res.body;
+}
+
+async function createCall(data) {
+  const res = await request(app).post("/calls").send(data);
+  return res.body;
+}
+
+async function getCalls() {
+  const res = await request(app).get("/calls");
   return res.body;
 }
 
@@ -389,6 +409,209 @@ describe("Cron Job", () => {
         .sort((x, y) => x.priority - y.priority)
         .map((t) => t._id);
       expect(orderedIds).toEqual([e._id, b._id, c._id, a._id, f._id, d._id]);
+    });
+  });
+
+  describe("Step 7 — Reset calls at period boundaries", () => {
+    async function seedDoneCalls() {
+      const biweekly = await createCall({
+        name: "Grandma",
+        frequency: "biweekly",
+      });
+      const monthly = await createCall({
+        name: "Dentist",
+        frequency: "monthly",
+      });
+      await request(app).put(`/calls/${biweekly._id}`).send({ done: true });
+      await request(app).put(`/calls/${monthly._id}`).send({ done: true });
+      return { biweekly, monthly };
+    }
+
+    test("resets done biweekly calls on the 15th, monthly untouched", async () => {
+      const { biweekly, monthly } = await seedDoneCalls();
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-15" })
+        .expect(200);
+      expect(res.body.callsReset).toBe(1);
+
+      const calls = await getCalls();
+      const bw = calls.find((c) => c._id === biweekly._id);
+      const mo = calls.find((c) => c._id === monthly._id);
+
+      expect(bw.done).toBe(false);
+      expect(bw.doneAt).toBeNull();
+      expect(mo.done).toBe(true); // monthly untouched on the 15th
+      expect(mo.doneAt).not.toBeNull();
+    });
+
+    test("resets ALL done calls on the last day of the month", async () => {
+      const { biweekly, monthly } = await seedDoneCalls();
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-31" })
+        .expect(200);
+      expect(res.body.callsReset).toBe(2);
+
+      const calls = await getCalls();
+      const bw = calls.find((c) => c._id === biweekly._id);
+      const mo = calls.find((c) => c._id === monthly._id);
+
+      expect(bw.done).toBe(false);
+      expect(bw.doneAt).toBeNull();
+      expect(mo.done).toBe(false);
+      expect(mo.doneAt).toBeNull();
+    });
+
+    test("treats Feb 28 as the last day of a non-leap February", async () => {
+      const { biweekly, monthly } = await seedDoneCalls();
+
+      // 2026 is not a leap year, so Feb 28 is the last day
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-02-28" })
+        .expect(200);
+      expect(res.body.callsReset).toBe(2);
+
+      const calls = await getCalls();
+      const bw = calls.find((c) => c._id === biweekly._id);
+      const mo = calls.find((c) => c._id === monthly._id);
+
+      expect(bw.done).toBe(false);
+      expect(mo.done).toBe(false);
+    });
+
+    test("does not reset any calls mid-month", async () => {
+      const { biweekly, monthly } = await seedDoneCalls();
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-10" })
+        .expect(200);
+      expect(res.body.callsReset).toBe(0);
+
+      const calls = await getCalls();
+      const bw = calls.find((c) => c._id === biweekly._id);
+      const mo = calls.find((c) => c._id === monthly._id);
+
+      expect(bw.done).toBe(true);
+      expect(bw.doneAt).not.toBeNull();
+      expect(mo.done).toBe(true);
+      expect(mo.doneAt).not.toBeNull();
+    });
+
+    test("leaves undone calls untouched on the 15th", async () => {
+      const undoneBiweekly = await createCall({
+        name: "Cousin",
+        frequency: "biweekly",
+      });
+      const undoneMonthly = await createCall({
+        name: "Plumber",
+        frequency: "monthly",
+      });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-15" })
+        .expect(200);
+      expect(res.body.callsReset).toBe(0);
+
+      const calls = await getCalls();
+      const bw = calls.find((c) => c._id === undoneBiweekly._id);
+      const mo = calls.find((c) => c._id === undoneMonthly._id);
+
+      expect(bw.done).toBe(false);
+      expect(bw.doneAt).toBeNull();
+      expect(bw.updatedAt).toBe(undoneBiweekly.updatedAt); // never written
+      expect(mo.done).toBe(false);
+      expect(mo.doneAt).toBeNull();
+      expect(mo.updatedAt).toBe(undoneMonthly.updatedAt); // never written
+    });
+
+    test("archives call_result for due biweekly calls (done and missed) on the 15th", async () => {
+      const done = await createCall({ name: "Grandma", frequency: "biweekly" });
+      const missed = await createCall({ name: "Cousin", frequency: "biweekly" });
+      const monthly = await createCall({
+        name: "Dentist",
+        frequency: "monthly",
+      });
+      await request(app).put(`/calls/${done._id}`).send({ done: true });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-15" })
+        .expect(200);
+
+      const events = await getCallResultEvents();
+      expect(events).toHaveLength(2); // monthly not due on the 15th
+
+      const doneEvent = events.find((e) => e.callId === done._id);
+      expect(doneEvent).toMatchObject({
+        type: "call_result",
+        callName: "Grandma",
+        frequency: "biweekly",
+        dueDate: "2026-03-15",
+        completed: true,
+      });
+      expect(doneEvent.doneAt).not.toBeNull();
+
+      const missedEvent = events.find((e) => e.callId === missed._id);
+      expect(missedEvent).toMatchObject({
+        type: "call_result",
+        callName: "Cousin",
+        frequency: "biweekly",
+        dueDate: "2026-03-15",
+        completed: false,
+        doneAt: null,
+      });
+
+      expect(events.find((e) => e.callId === monthly._id)).toBeUndefined();
+    });
+
+    test("archives call_result for ALL calls on the last day of the month", async () => {
+      const { biweekly, monthly } = await seedDoneCalls();
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-31" })
+        .expect(200);
+
+      const events = await getCallResultEvents();
+      expect(events).toHaveLength(2);
+      expect(events.map((e) => e.callId).sort()).toEqual(
+        [biweekly._id, monthly._id].sort(),
+      );
+      expect(events.every((e) => e.dueDate === "2026-03-31")).toBe(true);
+      expect(events.every((e) => e.completed === true)).toBe(true);
+    });
+
+    test("does not double-log call_result when cron re-runs for the same date", async () => {
+      await seedDoneCalls();
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-15" })
+        .expect(200);
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-15" })
+        .expect(200);
+
+      const events = await getCallResultEvents();
+      expect(events).toHaveLength(1); // biweekly only, logged once
+    });
+
+    test("logs no call_result mid-month", async () => {
+      await seedDoneCalls();
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-10" })
+        .expect(200);
+
+      expect(await getCallResultEvents()).toHaveLength(0);
     });
   });
 });
