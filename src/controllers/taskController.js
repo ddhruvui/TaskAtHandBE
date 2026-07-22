@@ -141,7 +141,13 @@ const updateTask = async (req, res) => {
 const deleteTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await Task.delete(id);
+    const { reason } = req.body || {};
+
+    if (reason !== undefined && typeof reason !== "string") {
+      return res.status(400).json({ error: "reason must be a string" });
+    }
+
+    const deleted = await Task.delete(id, reason ? reason.trim() : undefined);
 
     if (!deleted) {
       return res.status(404).json({ error: "Task not found" });

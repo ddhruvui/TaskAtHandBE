@@ -309,13 +309,35 @@ class Task {
 
   /**
    * Delete a task by id. Shifts remaining tasks in the same header to keep priorities contiguous.
+   *
+   * When an **undone** task is deleted manually, a `task_deleted` archive event
+   * is logged with the user's `reason` so the AI insights can treat abandoned
+   * tasks (and why they were dropped) as a signal. Deleting a *done* task logs
+   * nothing — it was already accomplished. Header-cascade deletes go through
+   * `deleteByHeader` and are intentionally not archived here.
    * @param {string} id
+   * @param {string} [reason]  Why the task was deleted (undone tasks only)
    * @returns {Promise<Object|null>} Deleted task or null
    */
-  static async delete(id) {
+  static async delete(id, reason) {
     const collection = await this.getCollection();
     const task = await this.findById(id);
     if (!task) return null;
+
+    if (!task.done) {
+      const header = await this.getHeaderForTask(task.headerId);
+      await Archive.log({
+        type: "task_deleted",
+        taskId: task._id.toString(),
+        taskName: task.name,
+        headerId: task.headerId,
+        headerName: header ? header.name : null,
+        ecdType: task.ecd ? task.ecd.type : null,
+        ecd: task.ecd || null,
+        reason: reason || null,
+        taskCreatedAt: task.createdAt || null,
+      });
+    }
 
     await collection.deleteOne({ _id: new ObjectId(id) });
 

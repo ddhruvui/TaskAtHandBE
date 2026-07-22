@@ -1,6 +1,6 @@
 # TaskAtHandBE
 
-Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoose)**. Entry point `src/server.js`; flow is routes → controllers → models. Daily cron in `src/cron/cronJob.js`, AI insights in `src/services/insightsService.js` (Anthropic API, `claude-opus-4-8`).
+Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoose)**. Entry point `src/server.js`; flow is routes → controllers → models. Daily cron in `src/cron/cronJob.js`, AI insights in `src/services/insightsService.js` (Anthropic API, `claude-sonnet-4-6`).
 
 ## Commands
 

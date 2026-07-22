@@ -12,7 +12,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
 - **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
-- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Anthropic API (`claude-opus-4-8`) and stored in the `Insights` collection
+- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Anthropic API (`claude-sonnet-4-6`) and stored in the `Insights` collection
 - **Swagger UI** — interactive API docs served at `/api-docs`
 - **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
 - **CORS enabled** — accepts requests from any origin
@@ -136,7 +136,7 @@ Server listens on **port 3002** by default.
 | `GET`    | `/tasks`     | List tasks for a header (`?headerId=` required) |
 | `POST`   | `/tasks`     | Create a task                                   |
 | `PUT`    | `/tasks/:id` | Update task fields, done status, or priority    |
-| `DELETE` | `/tasks/:id` | Delete a task                                   |
+| `DELETE` | `/tasks/:id` | Delete a task (optional `{ reason }`; archived for undone tasks) |
 
 ### Events
 
@@ -244,8 +244,8 @@ npm run cleartest
 | `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder, call resets) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
-| `archive.test.js`        | TaskArchive event log: cron archiving, reschedule logging, `GET /archive` |
-| `insights.test.js`       | Stats computation and the four `/insights` endpoints       |
+| `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |
+| `insights.test.js`       | Stats computation (incl. deletions) and the four `/insights` endpoints |
 | `done-at.test.js`        | `doneAt` lifecycle (set on done, cleared on undo/cron reset) |
 | `system.test.js`         | `GET /` and `GET /health` endpoints                        |
 
@@ -255,5 +255,5 @@ npm run cleartest
 - `headerId` is immutable after task creation
 - Priority values are 0-based and always kept contiguous by the model layer
 - Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
-- Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events
+- Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events, and manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
 - Insight generation runs at the end of each cron run when `ANTHROPIC_API_KEY` is set (skipped in tests); archive writes never throw, so they can't break task operations

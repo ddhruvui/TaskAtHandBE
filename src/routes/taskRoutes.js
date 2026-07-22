@@ -122,6 +122,20 @@ router.put("/:id", updateTask);
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: false
+ *       description: >
+ *         Optional deletion reason. When an undone task is deleted, the reason is
+ *         stored in the archive as a `task_deleted` event and surfaced to the AI
+ *         insights. Clients require it for undone tasks; done tasks ignore it.
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 example: "No longer relevant this week"
  *     responses:
  *       200:
  *         description: Deleted confirmation
@@ -132,6 +146,8 @@ router.put("/:id", updateTask);
  *               properties:
  *                 deleted:
  *                   type: string
+ *       400:
+ *         description: reason is not a string
  *       404:
  *         description: Task not found
  */

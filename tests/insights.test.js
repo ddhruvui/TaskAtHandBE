@@ -155,6 +155,42 @@ describe("Insights", () => {
         completed: 3,
         missed: 1,
         reschedules: 1,
+        deleted: 0,
+      });
+    });
+
+    test("aggregates task_deleted events into deletions and per-header counts", async () => {
+      await seedArchive([
+        { type: "task_deleted", taskId: "d1", taskName: "Learn cello", headerName: "Hobbies", ecdType: "date", reason: "too big, kept putting it off" },
+        { type: "task_deleted", taskId: "d2", taskName: "Old idea", headerName: "Hobbies", ecdType: null, reason: null },
+        { type: "task_deleted", taskId: "d3", taskName: "Duplicate", headerName: "Work", ecdType: "day_of_week", reason: "no longer needed" },
+      ]);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      expect(res.body.deletions.count).toBe(3);
+      expect(res.body.deletions.withReason).toBe(2);
+      expect(res.body.deletions.recent).toHaveLength(3);
+      const cello = res.body.deletions.recent.find(
+        (d) => d.taskName === "Learn cello",
+      );
+      expect(cello).toEqual({
+        taskName: "Learn cello",
+        headerName: "Hobbies",
+        ecdType: "date",
+        reason: "too big, kept putting it off",
+      });
+      expect(res.body.byHeader.Hobbies.deleted).toBe(2);
+      expect(res.body.byHeader.Work.deleted).toBe(1);
+    });
+
+    test("returns an empty deletions rollup when there are no task_deleted events", async () => {
+      await seedArchive(habitEvents);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      expect(res.body.deletions).toEqual({
+        count: 0,
+        withReason: 0,
+        recent: [],
       });
     });
 

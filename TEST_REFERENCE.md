@@ -412,7 +412,7 @@ Tests the four cron HTTP endpoints.
 
 ## tests/archive.test.js
 
-Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logging from `PUT /tasks/:id`, and the `GET /archive` endpoint. Cron runs use the date override `2026-03-08` (a Sunday), so "yesterday" is Sat `2026-03-07`.
+Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logging from `PUT /tasks/:id`, deletion logging from `DELETE /tasks/:id`, and the `GET /archive` endpoint. Cron runs use the date override `2026-03-08` (a Sunday), so "yesterday" is Sat `2026-03-07`.
 
 ### Cron Step 0 — archive yesterday's outcomes
 
@@ -441,6 +441,16 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | pushedLater=false when the ECD type changes away from date  | `date` → `day_of_week` logs the change but not as pushed later    |
 | does not log when the ECD is unchanged                      | Sending the identical ECD writes no archive event                 |
 
+### task_deleted — logged on manual delete of an undone task
+
+| Test                                                          | What it checks                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| logs a task_deleted event with the reason for an undone task  | Full event shape: `taskId`, `taskName`, `headerName`, `ecdType`, `ecd`, `reason` |
+| trims the reason before storing it                            | `"  too big  "` → `"too big"`; `ecdType: null` for a no-ECD task           |
+| logs task_deleted with reason=null when no reason is provided | Undone delete without a body still archives, `reason: null`                |
+| does NOT log task_deleted when a done task is deleted         | Done tasks were accomplished — no deletion event                           |
+| rejects a non-string reason with 400                          | `{ reason: {…} }` → 400 and no archive event                               |
+
 ### GET /archive
 
 | Test                                                  | What it checks                                    |
@@ -466,7 +476,9 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | returns an empty calls array when there are no call_result events | Habit-only archive → `calls: []`                                              |
 | computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
 | counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
-| rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types                                        |
+| rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types (incl. `deleted` field)                |
+| aggregates task_deleted events into deletions and per-header counts | 3 deletions (2 with reason) → `deletions.count 3`, `withReason 2`, `recent` shape; `byHeader.*.deleted` counts |
+| returns an empty deletions rollup when there are no task_deleted events | Habit-only archive → `deletions: { count: 0, withReason: 0, recent: [] }`   |
 | respects the days query param                                     | `?days=7` → `periodDays: 7`                                                      |
 
 ### GET /insights/latest

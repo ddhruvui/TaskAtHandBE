@@ -290,6 +290,86 @@ describe("TaskArchive event log", () => {
     });
   });
 
+  describe("task_deleted — logged on manual delete of an undone task", () => {
+    test("logs a task_deleted event with the reason for an undone task", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "Abandoned",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      const res = await request(app)
+        .delete(`/tasks/${t._id}`)
+        .send({ reason: "No longer relevant this week" })
+        .expect(200);
+      expect(res.body).toEqual({ deleted: t._id });
+
+      const events = await getArchiveEvents({ type: "task_deleted" });
+      expect(events).toHaveLength(1);
+      const e = events[0];
+      expect(e.taskId).toBe(t._id);
+      expect(e.taskName).toBe("Abandoned");
+      expect(e.headerName).toBe("Work");
+      expect(e.ecdType).toBe("date");
+      expect(e.ecd).toEqual({ type: "date", value: "2026-07-20" });
+      expect(e.reason).toBe("No longer relevant this week");
+    });
+
+    test("trims the reason before storing it", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({ name: "Trim me", headerId: h._id });
+
+      await request(app)
+        .delete(`/tasks/${t._id}`)
+        .send({ reason: "  too big  " })
+        .expect(200);
+
+      const events = await getArchiveEvents({ type: "task_deleted" });
+      expect(events).toHaveLength(1);
+      expect(events[0].reason).toBe("too big");
+      expect(events[0].ecdType).toBeNull();
+    });
+
+    test("logs task_deleted with reason=null when no reason is provided", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({ name: "No reason", headerId: h._id });
+
+      await request(app).delete(`/tasks/${t._id}`).expect(200);
+
+      const events = await getArchiveEvents({ type: "task_deleted" });
+      expect(events).toHaveLength(1);
+      expect(events[0].reason).toBeNull();
+    });
+
+    test("does NOT log task_deleted when a done task is deleted", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({ name: "Finished", headerId: h._id });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true }).expect(200);
+
+      await request(app)
+        .delete(`/tasks/${t._id}`)
+        .send({ reason: "ignored for done tasks" })
+        .expect(200);
+
+      const events = await getArchiveEvents({ type: "task_deleted" });
+      expect(events).toHaveLength(0);
+    });
+
+    test("rejects a non-string reason with 400", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({ name: "Bad reason", headerId: h._id });
+
+      await request(app)
+        .delete(`/tasks/${t._id}`)
+        .send({ reason: { not: "a string" } })
+        .expect(400);
+
+      const events = await getArchiveEvents({ type: "task_deleted" });
+      expect(events).toHaveLength(0);
+    });
+  });
+
   describe("GET /archive", () => {
     async function seedEvent(doc) {
       const db = await getDatabase();

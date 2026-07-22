@@ -233,6 +233,7 @@ them.
 | `task_result`      | Cron step 0           | A `day_of_month` / `day_of_year` task's outcome for one cycle    |
 | `task_completed`   | Cron step 5           | A one-time task captured (with `plannedFor`, `doneAt`) before deletion |
 | `task_rescheduled` | `Task.update`         | An ECD change, with `fromEcd`, `toEcd`, and `pushedLater` flag   |
+| `task_deleted`     | `Task.delete`         | An **undone** task deleted manually, with the user's `reason`: `{ taskId, taskName, headerId, headerName, ecdType, ecd, reason, taskCreatedAt }`. Logged only for undone tasks (done tasks log nothing); `reason` is `null` when none is supplied. Header-cascade deletes (`Task.deleteByHeader`) are **not** archived. |
 | `call_result`      | Cron step 7           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
 
 ```json
@@ -260,7 +261,7 @@ The `Insights` collection stores one AI coaching report per generation:
 {
   "generatedAt": "ISO 8601 datetime",
   "periodDays": 28,
-  "model": "claude-opus-4-8",
+  "model": "claude-sonnet-4-6",
   "stats": "exact computed stats the report was based on",
   "report": {
     "summary": "string",
@@ -268,6 +269,7 @@ The `Insights` collection stores one AI coaching report per generation:
     "habitsSlipping": ["string"],
     "taskInsights": ["string"],
     "procrastinationFlags": ["string"],
+    "deletionInsights": ["string"],
     "callReminders": ["string"],
     "suggestions": ["string"]
   }
@@ -285,6 +287,15 @@ stats array (per person: `scheduled`, `completed`, `completionRate`,
 `callReminders` is required in newly generated reports (empty array when no
 calls are set up) but absent from reports stored before the feature — clients
 must tolerate its absence.
+
+Manually deleting an **undone** task logs a `task_deleted` archive event with
+the user's stated `reason`. These feed insights as a `deletions` stats block
+(`{ count, withReason, recent }`, where `recent` items carry `taskName`,
+`headerName`, `ecdType`, `reason`) plus a `deleted` count in each `byHeader`
+bucket; the raw reasons ride along in the recent events. The report interprets
+them as abandoned intentions — separating healthy pruning from avoidance — in a
+required `deletionInsights` array (empty when nothing was deleted; absent from
+reports stored before the feature, so clients must tolerate its absence).
 
 ---
 
@@ -370,7 +381,7 @@ each period boundary:
 - After step 7, when `ANTHROPIC_API_KEY` is set (and not in test mode):
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
-  - Send stats + recent events + the previous report to `claude-opus-4-8` with a structured-output schema
+  - Send stats + recent events + the previous report to `claude-sonnet-4-6` with a structured-output schema
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
 
@@ -536,6 +547,14 @@ Updates a task. Handles the following cases:
 
 Deletes a task. Shifts priorities of remaining tasks in the same header down to keep contiguous.
 
+**Request body (optional)** — a deletion `reason`. When the deleted task is **undone**, the reason is archived as a `task_deleted` event and surfaced to AI insights; clients require it for undone tasks. Deleting a *done* task ignores the reason.
+
+```json
+{
+  "reason": "No longer relevant this week"
+}
+```
+
 **Response `200`**
 
 ```json
@@ -543,6 +562,8 @@ Deletes a task. Shifts priorities of remaining tasks in the same header down to 
   "deleted": "uuid"
 }
 ```
+
+**Response `400`** — `reason` is present but not a string.
 
 ---
 

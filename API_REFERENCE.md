@@ -486,10 +486,26 @@ Updates a task. All body fields are optional — send only what needs to change.
 
 Deletes a task. Remaining tasks in the same header are shifted to keep priorities contiguous.
 
+**Request body (optional):**
+
+```ts
+{
+  reason?: string; // Why the task is being deleted
+}
+```
+
+When the deleted task is **undone**, `reason` is stored in the archive as a `task_deleted` event and surfaced to AI insights. Clients require it for undone tasks; deleting a *done* task ignores it. Header-cascade deletes (via `DELETE /headers/:id`) do not archive per-task reasons.
+
 **Response `200`:**
 
 ```json
 { "deleted": "<taskId>" }
+```
+
+**Error `400`:** `reason` is present but not a string.
+
+```json
+{ "error": "reason must be a string" }
 ```
 
 **Error `404`:**
@@ -964,7 +980,7 @@ Returns raw TaskArchive events for the period, oldest first.
 | Parameter | Required | Description                                                                  |
 | --------- | -------- | ---------------------------------------------------------------------------- |
 | `days`    | No       | How many days back to fetch (default 28, max 365)                            |
-| `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`, `call_result` |
+| `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`, `task_deleted`, `call_result` |
 
 **Response `200`:**
 
@@ -1002,6 +1018,24 @@ Returns raw TaskArchive events for the period, oldest first.
 }
 ```
 
+`task_deleted` events are logged by the Task model when an **undone** task is deleted manually (see `DELETE /tasks/:id`), carrying the user's `reason`:
+
+```json
+{
+  "_id": "...",
+  "type": "task_deleted",
+  "taskId": "...",
+  "taskName": "Learn cello",
+  "headerId": "...",
+  "headerName": "Hobbies",
+  "ecdType": "date",
+  "ecd": { "type": "date", "value": "2026-08-01" },
+  "reason": "Too big, kept putting it off",
+  "taskCreatedAt": "2026-07-01T09:00:00.000Z",
+  "at": "2026-07-18T11:20:00.000Z"
+}
+```
+
 ---
 
 ## Insights API
@@ -1010,7 +1044,7 @@ Base path: `/insights`
 
 ### `GET /insights/stats?days=28`
 
-Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, per-header rollups, and per-person call completion (`calls` — from `call_result` events; calls are excluded from `byHeader` since they have no header).
+Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, manual-deletion counts (`deletions` — from `task_deleted` events), per-header rollups, and per-person call completion (`calls` — from `call_result` events; calls are excluded from `byHeader` since they have no header).
 
 **Response `200`** (abridged):
 
@@ -1037,7 +1071,14 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
   "reschedules": [
     { "taskName": "Write blog", "headerName": "Health", "total": 3, "pushedLater": 3 }
   ],
-  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3 } },
+  "deletions": {
+    "count": 2,
+    "withReason": 2,
+    "recent": [
+      { "taskName": "Learn cello", "headerName": "Hobbies", "ecdType": "date", "reason": "Too big, kept putting it off" }
+    ]
+  },
+  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3, "deleted": 0 } },
   "calls": [
     {
       "callName": "Grandma",
@@ -1065,7 +1106,7 @@ Most recent stored AI report.
   "_id": "...",
   "generatedAt": "2026-07-04T00:00:46.000Z",
   "periodDays": 28,
-  "model": "claude-opus-4-8",
+  "model": "claude-sonnet-4-6",
   "stats": { "...": "stats the report was based on" },
   "report": {
     "summary": "string",
@@ -1073,6 +1114,7 @@ Most recent stored AI report.
     "habitsSlipping": ["string"],
     "taskInsights": ["string"],
     "procrastinationFlags": ["string"],
+    "deletionInsights": ["string"],
     "callReminders": ["string"],
     "suggestions": ["string"]
   }
@@ -1080,6 +1122,8 @@ Most recent stored AI report.
 ```
 
 > `callReminders` (people to call: not yet called this period, repeat misses) is required in newly generated reports — an empty array when no calls are set up — but absent from reports stored before the Calls feature; clients must tolerate its absence.
+>
+> `deletionInsights` (patterns among manually-deleted undone tasks and their stated reasons — abandonment vs. healthy pruning) is likewise required in newly generated reports — an empty array when nothing was deleted — but absent from reports stored before this feature; clients must tolerate its absence.
 
 **Error `404`:**
 

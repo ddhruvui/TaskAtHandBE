@@ -15,13 +15,14 @@ function computeStats(events) {
   const recurringTasks = {};
   const completedTasks = [];
   const reschedulesByTask = {};
+  const deletedTasks = [];
   const byHeader = {};
   const callsByPerson = {};
 
   const headerBucket = (name) => {
     const key = name || "(no header)";
     if (!byHeader[key]) {
-      byHeader[key] = { completed: 0, missed: 0, reschedules: 0 };
+      byHeader[key] = { completed: 0, missed: 0, reschedules: 0, deleted: 0 };
     }
     return byHeader[key];
   };
@@ -117,6 +118,16 @@ function computeStats(events) {
         headerBucket(e.headerName).reschedules++;
         break;
       }
+      case "task_deleted": {
+        deletedTasks.push({
+          taskName: e.taskName,
+          headerName: e.headerName || null,
+          ecdType: e.ecdType || null,
+          reason: e.reason || null,
+        });
+        headerBucket(e.headerName).deleted++;
+        break;
+      }
     }
   }
 
@@ -209,6 +220,11 @@ function computeStats(events) {
     reschedules: Object.values(reschedulesByTask).sort(
       (a, b) => b.total - a.total,
     ),
+    deletions: {
+      count: deletedTasks.length,
+      withReason: deletedTasks.filter((d) => d.reason).length,
+      recent: deletedTasks.slice(-20),
+    },
     byHeader,
     calls: callStats,
   };
@@ -247,6 +263,12 @@ const REPORT_SCHEMA = {
       description:
         "Tasks showing avoidance (repeated reschedules, chronic misses) and the likely cause",
     },
+    deletionInsights: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Patterns among tasks the user manually deleted while still undone, read through their stated reasons: recurring abandonment, over-committing, scope-cutting, or headers where tasks are frequently dropped. Distinguish healthy pruning (genuinely no longer needed) from avoidance (too big, ran out of time, kept putting off). Empty array if no tasks were deleted this period.",
+    },
     callReminders: {
       type: "array",
       items: { type: "string" },
@@ -266,6 +288,7 @@ const REPORT_SCHEMA = {
     "habitsSlipping",
     "taskInsights",
     "procrastinationFlags",
+    "deletionInsights",
     "callReminders",
     "suggestions",
   ],
@@ -279,11 +302,13 @@ Definitions:
 - Everything else (one-time dated tasks, day_of_month, day_of_year) are "tasks".
 - "Calls" are people the user must phone on a cadence: "biweekly" means twice a month (periods 1st–14th and 15th–month-end), "monthly" means once a month. The called checkmark resets at each period boundary; a call_result with completed=false means that person was NOT called that period. currentCalls shows the live status for the current period.
 - A reschedule that pushes a date later is a procrastination signal, especially when repeated on the same task.
+- A "deletion" (task_deleted event) is a task the user removed *while it was still not done*, each carrying the user's stated reason. It represents an abandoned intention, not a completed one — treat the reason as the primary signal for WHY it was dropped. precomputedStats.deletions has the counts; the reasons live on the raw task_deleted events and byHeader.deleted counts them per header.
 
 Rules:
 - All numbers you cite must come from the provided precomputed stats — never recount from raw events. Use raw events only for patterns and context.
 - Be direct and specific: name the task, the day pattern, the number. No generic advice ("try to be more consistent") — every suggestion must name a concrete task and a concrete change.
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
+- For deletions: read each reason and separate healthy pruning ("no longer needed", "duplicate", priorities genuinely changed) from avoidance ("too big", "ran out of time", "kept putting it off"). Name the task and quote/paraphrase its reason. Flag repeat abandonment of the same intention or a header where tasks are frequently dropped. If there were no deletions, return an empty deletionInsights array.
 - If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (repeatedly ignored advice is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
 - For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.
@@ -324,7 +349,7 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   const client = new Anthropic();
 
   const response = await client.messages.create({
-    model: "claude-opus-4-8",
+    model: "claude-sonnet-4-6",
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
     output_config: { format: { type: "json_schema", schema: REPORT_SCHEMA } },
