@@ -317,7 +317,10 @@ async function step4MarkUndoneDayOfMonth(tasksCol, today) {
 /**
  * Step 5 — Delete completed date tasks and completed no-ECD tasks.
  * Each deleted task is archived first so completion history is preserved.
- * @returns {Promise<number>} Number of tasks deleted
+ * Deleted tasks linked from a long-term project (ProjectTask.todoTaskId)
+ * mark that project task done — the todo entry disappears but the project
+ * keeps it as a completed step.
+ * @returns {Promise<{tasksDeleted: number, projectTasksCompleted: number}>}
  */
 async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
   const tasks = await tasksCol
@@ -327,7 +330,7 @@ async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
     })
     .toArray();
 
-  if (tasks.length === 0) return 0;
+  if (tasks.length === 0) return { tasksDeleted: 0, projectTasksCompleted: 0 };
 
   await Archive.logMany(
     tasks.map((task) => ({
@@ -345,7 +348,13 @@ async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
 
   const ids = tasks.map((t) => t._id);
   const result = await tasksCol.deleteMany({ _id: { $in: ids } });
-  return result.deletedCount;
+
+  const { Project } = require("../models/Project");
+  const projectTasksCompleted = await Project.completeTasksByTodoIds(
+    ids.map((id) => id.toString()),
+  );
+
+  return { tasksDeleted: result.deletedCount, projectTasksCompleted };
 }
 
 /**
@@ -484,7 +493,8 @@ async function runCron(now) {
     await step2IncrementDayOfYear(tasksCol, today);
   const markedUndone3 = await step3MarkUndoneDayOfWeek(tasksCol, today);
   const markedUndone4 = await step4MarkUndoneDayOfMonth(tasksCol, today);
-  const tasksDeleted = await step5DeleteDoneDateTasks(tasksCol, headerNames);
+  const { tasksDeleted, projectTasksCompleted } =
+    await step5DeleteDoneDateTasks(tasksCol, headerNames);
   const headersReordered = await step6ReorderPriorities(
     tasksCol,
     headersCol,
@@ -498,6 +508,7 @@ async function runCron(now) {
     tasksMarkedUndone: markedUndone2 + markedUndone3 + markedUndone4,
     tasksClamped: tasksClamped1 + tasksClamped2,
     headersReordered,
+    projectTasksCompleted,
     outcomesArchived,
     callsReset,
   };

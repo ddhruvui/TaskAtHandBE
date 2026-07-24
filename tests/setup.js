@@ -20,6 +20,7 @@ beforeAll(async () => {
       "Events-Test",
       "Affirmations-Test",
       "Goals-Test",
+      "Projects-Test",
       "Calls-Test",
       "TaskArchive-Test",
       "Insights-Test",

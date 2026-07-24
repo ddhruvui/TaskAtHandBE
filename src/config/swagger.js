@@ -29,6 +29,10 @@ const options = {
         name: "Calls",
         description: "Biweekly/monthly call reminder management endpoints",
       },
+      {
+        name: "Projects",
+        description: "Long-term project (multi-step) management endpoints",
+      },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "Archive", description: "Task history (TaskArchive) endpoints" },
       { name: "Insights", description: "Stats and AI insight report endpoints" },
@@ -143,6 +147,60 @@ const options = {
             updatedAt: { type: "string", format: "date-time" },
           },
         },
+        ProjectTask: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string", example: "get data from EODHD" },
+            date: {
+              type: "string",
+              nullable: true,
+              default: null,
+              description:
+                'Target date ("YYYY-MM-DD") or null. When set, the client mirrors the task into the todo under a header named after the project.',
+              example: "2026-08-01",
+            },
+            done: { type: "boolean", default: false, example: false },
+            todoTaskId: {
+              type: "string",
+              nullable: true,
+              default: null,
+              description:
+                "_id of the linked todo task while one exists; cleared by the cron when it deletes the done todo task and marks this task done.",
+              example: "507f1f77bcf86cd799439011",
+            },
+          },
+        },
+        Project: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Automated Stock Market" },
+            priority: { type: "integer", example: 0 },
+            tasks: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ProjectTask" },
+              description:
+                "Ordered task list; undone tasks always come before done tasks",
+              example: [
+                {
+                  name: "get data from EODHD",
+                  date: "2026-08-01",
+                  done: false,
+                  todoTaskId: "507f1f77bcf86cd799439011",
+                },
+                {
+                  name: "deploy to cpu",
+                  date: null,
+                  done: true,
+                  todoTaskId: null,
+                },
+              ],
+            },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
         Call: {
           type: "object",
           properties: {
@@ -185,6 +243,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersReordered: { type: "integer", example: 4 },
+            projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
           },
         },
@@ -200,6 +259,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersReordered: { type: "integer", example: 4 },
+            projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
           },
         },

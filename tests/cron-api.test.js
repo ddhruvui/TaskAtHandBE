@@ -40,6 +40,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -56,6 +57,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        projectTasksCompleted,
         callsReset,
       } = res.body;
 
@@ -64,6 +66,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        projectTasksCompleted,
         callsReset,
       ]) {
         expect(typeof val).toBe("number");
@@ -127,6 +130,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -148,6 +152,9 @@ describe("Cron API Endpoints", () => {
       expect(statusRes.body.tasksClamped).toBe(runRes.body.tasksClamped);
       expect(statusRes.body.headersReordered).toBe(
         runRes.body.headersReordered,
+      );
+      expect(statusRes.body.projectTasksCompleted).toBe(
+        runRes.body.projectTasksCompleted,
       );
       expect(statusRes.body.callsReset).toBe(runRes.body.callsReset);
     });
@@ -171,6 +178,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
       expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -187,6 +195,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        projectTasksCompleted,
         callsReset,
       } = res.body;
 
@@ -195,6 +204,7 @@ describe("Cron API Endpoints", () => {
         tasksMarkedUndone,
         tasksClamped,
         headersReordered,
+        projectTasksCompleted,
         callsReset,
       ]) {
         expect(typeof val).toBe("number");
@@ -220,6 +230,7 @@ describe("Cron API Endpoints", () => {
       expect(detailsRes.body).toHaveProperty("tasksMarkedUndone");
       expect(detailsRes.body).toHaveProperty("tasksClamped");
       expect(detailsRes.body).toHaveProperty("headersReordered");
+      expect(detailsRes.body).toHaveProperty("projectTasksCompleted");
       expect(detailsRes.body).toHaveProperty("callsReset");
     });
 

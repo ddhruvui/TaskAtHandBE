@@ -219,6 +219,62 @@
 
 ---
 
+### Project (long-term project, multi-step)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "priority": "number (0-based, contiguous across projects)",
+  "tasks": [
+    {
+      "name": "string",
+      "date": "YYYY-MM-DD | null",
+      "done": "boolean",
+      "todoTaskId": "string | null"
+    }
+  ],
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- `priority` is managed exactly like header priority: new projects append at
+  the end (`count`), moves shift the affected neighbors, deletes close the
+  gap — always contiguous `0..n-1`
+- `tasks` is an ordered array (may be empty; defaults to `[]` on create) of
+  objects with a non-empty `name` (trimmed), an optional `date`
+  (`"YYYY-MM-DD"` or `null`, default `null`), an optional `done` boolean
+  (default `false`) and an optional `todoTaskId` (string or `null`, default
+  `null`)
+- `tasks` is replaced wholesale on update — clients send the full list to
+  add, rename, reorder, remove or change tasks. On **every** write the
+  server re-sorts the list so undone tasks come before done tasks (stable) —
+  marking a task done moves it to the bottom, same barrier as the todo
+- The todo connection is client-driven (same find-or-create pattern as goals
+  and event scheduling): giving a project task a `date` creates a one-time
+  `date`-ECD Task in the todo under a Header named after the project (reused
+  case-insensitively, created when missing) and stores its `_id` in
+  `todoTaskId`. Clients keep both sides in sync: toggling done on either
+  side flips the other, removing the date deletes the todo task, editing
+  the todo task's name/date updates the project task (a cleared or
+  recurring ECD sets the project date to `null`, keeping the link),
+  reordering on either side mirrors the relative order of linked tasks on
+  the other, deleting the todo task (or its header) clears `todoTaskId`
+  **and** `date` on the project task, and renaming the project renames the
+  header
+- Cron step 5 completes the loop: when it deletes a done todo task whose
+  `_id` appears as a `todoTaskId`, the project task is marked `done: true`
+  with `todoTaskId` cleared (`date` is kept for the record) and the list is
+  re-sorted — the task leaves the todo but is retained in the project as a
+  completed step
+- Deleting a project never touches headers or tasks created from its tasks
+
+---
+
 ### TaskArchive (event log)
 
 Append-only history collection (`TaskArchive`, or `TaskArchive-Test` in test
@@ -346,6 +402,12 @@ outcome is only knowable at the following midnight:
 - For every task with `ecd.type === "date"` (or no ECD):
   - If `done === true` → archive a `task_completed` event (preserving `plannedFor`, `taskCreatedAt`, `doneAt`, `headerName`), then **delete** the task
   - If `done === false` → do nothing
+- After deleting, sync long-term projects: for every project task whose
+  `todoTaskId` matches a deleted task's `_id`, set `done = true`, clear
+  `todoTaskId` (keep `date` for the record) and re-sort the project's task
+  list so done tasks sit at the bottom. The task leaves the todo but is
+  retained in the project as a completed step. Counted in the run stats as
+  `projectTasksCompleted`
 
 #### Step 6 — Reorder priorities per header
 
@@ -820,6 +882,78 @@ Deletes a goal. Headers/tasks previously created from its steps remain.
 
 ---
 
+### Projects
+
+#### `GET /projects`
+
+Returns all projects sorted by `priority` ascending.
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Automated Stock Market",
+    "priority": 0,
+    "tasks": [
+      {
+        "name": "get data from EODHD",
+        "date": "2026-08-01",
+        "done": false,
+        "todoTaskId": "uuid"
+      },
+      {
+        "name": "get data from Nasdaq",
+        "date": null,
+        "done": false,
+        "todoTaskId": null
+      }
+    ],
+    "createdAt": "ISO 8601 datetime",
+    "updatedAt": "ISO 8601 datetime"
+  }
+]
+```
+
+---
+
+#### `POST /projects`
+
+Creates a project. `name` required (non-empty, trimmed); `tasks` optional
+(defaults to `[]`, validated and re-sorted undone-first as described in the
+model rules). `priority` is auto-assigned (appended at the end).
+
+**Response `201`** — the created project.
+
+---
+
+#### `PUT /projects/:id`
+
+Updates `name`, `tasks` and/or `priority`. `tasks` is replaced wholesale and
+re-sorted so done tasks sit at the bottom; `priority` moves shift the other
+projects to stay contiguous (same as headers).
+
+**Response `200`** — the updated project. **`400`** on validation errors
+(including out-of-range priority), **`404`** when not found.
+
+---
+
+#### `DELETE /projects/:id`
+
+Deletes a project and shifts remaining priorities. Headers/tasks previously
+created from its dated tasks remain.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
 ### Cron
 
 #### `POST /cron/run`
@@ -831,7 +965,7 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
 2. Mark undone: `day_of_year` _(daily — advance year and reset when today matches the task's month/day)_
 3. Mark undone: `day_of_week`
 4. Mark undone: `day_of_month`
-5. Archive + delete completed `date` tasks
+5. Archive + delete completed `date` tasks (and mark linked long-term project tasks done)
 6. Reorder priorities per header
 7. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
 8. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set — not a numbered step)_
@@ -845,6 +979,7 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
   "headersReordered": 3,
+  "projectTasksCompleted": 1,
   "outcomesArchived": 4,
   "callsReset": 0,
   "insightGenerated": true
@@ -866,6 +1001,7 @@ Manually triggers the cron job. No request body required. Runs the same steps as
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
   "headersReordered": 3,
+  "projectTasksCompleted": 1,
   "callsReset": 0
 }
 ```
@@ -885,6 +1021,7 @@ Returns metadata about the last cron run.
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
   "headersReordered": 3,
+  "projectTasksCompleted": 1,
   "callsReset": 0
 }
 ```
@@ -904,6 +1041,7 @@ Returns metadata about the last cron run. Alias for `GET /cron/status`.
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
   "headersReordered": 3,
+  "projectTasksCompleted": 1,
   "callsReset": 0
 }
 ```

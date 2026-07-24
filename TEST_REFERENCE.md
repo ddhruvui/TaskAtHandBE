@@ -161,6 +161,42 @@ Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/
 
 ---
 
+## tests/projects.test.js
+
+Projects CRUD — long-term projects with ordered task lists, header-style priorities and a done/undone barrier inside each project (the todo connection is client-driven; the cron side is covered in `chron.test.js`).
+
+| Test                                                      | What it checks                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| returns empty array when no projects exist                | `GET /projects` returns `[]` on a clean DB                                     |
+| creates a project with a task list (defaults applied)     | `POST /projects` → 201 with `_id`, `name`, `priority: 0`, tasks defaulted (`date: null`, `done: false`, `todoTaskId: null`), timestamps |
+| creates a project without tasks (defaults to empty list)  | `POST /projects { name }` → 201 with `tasks: []`                               |
+| appends priorities contiguously                           | Three creates get priorities 0, 1, 2                                           |
+| sorts done tasks to the bottom on create                  | `[done, undone, done]` list is stored as `[undone, done, done]` (stable)       |
+| trims whitespace from name and task names                 | `"  Trimmed  "` → `"Trimmed"`; task names trimmed too                          |
+| rejects missing name                                      | `POST /projects { tasks }` → 400                                               |
+| rejects empty name                                        | `{ name: "  " }` → 400                                                         |
+| rejects tasks that are not an array                       | `{ tasks: "get data" }` → 400                                                  |
+| rejects tasks that are plain strings                      | `{ tasks: ["get data"] }` → 400 (tasks must be objects)                        |
+| rejects tasks with empty names                            | `{ tasks: [{ name: "  " }] }` → 400                                            |
+| rejects tasks with an invalid date format                 | `{ date: "1/8/2026" }` → 400 (must be `YYYY-MM-DD` or null)                    |
+| rejects tasks with a non-boolean done                     | `{ done: "yes" }` → 400                                                        |
+| returns all projects sorted by priority ascending         | `GET /projects` array is ascending by `priority` (0, 1, 2)                     |
+| updates project name                                      | `PUT /projects/:id { name }` → 200, tasks untouched                            |
+| replaces tasks wholesale (dates, links, done → bottom)    | `PUT` with a full list persists dates/`todoTaskId` and re-sorts done tasks to the bottom |
+| allows clearing a task date with null                     | `{ date: null }` → 200 with `date: null`                                       |
+| allows clearing tasks with an empty array                 | `{ tasks: [] }` → 200 with `tasks: []`                                         |
+| moves a project up and shifts others (priority contiguity)| Moving priority 2→0 shifts the others to 1, 2                                  |
+| moves a project down and shifts others                    | Moving priority 0→2 shifts the others to 0, 1                                  |
+| rejects an out-of-range priority                          | `{ priority: 99 }` → 400                                                       |
+| rejects a negative priority                               | `{ priority: -1 }` → 400                                                       |
+| rejects tasks with an invalid date (PUT)                  | `{ date: "2026/08/01" }` → 400                                                 |
+| rejects empty name (PUT)                                  | `{ name: "" }` → 400                                                           |
+| returns 404 for unknown id (PUT)                          | Fake ObjectId → 404                                                            |
+| deletes a project and shifts remaining priorities         | `DELETE /projects/:id` → `{ deleted: id }`; remaining priorities close the gap |
+| returns 404 when deleting again                           | Second delete → 404                                                            |
+
+---
+
 ## tests/business-logic.test.js
 
 Validates the priority/ordering rules the spec defines.
@@ -361,6 +397,9 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | deletes done date tasks and leaves undone date tasks            | Step 5: done `date` tasks deleted; undone `date` tasks untouched       |
 | deletes done no-ecd tasks                                       | Step 5: done tasks with `ecd: null` are also archived and deleted      |
 | does not delete done recurring tasks (dow, dom, doy)            | Step 5: recurring ECD types are never deleted, even when done          |
+| marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted | Step 5 project sync: deleted done todo task → matching project task `done: true`, `todoTaskId: null`, `date` kept, re-sorted below undone tasks; `projectTasksCompleted: 1` |
+| leaves project tasks alone when the linked todo task is not done | Step 5 project sync: undone linked todo task survives; project task stays undone and linked; `projectTasksCompleted: 0` |
+| does not touch unlinked project tasks when other done tasks are deleted | Step 5 project sync: deletions without a matching `todoTaskId` never flip project tasks |
 | marks done day_of_week tasks undone when today's day matches    | Step 3: `done: true` → `done: false` when day name matches             |
 | does not affect day_of_week tasks whose day does not match      | Step 3: no change when today's day is not in `ecd.value`               |
 | marks done day_of_month tasks undone when today's date matches  | Step 4: same logic for day-of-month                                    |
@@ -390,20 +429,20 @@ Tests the four cron HTTP endpoints.
 | Test                                                    | What it checks                                                                                  |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | returns 404 when cron has never run                     | `GET /cron/status` before any run → 404 with `{ error }`                                        |
-| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, callsReset }` |
+| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, callsReset }` |
 | ranAt is a valid ISO 8601 datetime string               | `ranAt` parses as a valid date and round-trips via `.toISOString()`                             |
-| numeric stat fields are non-negative integers           | All 5 stat fields (including `callsReset`) are integers ≥ 0                                     |
+| numeric stat fields are non-negative integers           | All 6 stat fields (including `projectTasksCompleted` and `callsReset`) are integers ≥ 0         |
 | accepts an optional date override in body               | `{ date: "2026-01-01T00:00:00.000Z" }` → `ranAt` reflects that date                             |
 | tasksDeleted reflects done date tasks removed           | Creates a done `date` task, runs cron, confirms it's gone and `tasksDeleted ≥ 1`                |
-| returns 200 with correct shape after cron has run       | `GET /cron/status` after a run → 200 with all 6 fields (including `callsReset`)                 |
+| returns 200 with correct shape after cron has run       | `GET /cron/status` after a run → 200 with all 7 fields (including `projectTasksCompleted` and `callsReset`) |
 | lastRanAt matches the most recent POST /cron/run ranAt  | Status `lastRanAt` equals the last run's `ranAt`                                                |
-| status numeric fields match the last run stats          | All 5 counters in status (including `callsReset`) match what the last run returned              |
+| status numeric fields match the last run stats          | All 6 counters in status (including `projectTasksCompleted` and `callsReset`) match what the last run returned |
 | lastRanAt does not contain the ranAt key (no duplicate) | Status response has `lastRanAt` but not `ranAt`                                                 |
 | GET /cron/run returns correct response shape            | `GET /cron/run` → same `{ ranAt, ... }` shape as POST, no body needed                           |
 | GET /cron/run ranAt is a valid ISO 8601 datetime string | `ranAt` parses and round-trips correctly                                                        |
-| GET /cron/run numeric stat fields are non-negative      | All 5 stat fields (including `callsReset`) are integers ≥ 0                                     |
+| GET /cron/run numeric stat fields are non-negative      | All 6 stat fields (including `projectTasksCompleted` and `callsReset`) are integers ≥ 0         |
 | GET /cron/run updates /cron/status lastRanAt            | After `GET /cron/run`, status `lastRanAt` reflects the new run                                  |
-| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, callsReset }`    |
+| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, callsReset }` |
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |

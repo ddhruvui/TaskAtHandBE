@@ -154,6 +154,51 @@ created headers or tasks.
 
 ---
 
+### Project
+
+```typescript
+interface ProjectTask {
+  name: string; // Task/step name (required), e.g. "get data from EODHD"
+  date: string | null; // "YYYY-MM-DD" target date or null (default: null)
+  done: boolean; // Completion status (default: false)
+  todoTaskId: string | null; // _id of the linked todo Task, or null (default: null)
+}
+
+interface Project {
+  _id: string; // MongoDB ObjectId
+  name: string; // Project name (required), e.g. "Automated Stock Market"
+  priority: number; // 0-based global priority (0 = highest); auto-managed
+  tasks: ProjectTask[]; // Ordered task list (may be empty); undone before done
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+Projects are long-term efforts (e.g. "Automated Stock Market") broken into
+ordered tasks/steps (e.g. "get data from EODHD", "deploy to cpu"). Projects
+carry a contiguous 0-based `priority` exactly like headers (created at the
+end, moves shift neighbors, deletes close the gap), and within a project the
+task list always keeps undone tasks before done tasks (the server re-sorts on
+every write, so marking a task done moves it to the bottom).
+
+The todo connection is client-driven, mirroring goals/events: giving a
+project task a `date` creates a one-time `date`-ECD Task in the todo under a
+header named after the project (reused case-insensitively when it exists,
+created otherwise) and stores its `_id` in `todoTaskId`. Marking either side
+done syncs the other; editing the todo task's name or date updates the
+project task too (clearing the date — or switching to a recurring ECD — sets
+the project date to `null`, keeping the link), and reordering on either side
+mirrors the relative order of linked tasks on the other. When the nightly
+cron deletes the done todo task
+(step 5), it marks the linked project task `done: true` and clears
+`todoTaskId` — the task disappears from the todo but is retained in the
+project as a completed step (its `date` is kept for the record). Deleting the
+todo task (or its header) instead unlinks the project task: the client clears
+`todoTaskId` **and** `date`, leaving it undone. Deleting a project never
+touches created headers or tasks.
+
+---
+
 ## Error Response Format
 
 All errors return a JSON object with an `error` field:
@@ -834,6 +879,100 @@ Deletes a goal. Tasks previously added to the todo from its steps are untouched.
 
 ---
 
+## Projects API
+
+Base path: `/projects`
+
+### `GET /projects`
+
+Returns all projects sorted by `priority` ascending.
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "name": "Automated Stock Market",
+    "priority": 0,
+    "tasks": [
+      {
+        "name": "get data from EODHD",
+        "date": "2026-08-01",
+        "done": false,
+        "todoTaskId": "..."
+      },
+      { "name": "get data from Nasdaq", "date": null, "done": false, "todoTaskId": null }
+    ],
+    "createdAt": "2026-07-24T00:00:00.000Z",
+    "updatedAt": "2026-07-24T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `POST /projects`
+
+Creates a new project. Priority is auto-assigned (appended at the end).
+
+**Request Body:**
+
+```json
+{
+  "name": "Automated Stock Market",
+  "tasks": [
+    { "name": "get data from EODHD", "date": "2026-08-01" },
+    { "name": "get data from Nasdaq" }
+  ]
+}
+```
+
+| Field   | Required | Type          | Notes                                                                            |
+| ------- | -------- | ------------- | -------------------------------------------------------------------------------- |
+| `name`  | Yes      | string        | Non-empty; trimmed                                                                |
+| `tasks` | No       | ProjectTask[] | Defaults to `[]`. Each task needs a non-empty `name` (trimmed); `date` optional (`"YYYY-MM-DD"` or `null`, default `null`); `done` optional boolean (default `false`); `todoTaskId` optional string/`null` (default `null`). The list is re-sorted so undone tasks come before done tasks |
+
+**Response `201`:** the created project.
+
+**Error `400`:**
+
+```json
+{ "error": "Task date must be a YYYY-MM-DD string or null" }
+```
+
+---
+
+### `PUT /projects/:id`
+
+Updates a project's `name`, `tasks` and/or `priority`. All fields are
+optional but must pass the same validation as `POST /projects` when present.
+`tasks` is replaced wholesale — send the full list to add, rename, reorder,
+remove or change the date/done state of tasks (an empty array clears them;
+the server re-sorts so done tasks sit at the bottom). Priority changes shift
+the other projects to keep contiguous `0..n-1` order, same as headers.
+
+**Response `200`:** the updated project.
+**Error `400`:** validation error (including out-of-range priority).
+**Error `404`:** project not found.
+
+---
+
+### `DELETE /projects/:id`
+
+Deletes a project and shifts remaining project priorities. Tasks previously
+added to the todo from its dated tasks are untouched.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** project not found.
+
+---
+
 ## Cron Job
 
 The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/UTC` timezone) and performs the following steps to maintain task state and history.
@@ -847,7 +986,7 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 2    | Every day          | When today matches a `day_of_year` task's month/day (and its stored year is in the past), advance the year to the current year and mark the task undone; on Feb 28 of a non-leap year, past Feb 29 values are clamped to Feb 28 |
 | 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone (`doneAt` cleared) |
 | 4    | Every day          | Mark tasks with a `day_of_month` ECD containing today's date as undone (`doneAt` cleared) |
-| 5    | Every day          | Archive then delete tasks that are **done** and have a `date` ECD or no ECD     |
+| 5    | Every day          | Archive then delete tasks that are **done** and have a `date` ECD or no ECD; deleted tasks linked from a long-term project (`ProjectTask.todoTaskId`) mark that project task `done` (link cleared, `date` kept, task re-sorted to the bottom of the project) |
 | 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
 | 7    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
 | —    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
@@ -867,6 +1006,7 @@ Returns stats from the most recent cron run.
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
   "headersReordered": 4,
+  "projectTasksCompleted": 1,
   "callsReset": 0
 }
 ```
@@ -904,6 +1044,7 @@ Manually triggers the cron job with an optional date override in the request bod
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
   "headersReordered": 4,
+  "projectTasksCompleted": 1,
   "outcomesArchived": 5,
   "callsReset": 0,
   "insightGenerated": true
@@ -931,6 +1072,7 @@ Manually triggers the cron job. No request body needed.
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
   "headersReordered": 4,
+  "projectTasksCompleted": 1,
   "outcomesArchived": 5,
   "callsReset": 0,
   "insightGenerated": true
@@ -958,6 +1100,7 @@ Returns stats from the most recent cron run. Alias for `GET /cron/status`.
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
   "headersReordered": 4,
+  "projectTasksCompleted": 1,
   "callsReset": 0
 }
 ```
@@ -1193,10 +1336,10 @@ Valid day abbreviations: `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`
 
 ## Collections
 
-| Environment               | Headers        | Tasks        | Events        | Affirmations        | Goals        | Archive            | Insights        |
-| ------------------------- | -------------- | ------------ | ------------- | ------------------- | ------------ | ------------------ | --------------- |
-| Production                | `Headers`      | `Tasks`      | `Events`      | `Affirmations`      | `Goals`      | `TaskArchive`      | `Insights`      |
-| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `Affirmations-Test` | `Goals-Test` | `TaskArchive-Test` | `Insights-Test` |
+| Environment               | Headers        | Tasks        | Events        | Affirmations        | Goals        | Projects        | Calls        | Archive            | Insights        |
+| ------------------------- | -------------- | ------------ | ------------- | ------------------- | ------------ | --------------- | ------------ | ------------------ | --------------- |
+| Production                | `Headers`      | `Tasks`      | `Events`      | `Affirmations`      | `Goals`      | `Projects`      | `Calls`      | `TaskArchive`      | `Insights`      |
+| Test (`USE_TEST_DB=true`) | `Headers-Test` | `Tasks-Test` | `Events-Test` | `Affirmations-Test` | `Goals-Test` | `Projects-Test` | `Calls-Test` | `TaskArchive-Test` | `Insights-Test` |
 
 ---
 

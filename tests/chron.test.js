@@ -7,6 +7,7 @@ async function clearCollections() {
   await db.collection("Headers-Test").deleteMany({});
   await db.collection("Tasks-Test").deleteMany({});
   await db.collection("Calls-Test").deleteMany({});
+  await db.collection("Projects-Test").deleteMany({});
   await db.collection("TaskArchive-Test").deleteMany({});
 }
 
@@ -36,6 +37,16 @@ async function getTasksForHeader(headerId) {
 async function createCall(data) {
   const res = await request(app).post("/calls").send(data);
   return res.body;
+}
+
+async function createProject(data) {
+  const res = await request(app).post("/projects").send(data);
+  return res.body;
+}
+
+async function getProject(id) {
+  const res = await request(app).get("/projects");
+  return res.body.find((p) => p._id === id);
 }
 
 async function getCalls() {
@@ -138,6 +149,105 @@ describe("Cron Job", () => {
       expect(ids).toContain(dow._id);
       expect(ids).toContain(dom._id);
       expect(ids).toContain(doy._id);
+    });
+  });
+
+  describe("Step 5 — Long-term project task sync", () => {
+    test("marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted", async () => {
+      const h = await createHeader("Automated Stock Market");
+      const todoTask = await createTask({
+        name: "get data from EODHD",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-01" },
+      });
+      const project = await createProject({
+        name: "Automated Stock Market",
+        tasks: [
+          {
+            name: "get data from EODHD",
+            date: "2026-07-01",
+            todoTaskId: todoTask._id,
+          },
+          { name: "get data from Nasdaq" },
+        ],
+      });
+
+      await request(app).put(`/tasks/${todoTask._id}`).send({ done: true });
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.projectTasksCompleted).toBe(1);
+
+      // Todo task is gone from the todo…
+      const tasks = await getTasksForHeader(h._id);
+      expect(tasks.map((t) => t._id)).not.toContain(todoTask._id);
+
+      // …but retained in the project as done, at the bottom
+      const updated = await getProject(project._id);
+      expect(updated.tasks).toEqual([
+        {
+          name: "get data from Nasdaq",
+          date: null,
+          done: false,
+          todoTaskId: null,
+        },
+        {
+          name: "get data from EODHD",
+          date: "2026-07-01",
+          done: true,
+          todoTaskId: null,
+        },
+      ]);
+    });
+
+    test("leaves project tasks alone when the linked todo task is not done", async () => {
+      const h = await createHeader("Automated Stock Market");
+      const todoTask = await createTask({
+        name: "get data from EODHD",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-01" },
+      });
+      const project = await createProject({
+        name: "Automated Stock Market",
+        tasks: [
+          {
+            name: "get data from EODHD",
+            date: "2026-07-01",
+            todoTaskId: todoTask._id,
+          },
+        ],
+      });
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.projectTasksCompleted).toBe(0);
+
+      const tasks = await getTasksForHeader(h._id);
+      expect(tasks.map((t) => t._id)).toContain(todoTask._id);
+
+      const updated = await getProject(project._id);
+      expect(updated.tasks[0].done).toBe(false);
+      expect(updated.tasks[0].todoTaskId).toBe(todoTask._id);
+    });
+
+    test("does not touch unlinked project tasks when other done tasks are deleted", async () => {
+      const h = await createHeader("H");
+      const unrelated = await createTask({
+        name: "Unrelated done task",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-01" },
+      });
+      await request(app).put(`/tasks/${unrelated._id}`).send({ done: true });
+
+      const project = await createProject({
+        name: "Automated Stock Market",
+        tasks: [{ name: "get data from EODHD", date: "2026-07-01" }],
+      });
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.tasksDeleted).toBeGreaterThanOrEqual(1);
+      expect(res.body.projectTasksCompleted).toBe(0);
+
+      const updated = await getProject(project._id);
+      expect(updated.tasks[0].done).toBe(false);
     });
   });
 

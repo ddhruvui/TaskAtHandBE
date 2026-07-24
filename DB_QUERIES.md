@@ -174,6 +174,36 @@ db.Calls.find({ frequency: "biweekly", done: true });
 
 ---
 
+## Projects Queries
+
+The `Projects` collection (`Projects-Test` when `USE_TEST_DB=true`) holds
+long-term projects with embedded task lists; `todoTaskId` links a dated task
+to its todo entry until the cron completes it.
+
+### All projects in display order
+
+```javascript
+db.Projects.find().sort({ priority: 1 });
+```
+
+### Projects with a task still linked to the todo
+
+```javascript
+db.Projects.find({ "tasks.todoTaskId": { $ne: null } });
+```
+
+### Project tasks the next cron run will mark done (linked todo task already done)
+
+```javascript
+const doneIds = db.Tasks.find(
+  { done: true, $or: [{ "ecd.type": "date" }, { ecd: null }] },
+  { _id: 1 },
+).toArray().map((t) => t._id.toString());
+db.Projects.find({ "tasks.todoTaskId": { $in: doneIds } });
+```
+
+---
+
 ## Insights Queries
 
 The `Insights` collection (`Insights-Test` in test mode) stores the daily AI
