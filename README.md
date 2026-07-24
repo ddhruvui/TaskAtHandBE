@@ -135,7 +135,7 @@ Server listens on **port 3002** by default.
 | -------- | ------------ | ----------------------------------------------- |
 | `GET`    | `/tasks`     | List tasks for a header (`?headerId=` required) |
 | `POST`   | `/tasks`     | Create a task                                   |
-| `PUT`    | `/tasks/:id` | Update task fields, done status, or priority    |
+| `PUT`    | `/tasks/:id` | Update task fields, done status, or priority (optional `{ reason }` archived on a postpone) |
 | `DELETE` | `/tasks/:id` | Delete a task (optional `{ reason }`; archived for undone tasks) |
 
 ### Events
@@ -255,5 +255,5 @@ npm run cleartest
 - `headerId` is immutable after task creation
 - Priority values are 0-based and always kept contiguous by the model layer
 - Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
-- Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events, and manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
+- Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events — a postpone (one-time date pushed later) can carry an optional `reason`, and the AI treats a reason-less postpone as procrastination but a valid reason as a legitimate deferral. Manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
 - Insight generation runs at the end of each cron run when `ANTHROPIC_API_KEY` is set (skipped in tests); archive writes never throw, so they can't break task operations

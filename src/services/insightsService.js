@@ -110,11 +110,25 @@ function computeStats(events) {
             headerName: e.headerName,
             total: 0,
             pushedLater: 0,
+            // Postpones split by whether the user justified them: no-reason
+            // pushes are unexcused procrastination, reasons are for the AI to judge.
+            pushedLaterWithReason: 0,
+            pushedLaterNoReason: 0,
+            reasons: [],
           };
         }
-        reschedulesByTask[key].taskName = e.taskName;
-        reschedulesByTask[key].total++;
-        if (e.pushedLater) reschedulesByTask[key].pushedLater++;
+        const bucket = reschedulesByTask[key];
+        bucket.taskName = e.taskName;
+        bucket.total++;
+        if (e.pushedLater) {
+          bucket.pushedLater++;
+          if (e.reason) {
+            bucket.pushedLaterWithReason++;
+            bucket.reasons.push(e.reason);
+          } else {
+            bucket.pushedLaterNoReason++;
+          }
+        }
         headerBucket(e.headerName).reschedules++;
         break;
       }
@@ -261,7 +275,7 @@ const REPORT_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "Tasks showing avoidance (repeated reschedules, chronic misses) and the likely cause",
+        "Tasks showing avoidance (repeated reschedules, chronic misses) and the likely cause. Weigh postpone reasons: a pushed-later reschedule with no stated reason is procrastination, while a genuinely valid reason (blocked/dependency, illness, a real emergency) is a legitimate deferral — don't flag it.",
     },
     deletionInsights: {
       type: "array",
@@ -301,7 +315,7 @@ Definitions:
 - "Habits" are tasks scheduled on days of the week (day_of_week). They reset daily and their hit/miss history is the core signal.
 - Everything else (one-time dated tasks, day_of_month, day_of_year) are "tasks".
 - "Calls" are people the user must phone on a cadence: "biweekly" means twice a month (periods 1st–14th and 15th–month-end), "monthly" means once a month. The called checkmark resets at each period boundary; a call_result with completed=false means that person was NOT called that period. currentCalls shows the live status for the current period.
-- A reschedule that pushes a date later is a procrastination signal, especially when repeated on the same task.
+- A reschedule that pushes a date later (a "postpone") is a procrastination signal, especially when repeated on the same task. When the user postpones they may attach a reason: for each rescheduled task, precomputedStats.reschedules gives pushedLater, pushedLaterNoReason, pushedLaterWithReason and the stated reasons[]. A pushed-later reschedule with NO reason is procrastination for sure. One WITH a reason must be judged: accept genuinely valid causes (blocked by a dependency, illness, a real higher-priority emergency, plans changed for a legitimate reason) as legitimate deferrals and do NOT flag them; treat weak excuses ("didn't feel like it", "too big", "ran out of time", "kept putting it off") as avoidance, same as an unexcused postpone.
 - A "deletion" (task_deleted event) is a task the user removed *while it was still not done*, each carrying the user's stated reason. It represents an abandoned intention, not a completed one — treat the reason as the primary signal for WHY it was dropped. precomputedStats.deletions has the counts; the reasons live on the raw task_deleted events and byHeader.deleted counts them per header.
 
 Rules:
@@ -309,6 +323,7 @@ Rules:
 - Be direct and specific: name the task, the day pattern, the number. No generic advice ("try to be more consistent") — every suggestion must name a concrete task and a concrete change.
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
 - For deletions: read each reason and separate healthy pruning ("no longer needed", "duplicate", priorities genuinely changed) from avoidance ("too big", "ran out of time", "kept putting it off"). Name the task and quote/paraphrase its reason. Flag repeat abandonment of the same intention or a header where tasks are frequently dropped. If there were no deletions, return an empty deletionInsights array.
+- For postpones (pushed-later reschedules): call out tasks with pushedLaterNoReason > 0 as unexcused procrastination by name and count. For pushedLaterWithReason, quote/paraphrase the stated reason and say whether you accept it as valid (and therefore don't count it against the user) or read it as an excuse. Repeated no-reason postpones of the same task are a strong avoidance signal.
 - If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (repeatedly ignored advice is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
 - For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.

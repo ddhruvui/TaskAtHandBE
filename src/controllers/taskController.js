@@ -81,7 +81,7 @@ const createTask = async (req, res) => {
 const updateTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, notes, ecd, done, priority } = req.body;
+    const { name, notes, ecd, done, priority, reason } = req.body;
 
     if (
       name !== undefined &&
@@ -105,12 +105,21 @@ const updateTask = async (req, res) => {
         .json({ error: "Priority must be a non-negative integer" });
     }
 
+    if (reason !== undefined && typeof reason !== "string") {
+      return res.status(400).json({ error: "reason must be a string" });
+    }
+
     const updates = {};
     if (name !== undefined) updates.name = name.trim();
     if (notes !== undefined) updates.notes = notes;
     if (ecd !== undefined) updates.ecd = ecd;
     if (done !== undefined) updates.done = done;
     if (priority !== undefined) updates.priority = priority;
+    // reason is not a task field: it rides along only to annotate the
+    // task_rescheduled archive event when an ECD change is a postpone.
+    if (reason !== undefined && reason.trim() !== "") {
+      updates.reason = reason.trim();
+    }
 
     const updated = await Task.update(id, updates);
 

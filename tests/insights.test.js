@@ -144,6 +144,21 @@ describe("Insights", () => {
       expect(res.body.reschedules[1].taskName).toBe("Once");
     });
 
+    test("splits pushed-later postpones by reason and collects stated reasons", async () => {
+      await seedArchive([
+        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true, reason: "blocked on vendor" },
+        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true, reason: null },
+        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: false, reason: "moved up" },
+      ]);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      const dodger = res.body.reschedules[0];
+      expect(dodger.pushedLater).toBe(2);
+      expect(dodger.pushedLaterWithReason).toBe(1);
+      expect(dodger.pushedLaterNoReason).toBe(1);
+      expect(dodger.reasons).toEqual(["blocked on vendor"]);
+    });
+
     test("rolls up completed/missed/reschedules per header", async () => {
       await seedArchive([
         ...habitEvents,

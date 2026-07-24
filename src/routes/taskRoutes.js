@@ -100,11 +100,20 @@ router.post("/", createTask);
  *                 type: boolean
  *               priority:
  *                 type: integer
+ *               reason:
+ *                 type: string
+ *                 description: >
+ *                   Optional. When the ECD change is a postpone (a one-time date
+ *                   pushed later), the reason is stored on the `task_rescheduled`
+ *                   archive event and weighed by the AI insights — a postpone with
+ *                   no reason is treated as procrastination, a valid reason as a
+ *                   legitimate deferral. Ignored for non-reschedule updates.
+ *                 example: "Blocked on the vendor's reply"
  *     responses:
  *       200:
  *         description: Updated task
  *       400:
- *         description: Validation error
+ *         description: Validation error (e.g. reason is not a string)
  *       404:
  *         description: Task not found
  */

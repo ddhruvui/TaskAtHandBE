@@ -13,7 +13,10 @@ const { getDatabase } = require("../config/db");
  *      { taskId, taskName, headerId, headerName, ecdType, plannedFor,
  *        taskCreatedAt, doneAt }
  *  - task_rescheduled: a task's ECD was changed by the user
- *      { taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater }
+ *      { taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater,
+ *        reason }  reason is the user's optional stated cause for a postpone
+ *        (null when none was given); a pushedLater reschedule with no reason is
+ *        an unexcused procrastination signal.
  *  - call_result:     a call's outcome for one period, logged by cron step 7
  *      at the period boundary before the reset (dueDate = the reset day)
  *      { callId, callName, frequency, dueDate, completed, doneAt }

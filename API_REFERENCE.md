@@ -422,10 +422,13 @@ Updates a task. All body fields are optional — send only what needs to change.
 | `ecd`      | ECD object or `null` | Validated; `null` clears it           |
 | `done`     | boolean              | Triggers automatic priority reorder   |
 | `priority` | integer              | Manual reorder within header; 0-based |
+| `reason`   | string               | Optional postpone reason (see below)  |
 
 > `headerId` is **not** updatable after creation.
 
 > Changing `ecd` also logs a `task_rescheduled` event to the TaskArchive (with a `pushedLater` flag when a one-time date moves later). Toggling `done` sets/clears `doneAt`.
+
+> **`reason`** annotates a postpone. When the `ecd` change pushes a one-time date later, the (trimmed) `reason` is stored on the `task_rescheduled` event and weighed by the AI insights: a postpone with no reason (or a blank one) is treated as procrastination, a valid reason as a legitimate deferral. It is ignored for non-reschedule updates and is **never** written to the task document. A non-string `reason` returns `400`.
 
 **Request Body (mark done):**
 
@@ -1069,7 +1072,15 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
   "recurringTasks": [],
   "oneTimeTasks": { "completedCount": 9, "avgSlippageDays": 1.4, "recent": [] },
   "reschedules": [
-    { "taskName": "Write blog", "headerName": "Health", "total": 3, "pushedLater": 3 }
+    {
+      "taskName": "Write blog",
+      "headerName": "Health",
+      "total": 3,
+      "pushedLater": 3,
+      "pushedLaterWithReason": 1,
+      "pushedLaterNoReason": 2,
+      "reasons": ["Blocked on the editor"]
+    }
   ],
   "deletions": {
     "count": 2,

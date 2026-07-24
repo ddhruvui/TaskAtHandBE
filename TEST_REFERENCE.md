@@ -440,6 +440,11 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | pushedLater=false when a date moves earlier                 | Pulling a date in is not a "push"                                 |
 | pushedLater=false when the ECD type changes away from date  | `date` → `day_of_week` logs the change but not as pushed later    |
 | does not log when the ECD is unchanged                      | Sending the identical ECD writes no archive event                 |
+| stores the trimmed postpone reason on the event            | `{ reason: "  waiting on the vendor  " }` → event `reason: "waiting on the vendor"` |
+| stores reason=null when a postpone has no reason           | Postpone with no `reason` in the body → event `reason: null`       |
+| treats a blank/whitespace reason as no reason              | `{ reason: "   " }` → event `reason: null`                         |
+| rejects a non-string reason with 400 and logs nothing      | `{ reason: 42 }` → `400`, no `task_rescheduled` event written      |
+| does not persist reason onto the task document             | Response body has no `reason` field — it only annotates the archive event |
 
 ### task_deleted — logged on manual delete of an undone task
 
@@ -476,6 +481,7 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | returns an empty calls array when there are no call_result events | Habit-only archive → `calls: []`                                              |
 | computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
 | counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
+| splits pushed-later postpones by reason and collects stated reasons | Per task: `pushedLaterWithReason`/`pushedLaterNoReason` split, `reasons[]` holds only the stated postpone reasons |
 | rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types (incl. `deleted` field)                |
 | aggregates task_deleted events into deletions and per-header counts | 3 deletions (2 with reason) → `deletions.count 3`, `withReason 2`, `recent` shape; `byHeader.*.deleted` counts |
 | returns an empty deletions rollup when there are no task_deleted events | Habit-only archive → `deletions: { count: 0, withReason: 0, recent: [] }`   |

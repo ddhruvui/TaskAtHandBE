@@ -195,7 +195,10 @@ class Task {
     if (data.ecd !== undefined) {
       updates.ecd = validateEcd(data.ecd);
 
-      // Archive ECD changes so reschedules (procrastination signal) are visible
+      // Archive ECD changes so reschedules (procrastination signal) are visible.
+      // A postpone (pushedLater) may carry the user's stated reason: no reason is
+      // procrastination for sure, a valid reason is a legitimate deferral (judged
+      // by the AI insights). `data.reason` is never written to the task document.
       if (JSON.stringify(updates.ecd) !== JSON.stringify(current.ecd || null)) {
         const header = await this.getHeaderForTask(current.headerId);
         await Archive.log({
@@ -207,6 +210,7 @@ class Task {
           fromEcd: current.ecd || null,
           toEcd: updates.ecd,
           pushedLater: isPushedLater(current.ecd, updates.ecd),
+          reason: data.reason ? data.reason : null,
         });
       }
     }

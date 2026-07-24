@@ -288,6 +288,100 @@ describe("TaskArchive event log", () => {
       const events = await getArchiveEvents({ type: "task_rescheduled" });
       expect(events).toHaveLength(0);
     });
+
+    test("stores the trimmed postpone reason on the event", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "Blocked",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({
+          ecd: { type: "date", value: "2026-07-25" },
+          reason: "  waiting on the vendor  ",
+        })
+        .expect(200);
+
+      const events = await getArchiveEvents({ type: "task_rescheduled" });
+      expect(events).toHaveLength(1);
+      expect(events[0].pushedLater).toBe(true);
+      expect(events[0].reason).toBe("waiting on the vendor");
+    });
+
+    test("stores reason=null when a postpone has no reason", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "Silent postpone",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({ ecd: { type: "date", value: "2026-07-25" } })
+        .expect(200);
+
+      const events = await getArchiveEvents({ type: "task_rescheduled" });
+      expect(events).toHaveLength(1);
+      expect(events[0].reason).toBeNull();
+    });
+
+    test("treats a blank/whitespace reason as no reason", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "Whitespace reason",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({ ecd: { type: "date", value: "2026-07-25" }, reason: "   " })
+        .expect(200);
+
+      const events = await getArchiveEvents({ type: "task_rescheduled" });
+      expect(events).toHaveLength(1);
+      expect(events[0].reason).toBeNull();
+    });
+
+    test("rejects a non-string reason with 400 and logs nothing", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "Bad reason",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({ ecd: { type: "date", value: "2026-07-25" }, reason: 42 })
+        .expect(400);
+
+      const events = await getArchiveEvents({ type: "task_rescheduled" });
+      expect(events).toHaveLength(0);
+    });
+
+    test("does not persist reason onto the task document", async () => {
+      const h = await createHeader("Work");
+      const t = await createTask({
+        name: "No leak",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      const res = await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({
+          ecd: { type: "date", value: "2026-07-25" },
+          reason: "should not be stored on the task",
+        })
+        .expect(200);
+
+      expect(res.body.reason).toBeUndefined();
+    });
   });
 
   describe("task_deleted — logged on manual delete of an undone task", () => {
