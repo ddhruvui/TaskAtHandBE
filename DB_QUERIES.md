@@ -151,7 +151,7 @@ The `Calls` collection (`Calls-Test` when `USE_TEST_DB=true`) stores people
 the user must call biweekly or monthly:
 `{ name, frequency, done, doneAt, createdAt, updatedAt }`. Completely
 independent of Headers and Tasks — nothing here references any other
-collection. Cron step 7 resets `done` on the 15th (biweekly) and the last
+collection. Cron step 8 resets `done` on the 15th (biweekly) and the last
 day of the month (all).
 
 ### All calls in display order (order added)

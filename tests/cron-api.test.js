@@ -39,6 +39,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
+      expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
@@ -56,6 +57,7 @@ describe("Cron API Endpoints", () => {
         tasksDeleted,
         tasksMarkedUndone,
         tasksClamped,
+        headersDeleted,
         headersReordered,
         projectTasksCompleted,
         callsReset,
@@ -65,6 +67,7 @@ describe("Cron API Endpoints", () => {
         tasksDeleted,
         tasksMarkedUndone,
         tasksClamped,
+        headersDeleted,
         headersReordered,
         projectTasksCompleted,
         callsReset,
@@ -103,6 +106,13 @@ describe("Cron API Endpoints", () => {
         })
         .expect(201);
 
+      // Keep the header non-empty so step 6 doesn't delete it after the done
+      // task is removed by step 5 (which would make the header lookup 404).
+      await request(app)
+        .post("/tasks")
+        .send({ name: "Keep header alive", headerId: h.body._id })
+        .expect(201);
+
       // Mark it done
       await request(app).put(`/tasks/${t.body._id}`).send({ done: true });
 
@@ -129,6 +139,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
+      expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
@@ -150,6 +161,7 @@ describe("Cron API Endpoints", () => {
         runRes.body.tasksMarkedUndone,
       );
       expect(statusRes.body.tasksClamped).toBe(runRes.body.tasksClamped);
+      expect(statusRes.body.headersDeleted).toBe(runRes.body.headersDeleted);
       expect(statusRes.body.headersReordered).toBe(
         runRes.body.headersReordered,
       );
@@ -177,6 +189,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
+      expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
       expect(res.body).toHaveProperty("callsReset");
@@ -194,6 +207,7 @@ describe("Cron API Endpoints", () => {
         tasksDeleted,
         tasksMarkedUndone,
         tasksClamped,
+        headersDeleted,
         headersReordered,
         projectTasksCompleted,
         callsReset,
@@ -203,6 +217,7 @@ describe("Cron API Endpoints", () => {
         tasksDeleted,
         tasksMarkedUndone,
         tasksClamped,
+        headersDeleted,
         headersReordered,
         projectTasksCompleted,
         callsReset,
@@ -229,6 +244,7 @@ describe("Cron API Endpoints", () => {
       expect(detailsRes.body).toHaveProperty("tasksDeleted");
       expect(detailsRes.body).toHaveProperty("tasksMarkedUndone");
       expect(detailsRes.body).toHaveProperty("tasksClamped");
+      expect(detailsRes.body).toHaveProperty("headersDeleted");
       expect(detailsRes.body).toHaveProperty("headersReordered");
       expect(detailsRes.body).toHaveProperty("projectTasksCompleted");
       expect(detailsRes.body).toHaveProperty("callsReset");

@@ -317,8 +317,9 @@ class Task {
    * When an **undone** task is deleted manually, a `task_deleted` archive event
    * is logged with the user's `reason` so the AI insights can treat abandoned
    * tasks (and why they were dropped) as a signal. Deleting a *done* task logs
-   * nothing — it was already accomplished. Header-cascade deletes go through
-   * `deleteByHeader` and are intentionally not archived here.
+   * nothing here — it was already accomplished, and its completion is captured
+   * either by cron step 5 (one-off tasks) or by `deleteByHeader` (header
+   * cascade, see below).
    * @param {string} id
    * @param {string} [reason]  Why the task was deleted (undone tasks only)
    * @returns {Promise<Object|null>} Deleted task or null
@@ -356,11 +357,38 @@ class Task {
 
   /**
    * Delete all tasks belonging to a specific header (used on header delete).
+   * Done tasks are archived as `task_completed` events first so their
+   * completion history is never orphaned when the header disappears (mirrors
+   * cron step 5). Undone tasks in a cascade are not archived — a header-wide
+   * delete isn't a per-task abandonment signal.
    * @param {string} headerId
    * @returns {Promise<number>} Number of tasks deleted
    */
   static async deleteByHeader(headerId) {
     const collection = await this.getCollection();
+
+    const doneTasks = await collection
+      .find({ headerId, done: true })
+      .toArray();
+    if (doneTasks.length > 0) {
+      const header = await this.getHeaderForTask(headerId);
+      const headerName = header ? header.name : null;
+      await Archive.logMany(
+        doneTasks.map((task) => ({
+          type: "task_completed",
+          taskId: task._id.toString(),
+          taskName: task.name,
+          headerId: task.headerId,
+          headerName,
+          ecdType: task.ecd ? task.ecd.type : null,
+          plannedFor:
+            task.ecd && task.ecd.type === "date" ? task.ecd.value : null,
+          taskCreatedAt: task.createdAt || null,
+          doneAt: task.doneAt || null,
+        })),
+      );
+    }
+
     const result = await collection.deleteMany({ headerId });
     return result.deletedCount;
   }

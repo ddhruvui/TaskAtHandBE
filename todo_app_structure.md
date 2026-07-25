@@ -180,7 +180,7 @@
   to `true`, set back to `null` when `done` flips to `false` (by the user or
   by a cron reset)
 - Listed in the order they were added (`createdAt` ascending)
-- The daily cron resets done calls at period boundaries (see Cron Step 7)
+- The daily cron resets done calls at period boundaries (see Cron Step 8)
 
 ---
 
@@ -246,10 +246,10 @@
   the end (`count`), moves shift the affected neighbors, deletes close the
   gap — always contiguous `0..n-1`
 - `tasks` is an ordered array (may be empty; defaults to `[]` on create) of
-  objects with a non-empty `name` (trimmed), an optional `date`
-  (`"YYYY-MM-DD"` or `null`, default `null`), an optional `done` boolean
-  (default `false`) and an optional `todoTaskId` (string or `null`, default
-  `null`)
+  objects with a non-empty `name` (trimmed), an optional `notes` string
+  (default `""`), an optional `date` (`"YYYY-MM-DD"` or `null`, default
+  `null`), an optional `done` boolean (default `false`) and an optional
+  `todoTaskId` (string or `null`, default `null`)
 - `tasks` is replaced wholesale on update — clients send the full list to
   add, rename, reorder, remove or change tasks. On **every** write the
   server re-sorts the list so undone tasks come before done tasks (stable) —
@@ -259,9 +259,12 @@
   `date`-ECD Task in the todo under a Header named after the project (reused
   case-insensitively, created when missing) and stores its `_id` in
   `todoTaskId`. Clients keep both sides in sync: toggling done on either
-  side flips the other, removing the date deletes the todo task, editing
-  the todo task's name/date updates the project task (a cleared or
-  recurring ECD sets the project date to `null`, keeping the link),
+  side flips the other, removing the date deletes the todo task, a project
+  task's `notes` are mirrored onto the linked todo task when it is created
+  or edited (an empty note falls back to a `Step towards "<project>"`
+  default; notes flow project→todo only), editing the todo task's name/date
+  updates the project task (a cleared or recurring ECD sets the project
+  date to `null`, keeping the link),
   reordering on either side mirrors the relative order of linked tasks on
   the other, deleting the todo task (or its header) clears `todoTaskId`
   **and** `date` on the project task, and renaming the project renames the
@@ -287,10 +290,10 @@ them.
 | ------------------ | --------------------- | ---------------------------------------------------------------- |
 | `habit_result`     | Cron step 0           | A `day_of_week` task's done/missed outcome for one scheduled day |
 | `task_result`      | Cron step 0           | A `day_of_month` / `day_of_year` task's outcome for one cycle    |
-| `task_completed`   | Cron step 5           | A one-time task captured (with `plannedFor`, `doneAt`) before deletion |
+| `task_completed`   | Cron step 5 · `Task.deleteByHeader` | A done task captured (with `plannedFor`, `doneAt`, `headerName`) before deletion — logged both when cron step 5 removes a completed one-off task **and** when a header delete cascades over its done tasks (any ECD type), so completion history is never orphaned |
 | `task_rescheduled` | `Task.update`         | An ECD change: `{ taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater, reason }`. `pushedLater` is `true` when a one-time `date` moves later (a postpone). `reason` is the user's optional stated cause for the postpone (`null` when none, or when the reason was blank). A pushed-later reschedule with `reason: null` is unexcused procrastination; a valid stated reason is a legitimate deferral. The reason rides in on the `PUT /tasks/:id` body and is **never** written to the task document. |
-| `task_deleted`     | `Task.delete`         | An **undone** task deleted manually, with the user's `reason`: `{ taskId, taskName, headerId, headerName, ecdType, ecd, reason, taskCreatedAt }`. Logged only for undone tasks (done tasks log nothing); `reason` is `null` when none is supplied. Header-cascade deletes (`Task.deleteByHeader`) are **not** archived. |
-| `call_result`      | Cron step 7           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
+| `task_deleted`     | `Task.delete`         | An **undone** task deleted manually, with the user's `reason`: `{ taskId, taskName, headerId, headerName, ecdType, ecd, reason, taskCreatedAt }`. Logged only for undone tasks (done tasks log nothing); `reason` is `null` when none is supplied. Header-cascade deletes (`Task.deleteByHeader`) do **not** log `task_deleted` for their undone tasks, but their **done** tasks are archived as `task_completed`. |
+| `call_result`      | Cron step 8           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
 
 ```json
 {
@@ -409,7 +412,18 @@ outcome is only knowable at the following midnight:
   retained in the project as a completed step. Counted in the run stats as
   `projectTasksCompleted`
 
-#### Step 6 — Reorder priorities per header
+#### Step 6 — Delete empty headers & rearrange header priorities
+
+Runs after step 5 so headers emptied by task deletion are cleaned up in the
+same run:
+
+- Any header that has **no tasks** is deleted (including headers that were
+  never given a task). Counted in the run stats as `headersDeleted`
+- After deletion, the surviving headers are re-numbered so their `priority`
+  values stay contiguous (`0..n-1`) in their existing order (e.g. deleting the
+  header at priority 1 shifts priorities 2, 3, … down by one)
+
+#### Step 7 — Reorder priorities per header
 
 - For each header, collect all its tasks and sort as follows:
   1. **Undone tasks** (`done === false`) — sorted by next upcoming ECD date **ascending** → assigned priorities `0, 1, 2, ...` (sooner = closer to 0)
@@ -425,7 +439,7 @@ outcome is only knowable at the following midnight:
 | `day_of_month` | The nearest upcoming date in the current or next month from the `value` array |
 | `day_of_year`  | The date stored in `value` (e.g. `7/3/2007`)                                  |
 
-#### Step 7 — Archive call outcomes and reset calls at period boundaries _(runs last)_
+#### Step 8 — Archive call outcomes and reset calls at period boundaries _(runs last)_
 
 Calls are independent of tasks/headers, so this step runs after all task
 steps. Biweekly calls are due twice per month (periods 1st–14th and
@@ -440,7 +454,7 @@ each period boundary:
 
 #### Final step — Generate the daily AI insight report
 
-- After step 7, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+- After step 8, when `ANTHROPIC_API_KEY` is set (and not in test mode):
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
   - Send stats + recent events + the previous report to `claude-sonnet-4-6` with a structured-output schema
@@ -511,7 +525,7 @@ Updates a header's name and/or priority. If `priority` is changed, all affected 
 
 #### `DELETE /headers/:id`
 
-Deletes a header and all tasks associated with it. Shifts priorities of remaining headers down to keep contiguous.
+Deletes a header and all tasks associated with it. Shifts priorities of remaining headers down to keep contiguous. Any **done** tasks are archived as `task_completed` events before deletion so their completion history isn't orphaned; undone tasks are removed without archiving.
 
 **Response `200`**
 
@@ -899,12 +913,14 @@ Returns all projects sorted by `priority` ascending.
     "tasks": [
       {
         "name": "get data from EODHD",
+        "notes": "use the v2 API key",
         "date": "2026-08-01",
         "done": false,
         "todoTaskId": "uuid"
       },
       {
         "name": "get data from Nasdaq",
+        "notes": "",
         "date": null,
         "done": false,
         "todoTaskId": null
@@ -966,9 +982,10 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
 3. Mark undone: `day_of_week`
 4. Mark undone: `day_of_month`
 5. Archive + delete completed `date` tasks (and mark linked long-term project tasks done)
-6. Reorder priorities per header
-7. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
-8. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set — not a numbered step)_
+6. Delete headers with no tasks & rearrange header priorities to stay contiguous
+7. Reorder priorities per header
+8. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
+9. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set — not a numbered step)_
 
 **Response `200`**
 
@@ -978,6 +995,7 @@ Manually triggers the cron job. Accepts an optional `date` body override. Runs a
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
   "outcomesArchived": 4,
@@ -1000,6 +1018,7 @@ Manually triggers the cron job. No request body required. Runs the same steps as
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
   "callsReset": 0
@@ -1020,6 +1039,7 @@ Returns metadata about the last cron run.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
   "callsReset": 0
@@ -1040,6 +1060,7 @@ Returns metadata about the last cron run. Alias for `GET /cron/status`.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 5,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
   "callsReset": 0

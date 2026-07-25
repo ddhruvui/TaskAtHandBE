@@ -116,7 +116,7 @@ interface Call {
 Calls are people the user must phone biweekly or monthly. They are completely
 independent of Headers and Tasks (no `headerId`, no `priority`). Biweekly
 calls are due twice per month (periods 1st–14th and 15th–end), monthly calls
-once; cron step 7 clears the `done` checkmark at each period boundary (the
+once; cron step 8 clears the `done` checkmark at each period boundary (the
 15th for biweekly, the last day of the month for both).
 
 ---
@@ -159,6 +159,7 @@ created headers or tasks.
 ```typescript
 interface ProjectTask {
   name: string; // Task/step name (required), e.g. "get data from EODHD"
+  notes: string; // Free-text notes (default: ""); the client mirrors these onto the linked todo task
   date: string | null; // "YYYY-MM-DD" target date or null (default: null)
   done: boolean; // Completion status (default: false)
   todoTaskId: string | null; // _id of the linked todo Task, or null (default: null)
@@ -342,7 +343,7 @@ Updates a header's `name` and/or `priority`. Both fields are optional. When `pri
 
 ### `DELETE /headers/:id`
 
-Deletes a header and **all of its tasks** (cascade delete). Remaining headers are shifted to keep priorities contiguous.
+Deletes a header and **all of its tasks** (cascade delete). Remaining headers are shifted to keep priorities contiguous. Any **done** tasks are archived as `task_completed` events before deletion (so completion history isn't orphaned); undone tasks are removed without archiving.
 
 **Response `200`:**
 
@@ -542,7 +543,7 @@ Deletes a task. Remaining tasks in the same header are shifted to keep prioritie
 }
 ```
 
-When the deleted task is **undone**, `reason` is stored in the archive as a `task_deleted` event and surfaced to AI insights. Clients require it for undone tasks; deleting a *done* task ignores it. Header-cascade deletes (via `DELETE /headers/:id`) do not archive per-task reasons.
+When the deleted task is **undone**, `reason` is stored in the archive as a `task_deleted` event and surfaced to AI insights. Clients require it for undone tasks; deleting a *done* task ignores it. Header-cascade deletes (via `DELETE /headers/:id`) do not archive per-task reasons for undone tasks, but they **do** archive each done task as a `task_completed` event so completion history isn't orphaned.
 
 **Response `200`:**
 
@@ -898,11 +899,12 @@ Returns all projects sorted by `priority` ascending.
     "tasks": [
       {
         "name": "get data from EODHD",
+        "notes": "use the v2 API key",
         "date": "2026-08-01",
         "done": false,
         "todoTaskId": "..."
       },
-      { "name": "get data from Nasdaq", "date": null, "done": false, "todoTaskId": null }
+      { "name": "get data from Nasdaq", "notes": "", "date": null, "done": false, "todoTaskId": null }
     ],
     "createdAt": "2026-07-24T00:00:00.000Z",
     "updatedAt": "2026-07-24T00:00:00.000Z"
@@ -922,7 +924,7 @@ Creates a new project. Priority is auto-assigned (appended at the end).
 {
   "name": "Automated Stock Market",
   "tasks": [
-    { "name": "get data from EODHD", "date": "2026-08-01" },
+    { "name": "get data from EODHD", "notes": "use the v2 API key", "date": "2026-08-01" },
     { "name": "get data from Nasdaq" }
   ]
 }
@@ -931,7 +933,7 @@ Creates a new project. Priority is auto-assigned (appended at the end).
 | Field   | Required | Type          | Notes                                                                            |
 | ------- | -------- | ------------- | -------------------------------------------------------------------------------- |
 | `name`  | Yes      | string        | Non-empty; trimmed                                                                |
-| `tasks` | No       | ProjectTask[] | Defaults to `[]`. Each task needs a non-empty `name` (trimmed); `date` optional (`"YYYY-MM-DD"` or `null`, default `null`); `done` optional boolean (default `false`); `todoTaskId` optional string/`null` (default `null`). The list is re-sorted so undone tasks come before done tasks |
+| `tasks` | No       | ProjectTask[] | Defaults to `[]`. Each task needs a non-empty `name` (trimmed); `notes` optional string (default `""`, mirrored onto the linked todo task); `date` optional (`"YYYY-MM-DD"` or `null`, default `null`); `done` optional boolean (default `false`); `todoTaskId` optional string/`null` (default `null`). The list is re-sorted so undone tasks come before done tasks |
 
 **Response `201`:** the created project.
 
@@ -987,8 +989,9 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 3    | Every day          | Mark tasks with a `day_of_week` ECD matching today as undone (`doneAt` cleared) |
 | 4    | Every day          | Mark tasks with a `day_of_month` ECD containing today's date as undone (`doneAt` cleared) |
 | 5    | Every day          | Archive then delete tasks that are **done** and have a `date` ECD or no ECD; deleted tasks linked from a long-term project (`ProjectTask.todoTaskId`) mark that project task `done` (link cleared, `date` kept, task re-sorted to the bottom of the project) |
-| 6    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
-| 7    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
+| 6    | Every day          | Delete headers that have **no tasks** (including ones emptied by step 5), then re-number surviving header priorities to stay contiguous (`0..n-1`) |
+| 7    | Every day          | Re-sort undone tasks within each header by next upcoming ECD timestamp          |
+| 8    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
 | —    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
 
 All date operations in the cron run in UTC.
@@ -1005,6 +1008,7 @@ Returns stats from the most recent cron run.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 4,
   "projectTasksCompleted": 1,
   "callsReset": 0
@@ -1043,6 +1047,7 @@ Manually triggers the cron job with an optional date override in the request bod
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 4,
   "projectTasksCompleted": 1,
   "outcomesArchived": 5,
@@ -1071,6 +1076,7 @@ Manually triggers the cron job. No request body needed.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 4,
   "projectTasksCompleted": 1,
   "outcomesArchived": 5,
@@ -1099,6 +1105,7 @@ Returns stats from the most recent cron run. Alias for `GET /cron/status`.
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
+  "headersDeleted": 0,
   "headersReordered": 4,
   "projectTasksCompleted": 1,
   "callsReset": 0
@@ -1148,7 +1155,7 @@ Returns raw TaskArchive events for the period, oldest first.
 ]
 ```
 
-`call_result` events (logged by cron step 7 at each period boundary, before the reset) have no header fields:
+`call_result` events (logged by cron step 8 at each period boundary, before the reset) have no header fields:
 
 ```json
 {

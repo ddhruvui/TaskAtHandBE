@@ -2,8 +2,11 @@ const { Project, sortProjectTasks } = require("../models/Project");
 
 /**
  * Validate and normalize a project task list.
- * Tasks are { name, date, done, todoTaskId } objects:
+ * Tasks are { name, notes, date, done, todoTaskId } objects:
  *   - name: required non-empty string (trimmed)
+ *   - notes: free-text string (default "") — mirrored onto the linked todo
+ *     task by the client (an empty note falls back to a "Step towards …"
+ *     default there)
  *   - date: "YYYY-MM-DD" string or null (default null) — when set, the
  *     client mirrors the task into the todo under a header named after the
  *     project
@@ -15,7 +18,7 @@ const { Project, sortProjectTasks } = require("../models/Project");
 function validateTasks(tasks) {
   if (!Array.isArray(tasks)) {
     throw new Error(
-      "tasks must be an array of { name, date, done, todoTaskId } objects",
+      "tasks must be an array of { name, notes, date, done, todoTaskId } objects",
     );
   }
   const normalized = tasks.map((task) => {
@@ -24,6 +27,10 @@ function validateTasks(tasks) {
     }
     if (typeof task.name !== "string" || task.name.trim() === "") {
       throw new Error("Each task name must be a non-empty string");
+    }
+    const notes = task.notes === undefined ? "" : task.notes;
+    if (typeof notes !== "string") {
+      throw new Error("Task notes must be a string");
     }
     let date = task.date === undefined ? null : task.date;
     if (date !== null) {
@@ -40,7 +47,7 @@ function validateTasks(tasks) {
       throw new Error("Task todoTaskId must be a string or null");
     }
     if (todoTaskId !== null && todoTaskId.trim() === "") todoTaskId = null;
-    return { name: task.name.trim(), date, done, todoTaskId };
+    return { name: task.name.trim(), notes, date, done, todoTaskId };
   });
   return sortProjectTasks(normalized);
 }

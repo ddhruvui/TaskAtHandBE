@@ -152,6 +152,13 @@ const options = {
           required: ["name"],
           properties: {
             name: { type: "string", example: "get data from EODHD" },
+            notes: {
+              type: "string",
+              default: "",
+              description:
+                'Free-text notes for the step. The client mirrors these onto the linked todo task; an empty note falls back to a "Step towards …" default there.',
+              example: "use the v2 API key",
+            },
             date: {
               type: "string",
               nullable: true,
@@ -185,12 +192,14 @@ const options = {
               example: [
                 {
                   name: "get data from EODHD",
+                  notes: "use the v2 API key",
                   date: "2026-08-01",
                   done: false,
                   todoTaskId: "507f1f77bcf86cd799439011",
                 },
                 {
                   name: "deploy to cpu",
+                  notes: "",
                   date: null,
                   done: true,
                   todoTaskId: null,
@@ -242,6 +251,7 @@ const options = {
             tasksDeleted: { type: "integer", example: 2 },
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
+            headersDeleted: { type: "integer", example: 0 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
@@ -258,6 +268,7 @@ const options = {
             tasksDeleted: { type: "integer", example: 2 },
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
+            headersDeleted: { type: "integer", example: 0 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },

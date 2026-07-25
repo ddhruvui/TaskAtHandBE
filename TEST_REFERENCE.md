@@ -103,7 +103,7 @@ Affirmations CRUD — single short lines the user reads daily (completely indepe
 
 ## tests/calls.test.js
 
-Calls CRUD — people the user must call biweekly or monthly (completely independent of tasks/headers; done checkmarks are reset by cron step 7).
+Calls CRUD — people the user must call biweekly or monthly (completely independent of tasks/headers; done checkmarks are reset by cron step 8).
 
 | Test                                                  | What it checks                                                                |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -168,11 +168,12 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | Test                                                      | What it checks                                                                |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | returns empty array when no projects exist                | `GET /projects` returns `[]` on a clean DB                                     |
-| creates a project with a task list (defaults applied)     | `POST /projects` → 201 with `_id`, `name`, `priority: 0`, tasks defaulted (`date: null`, `done: false`, `todoTaskId: null`), timestamps |
+| creates a project with a task list (defaults applied)     | `POST /projects` → 201 with `_id`, `name`, `priority: 0`, tasks defaulted (`notes: ""`, `date: null`, `done: false`, `todoTaskId: null`), timestamps |
 | creates a project without tasks (defaults to empty list)  | `POST /projects { name }` → 201 with `tasks: []`                               |
 | appends priorities contiguously                           | Three creates get priorities 0, 1, 2                                           |
 | sorts done tasks to the bottom on create                  | `[done, undone, done]` list is stored as `[undone, done, done]` (stable)       |
 | trims whitespace from name and task names                 | `"  Trimmed  "` → `"Trimmed"`; task names trimmed too                          |
+| persists task notes and defaults missing notes to empty string | Task `notes` are stored; a task without `notes` defaults to `""`         |
 | rejects missing name                                      | `POST /projects { tasks }` → 400                                               |
 | rejects empty name                                        | `{ name: "  " }` → 400                                                         |
 | rejects tasks that are not an array                       | `{ tasks: "get data" }` → 400                                                  |
@@ -180,9 +181,11 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | rejects tasks with empty names                            | `{ tasks: [{ name: "  " }] }` → 400                                            |
 | rejects tasks with an invalid date format                 | `{ date: "1/8/2026" }` → 400 (must be `YYYY-MM-DD` or null)                    |
 | rejects tasks with a non-boolean done                     | `{ done: "yes" }` → 400                                                        |
+| rejects tasks with non-string notes                       | `{ notes: 42 }` → 400 (notes must be a string)                                 |
 | returns all projects sorted by priority ascending         | `GET /projects` array is ascending by `priority` (0, 1, 2)                     |
 | updates project name                                      | `PUT /projects/:id { name }` → 200, tasks untouched                            |
 | replaces tasks wholesale (dates, links, done → bottom)    | `PUT` with a full list persists dates/`todoTaskId` and re-sorts done tasks to the bottom |
+| updates task notes wholesale                              | `PUT` with a task carrying `notes` persists the new notes                      |
 | allows clearing a task date with null                     | `{ date: null }` → 200 with `date: null`                                       |
 | allows clearing tasks with an empty array                 | `{ tasks: [] }` → 200 with `tasks: []`                                         |
 | moves a project up and shifts others (priority contiguity)| Moving priority 2→0 shifts the others to 1, 2                                  |
@@ -408,17 +411,21 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | clamps Feb 29 to Feb 28 on Feb 28 of a non-leap year            | Step 2: `29/2/<past year>` → `28/2/<current year>` and reset           |
 | clamps values exceeding days in that month on the 1st           | Step 1: `[15, 30, 31]` in February → `[15, 28, 28]`                    |
 | does NOT clamp on non-1st of month                              | Step 1: skipped except on the 1st                                      |
-| undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
-| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 6: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
-| resets done biweekly calls on the 15th, monthly untouched       | Step 7: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
-| resets ALL done calls on the last day of the month              | Step 7: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
-| treats Feb 28 as the last day of a non-leap February            | Step 7: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
-| does not reset any calls mid-month                              | Step 7: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
-| leaves undone calls untouched on the 15th                       | Step 7: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
-| archives call_result for due biweekly calls (done and missed) on the 15th | Step 7: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
-| archives call_result for ALL calls on the last day of the month | Step 7: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
-| does not double-log call_result when cron re-runs for the same date | Step 7: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
-| logs no call_result mid-month                                   | Step 7: run on `2026-03-10` → zero `call_result` events                        |
+| deletes a header with no tasks, keeps headers that have tasks   | Step 6: an empty header is deleted, a header with a task survives, `headersDeleted: 1` |
+| rearranges surviving header priorities to stay contiguous (0..n-1) | Step 6: deleting the middle empty header collapses remaining priorities to `0..n-1` |
+| deletes a header emptied by step 5 done-date-task deletion      | Step 6: header whose only task was a done `date` task (deleted by step 5) is removed, `headersDeleted: 1` |
+| no empty headers → headersDeleted is 0 and priorities untouched | Step 6: every header has a task → nothing deleted, priorities unchanged, `headersDeleted: 0` |
+| undone tasks are sorted before done tasks after cron            | Step 7: all undone tasks have lower priority than all done tasks       |
+| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 7: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
+| resets done biweekly calls on the 15th, monthly untouched       | Step 8: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
+| resets ALL done calls on the last day of the month              | Step 8: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
+| treats Feb 28 as the last day of a non-leap February            | Step 8: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
+| does not reset any calls mid-month                              | Step 8: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
+| leaves undone calls untouched on the 15th                       | Step 8: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
+| archives call_result for due biweekly calls (done and missed) on the 15th | Step 8: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
+| archives call_result for ALL calls on the last day of the month | Step 8: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
+| does not double-log call_result when cron re-runs for the same date | Step 8: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
+| logs no call_result mid-month                                   | Step 8: run on `2026-03-10` → zero `call_result` events                        |
 
 ---
 
@@ -470,6 +477,13 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | archives a done date task with plannedFor, taskCreatedAt, and doneAt          | Event written with `ecdType: "date"`, `plannedFor` = ECD value; task deleted |
 | archives a done no-ecd task with ecdType=null and plannedFor=null             | No-ECD tasks are captured the same way                                       |
+
+### task_completed — archived on header delete cascade
+
+| Test                                                            | What it checks                                                              |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| archives a header's done tasks before the cascade delete        | `DELETE /headers/:id` logs a `task_completed` event for every done task (any ECD type) with `taskName`, `headerName`, `ecdType`, `plannedFor` (date only), `doneAt`; undone task not logged |
+| does not archive undone tasks on a header delete cascade        | A header with only an undone task logs no `task_completed` and no `task_deleted` on delete |
 
 ### task_rescheduled — logged on ECD change
 

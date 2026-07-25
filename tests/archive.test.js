@@ -177,6 +177,9 @@ describe("TaskArchive event log", () => {
         headerId: h._id,
         ecd: { type: "date", value: "2026-03-01" },
       });
+      // Keep the header non-empty so step 6 doesn't delete it after the done
+      // task is removed by step 5 (the header lookup below would 404).
+      await createTask({ name: "keep header alive", headerId: h._id });
       await request(app).put(`/tasks/${t._id}`).send({ done: true });
 
       await runCron();
@@ -208,6 +211,55 @@ describe("TaskArchive event log", () => {
       expect(events).toHaveLength(1);
       expect(events[0].ecdType).toBeNull();
       expect(events[0].plannedFor).toBeNull();
+    });
+  });
+
+  describe("task_completed — archived on header delete cascade", () => {
+    test("archives a header's done tasks before the cascade delete", async () => {
+      const h = await createHeader("Work");
+      const doneDate = await createTask({
+        name: "Ship report",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-03-01" },
+      });
+      const doneHabit = await createTask({
+        name: "Weekly review",
+        headerId: h._id,
+        ecd: { type: "day_of_week", value: ["Mon"] },
+      });
+      await createTask({ name: "Still pending", headerId: h._id });
+      await request(app).put(`/tasks/${doneDate._id}`).send({ done: true });
+      await request(app).put(`/tasks/${doneHabit._id}`).send({ done: true });
+
+      await request(app).delete(`/headers/${h._id}`).expect(200);
+
+      const events = await getArchiveEvents({ type: "task_completed" });
+      expect(events.map((e) => e.taskId).sort()).toEqual(
+        [doneDate._id, doneHabit._id].sort(),
+      );
+
+      const dateEvent = events.find((e) => e.taskId === doneDate._id);
+      expect(dateEvent.taskName).toBe("Ship report");
+      expect(dateEvent.headerName).toBe("Work");
+      expect(dateEvent.ecdType).toBe("date");
+      expect(dateEvent.plannedFor).toBe("2026-03-01");
+      expect(dateEvent.doneAt).not.toBeNull();
+
+      const habitEvent = events.find((e) => e.taskId === doneHabit._id);
+      expect(habitEvent.ecdType).toBe("day_of_week");
+      expect(habitEvent.plannedFor).toBeNull();
+    });
+
+    test("does not archive undone tasks on a header delete cascade", async () => {
+      const h = await createHeader("Misc");
+      await createTask({ name: "Undone chore", headerId: h._id });
+
+      await request(app).delete(`/headers/${h._id}`).expect(200);
+
+      const completed = await getArchiveEvents({ type: "task_completed" });
+      const deleted = await getArchiveEvents({ type: "task_deleted" });
+      expect(completed).toHaveLength(0);
+      expect(deleted).toHaveLength(0);
     });
   });
 

@@ -44,12 +44,14 @@ describe("Projects CRUD", () => {
       expect(res.body.tasks).toEqual([
         {
           name: "get data from EODHD",
+          notes: "",
           date: "2026-08-01",
           done: false,
           todoTaskId: null,
         },
         {
           name: "get data from Nasdaq",
+          notes: "",
           date: null,
           done: false,
           todoTaskId: null,
@@ -109,6 +111,22 @@ describe("Projects CRUD", () => {
       await request(app).delete(`/projects/${res.body._id}`).expect(200);
     });
 
+    test("persists task notes and defaults missing notes to empty string", async () => {
+      const res = await request(app)
+        .post("/projects")
+        .send({
+          name: "With Notes",
+          tasks: [
+            { name: "step with notes", notes: "use the v2 API key" },
+            { name: "step without notes" },
+          ],
+        })
+        .expect(201);
+      expect(res.body.tasks[0].notes).toBe("use the v2 API key");
+      expect(res.body.tasks[1].notes).toBe("");
+      await request(app).delete(`/projects/${res.body._id}`).expect(200);
+    });
+
     test("rejects missing name", async () => {
       await request(app)
         .post("/projects")
@@ -152,6 +170,13 @@ describe("Projects CRUD", () => {
       await request(app)
         .post("/projects")
         .send({ name: "Bad tasks", tasks: [{ name: "A", done: "yes" }] })
+        .expect(400);
+    });
+
+    test("rejects tasks with non-string notes", async () => {
+      await request(app)
+        .post("/projects")
+        .send({ name: "Bad tasks", tasks: [{ name: "A", notes: 42 }] })
         .expect(400);
     });
   });
@@ -199,18 +224,36 @@ describe("Projects CRUD", () => {
       expect(res.body.tasks).toEqual([
         {
           name: "get data from Nasdaq",
+          notes: "",
           date: "2026-08-15",
           done: false,
           todoTaskId: null,
         },
-        { name: "deploy to cpu", date: null, done: false, todoTaskId: null },
+        {
+          name: "deploy to cpu",
+          notes: "",
+          date: null,
+          done: false,
+          todoTaskId: null,
+        },
         {
           name: "get data from EODHD",
+          notes: "",
           date: "2026-08-01",
           done: true,
           todoTaskId: "507f1f77bcf86cd799439011",
         },
       ]);
+    });
+
+    test("updates task notes wholesale", async () => {
+      const res = await request(app)
+        .put(`/projects/${projectId}`)
+        .send({
+          tasks: [{ name: "get data from Nasdaq", notes: "prefer the REST feed" }],
+        })
+        .expect(200);
+      expect(res.body.tasks[0].notes).toBe("prefer the REST feed");
     });
 
     test("allows clearing a task date with null", async () => {

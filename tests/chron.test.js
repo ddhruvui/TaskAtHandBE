@@ -34,6 +34,11 @@ async function getTasksForHeader(headerId) {
   return res.body;
 }
 
+async function getHeaders() {
+  const res = await request(app).get("/headers");
+  return res.body;
+}
+
 async function createCall(data) {
   const res = await request(app).post("/calls").send(data);
   return res.body;
@@ -172,6 +177,10 @@ describe("Cron Job", () => {
         ],
       });
 
+      // Keep the header non-empty so step 6 doesn't delete it after the done
+      // todo task is removed by step 5.
+      await createTask({ name: "keep header alive", headerId: h._id });
+
       await request(app).put(`/tasks/${todoTask._id}`).send({ done: true });
 
       const res = await request(app).post("/cron/run").send({}).expect(200);
@@ -186,12 +195,14 @@ describe("Cron Job", () => {
       expect(updated.tasks).toEqual([
         {
           name: "get data from Nasdaq",
+          notes: "",
           date: null,
           done: false,
           todoTaskId: null,
         },
         {
           name: "get data from EODHD",
+          notes: "",
           date: "2026-07-01",
           done: true,
           todoTaskId: null,
@@ -435,7 +446,80 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 6 — Reorder priorities per header", () => {
+  describe("Step 6 — Delete empty headers & rearrange header priorities", () => {
+    test("deletes a header with no tasks, keeps headers that have tasks", async () => {
+      const withTasks = await createHeader("HasTasks");
+      const empty = await createHeader("Empty");
+
+      await createTask({ name: "T", headerId: withTasks._id });
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.headersDeleted).toBe(1);
+
+      const headers = await getHeaders();
+      const ids = headers.map((h) => h._id);
+      expect(ids).toContain(withTasks._id);
+      expect(ids).not.toContain(empty._id);
+    });
+
+    test("rearranges surviving header priorities to stay contiguous (0..n-1)", async () => {
+      // priorities on create: A=0, B=1, C=2. B is empty and gets deleted.
+      const a = await createHeader("A");
+      const b = await createHeader("B");
+      const c = await createHeader("C");
+
+      await createTask({ name: "TA", headerId: a._id });
+      await createTask({ name: "TC", headerId: c._id });
+
+      await request(app).post("/cron/run").send({}).expect(200);
+
+      const headers = await getHeaders();
+      const byId = Object.fromEntries(headers.map((h) => [h._id, h.priority]));
+      expect(byId[b._id]).toBeUndefined();
+      // A keeps 0, C collapses from 2 → 1 so priorities remain 0..n-1
+      expect(byId[a._id]).toBe(0);
+      expect(byId[c._id]).toBe(1);
+      expect(headers.map((h) => h.priority).sort()).toEqual([0, 1]);
+    });
+
+    test("deletes a header emptied by step 5 done-date-task deletion", async () => {
+      const h = await createHeader("SoonEmpty");
+      const t = await createTask({
+        name: "Done date task",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-01-01" },
+      });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-08" })
+        .expect(200);
+
+      expect(res.body.tasksDeleted).toBeGreaterThanOrEqual(1);
+      expect(res.body.headersDeleted).toBe(1);
+
+      const headers = await getHeaders();
+      expect(headers.map((hd) => hd._id)).not.toContain(h._id);
+    });
+
+    test("no empty headers → headersDeleted is 0 and priorities untouched", async () => {
+      const a = await createHeader("A");
+      const b = await createHeader("B");
+      await createTask({ name: "TA", headerId: a._id });
+      await createTask({ name: "TB", headerId: b._id });
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.headersDeleted).toBe(0);
+
+      const headers = await getHeaders();
+      const byId = Object.fromEntries(headers.map((h) => [h._id, h.priority]));
+      expect(byId[a._id]).toBe(0);
+      expect(byId[b._id]).toBe(1);
+    });
+  });
+
+  describe("Step 7 — Reorder priorities per header", () => {
     test("undone tasks are sorted before done tasks after cron", async () => {
       const h = await createHeader("H");
 
@@ -522,7 +606,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 7 — Reset calls at period boundaries", () => {
+  describe("Step 8 — Reset calls at period boundaries", () => {
     async function seedDoneCalls() {
       const biweekly = await createCall({
         name: "Grandma",

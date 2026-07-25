@@ -358,10 +358,58 @@ async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
 }
 
 /**
- * Step 6 — Reorder priorities per header
+ * Step 6 — Delete headers with no tasks and rearrange header priorities.
+ * Runs after step 5 so headers emptied by task deletion are cleaned up too.
+ * Any header without at least one task is deleted (including headers that
+ * were always empty), then the surviving headers are re-numbered so their
+ * priorities stay contiguous (0..n-1) in their existing order.
+ * @returns {Promise<number>} Number of empty headers deleted
+ */
+async function step6DeleteEmptyHeaders(tasksCol, headersCol) {
+  const headers = await headersCol.find({}).sort({ priority: 1 }).toArray();
+  if (headers.length === 0) return 0;
+
+  // headerId is stored as a string on tasks
+  const headerIdsWithTasks = new Set(
+    (await tasksCol.distinct("headerId")).map((id) => id.toString()),
+  );
+
+  const emptyIds = [];
+  const remaining = [];
+  for (const header of headers) {
+    if (headerIdsWithTasks.has(header._id.toString())) {
+      remaining.push(header);
+    } else {
+      emptyIds.push(header._id);
+    }
+  }
+
+  if (emptyIds.length === 0) return 0;
+
+  await headersCol.deleteMany({ _id: { $in: emptyIds } });
+
+  // Re-number surviving headers to keep priority contiguous (0..n-1)
+  const bulkOps = [];
+  for (let i = 0; i < remaining.length; i++) {
+    if (remaining[i].priority !== i) {
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: remaining[i]._id },
+          update: { $set: { priority: i } },
+        },
+      });
+    }
+  }
+  if (bulkOps.length > 0) await headersCol.bulkWrite(bulkOps);
+
+  return emptyIds.length;
+}
+
+/**
+ * Step 7 — Reorder priorities per header
  * @returns {Promise<number>} Number of headers whose tasks were reordered
  */
-async function step6ReorderPriorities(tasksCol, headersCol, today) {
+async function step7ReorderPriorities(tasksCol, headersCol, today) {
   const headers = await headersCol.find({}).toArray();
 
   let headersReordered = 0;
@@ -405,7 +453,7 @@ async function step6ReorderPriorities(tasksCol, headersCol, today) {
 }
 
 /**
- * Step 7 — Archive call outcomes and reset done calls at period boundaries
+ * Step 8 — Archive call outcomes and reset done calls at period boundaries
  * (independent of tasks/headers).
  * Biweekly calls are due twice per month (periods 1st–14th and 15th–end),
  * monthly calls once; the reset clears the "called" checkmark at each period
@@ -419,7 +467,7 @@ async function step6ReorderPriorities(tasksCol, headersCol, today) {
  * cron re-runs don't double-log.
  * @returns {Promise<number>} Number of calls reset
  */
-async function step7ResetCalls(callsCol, today) {
+async function step8ResetCalls(callsCol, today) {
   const todayDate = today.getUTCDate();
   const lastDay = daysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
 
@@ -495,18 +543,20 @@ async function runCron(now) {
   const markedUndone4 = await step4MarkUndoneDayOfMonth(tasksCol, today);
   const { tasksDeleted, projectTasksCompleted } =
     await step5DeleteDoneDateTasks(tasksCol, headerNames);
-  const headersReordered = await step6ReorderPriorities(
+  const headersDeleted = await step6DeleteEmptyHeaders(tasksCol, headersCol);
+  const headersReordered = await step7ReorderPriorities(
     tasksCol,
     headersCol,
     today,
   );
-  const callsReset = await step7ResetCalls(callsCol, today);
+  const callsReset = await step8ResetCalls(callsCol, today);
 
   const stats = {
     ranAt: today.toISOString(),
     tasksDeleted,
     tasksMarkedUndone: markedUndone2 + markedUndone3 + markedUndone4,
     tasksClamped: tasksClamped1 + tasksClamped2,
+    headersDeleted,
     headersReordered,
     projectTasksCompleted,
     outcomesArchived,

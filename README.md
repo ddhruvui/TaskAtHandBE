@@ -37,7 +37,7 @@ TaskAtHandBE/
 │   │   ├── projectController.js
 │   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (steps 0–7 + AI report)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–8 + AI report)
 │   ├── models/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
@@ -183,7 +183,7 @@ Server listens on **port 3002** by default.
 | Method   | Path            | Description                                                     |
 | -------- | --------------- | --------------------------------------------------------------- |
 | `GET`    | `/projects`     | List all projects (sorted by priority)                          |
-| `POST`   | `/projects`     | Create a project (`{ name, tasks?: [{ name, date?, done?, todoTaskId? }] }`) |
+| `POST`   | `/projects`     | Create a project (`{ name, tasks?: [{ name, notes?, date?, done?, todoTaskId? }] }`) |
 | `PUT`    | `/projects/:id` | Update project name, tasks (replaced wholesale) and/or priority |
 | `DELETE` | `/projects/:id` | Delete a project (created todo tasks remain)                    |
 
@@ -255,7 +255,7 @@ npm run cleartest
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
-| `chron.test.js`          | Cron step logic (clamp, reset, delete, reorder, call resets, project task sync) |
+| `chron.test.js`          | Cron step logic (clamp, reset, delete, empty-header deletion, reorder, call resets, project task sync) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |
