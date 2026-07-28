@@ -19,8 +19,10 @@ async function getCallResultEvents() {
     .toArray();
 }
 
-async function createHeader(name) {
-  const res = await request(app).post("/headers").send({ name });
+async function createHeader(name, projectId) {
+  const res = await request(app)
+    .post("/headers")
+    .send(projectId ? { name, projectId } : { name });
   return res.body;
 }
 
@@ -68,7 +70,7 @@ describe("Cron Job", () => {
     await clearCollections();
   });
 
-  describe("Step 5 — Delete done date/no-ecd tasks", () => {
+  describe("Step 4 — Delete done date/no-ecd tasks", () => {
     test("deletes done date tasks and leaves undone date tasks", async () => {
       const h = await createHeader("H");
       const t1 = await createTask({
@@ -157,7 +159,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 5 — Long-term project task sync", () => {
+  describe("Step 4 — Long-term project task sync", () => {
     test("marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted", async () => {
       const h = await createHeader("Automated Stock Market");
       const todoTask = await createTask({
@@ -262,7 +264,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 3 — Mark undone: day_of_week", () => {
+  describe("Step 2 — Mark undone: day_of_week", () => {
     test("marks done day_of_week tasks undone when today's day matches", async () => {
       const h = await createHeader("H");
       const today = new Date();
@@ -315,7 +317,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 4 — Mark undone: day_of_month", () => {
+  describe("Step 3 — Mark undone: day_of_month", () => {
     test("marks done day_of_month tasks undone when today's date matches", async () => {
       const h = await createHeader("H");
       const today = new Date();
@@ -338,7 +340,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 2 — Mark undone: day_of_year (daily check)", () => {
+  describe("Step 1 — Mark undone: day_of_year (daily check)", () => {
     test("updates year and marks undone when today matches task month/day", async () => {
       const h = await createHeader("H");
       const t = await createTask({
@@ -384,29 +386,74 @@ describe("Cron Job", () => {
       expect(updated.done).toBe(true); // stays done
     });
 
-    test("clamps Feb 29 to Feb 28 on Feb 28 of a non-leap year", async () => {
+    test("treats Feb 29 as due on Feb 28 of a non-leap year without rewriting the day", async () => {
       const h = await createHeader("H");
       const t = await createTask({
         name: "Leap day task",
         headerId: h._id,
         ecd: { type: "day_of_year", value: "29/2/2024" }, // 2024 was a leap year
       });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
 
       // Run cron on Feb 28 2026 (non-leap year)
-      await request(app)
+      const res = await request(app)
         .post("/cron/run")
         .send({ date: "2026-02-28" })
         .expect(200);
 
       const tasks = await getTasksForHeader(h._id);
       const updated = tasks.find((task) => task._id === t._id);
-      expect(updated.ecd.value).toBe("28/2/2026"); // clamped
+      // Only the year advances — the Feb 29 intent is preserved for leap years
+      expect(updated.ecd.value).toBe("29/2/2026");
+      expect(updated.done).toBe(false);
+      expect(res.body.tasksClamped).toBeGreaterThanOrEqual(1);
+    });
+
+    test("keeps firing on Feb 29 in a leap year after a non-leap-year clamp", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "Leap day task",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "29/2/2026" }, // clamped-year run above
+      });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      // 2028 is a leap year — Feb 29 exists and the task is due on it
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2028-02-29" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.ecd.value).toBe("29/2/2028");
       expect(updated.done).toBe(false);
     });
   });
 
-  describe("Step 1 — Clamp day_of_month on 1st of month", () => {
-    test("clamps values exceeding days in that month on the 1st", async () => {
+  describe("day_of_month values survive short months", () => {
+    test("a task set to the 31st is due on the last day of a short month", async () => {
+      const h = await createHeader("H");
+      const t = await createTask({
+        name: "DOM 30/31",
+        headerId: h._id,
+        ecd: { type: "day_of_month", value: [15, 30, 31] },
+      });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
+
+      // Feb 28th 2026 — Feb has 28 days, so 30 and 31 resolve to the 28th
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-02-28" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const updated = tasks.find((task) => task._id === t._id);
+      expect(updated.done).toBe(false);
+      expect(res.body.tasksClamped).toBeGreaterThanOrEqual(1);
+    });
+
+    test("the stored value is never rewritten, so the 31st is still the 31st in a long month", async () => {
       const h = await createHeader("H");
       const t = await createTask({
         name: "DOM 30/31",
@@ -414,39 +461,39 @@ describe("Cron Job", () => {
         ecd: { type: "day_of_month", value: [15, 30, 31] },
       });
 
-      // Feb 1st — Feb has 28 days in 2026
-      await request(app)
-        .post("/cron/run")
-        .send({ date: "2026-02-01" })
-        .expect(200);
+      // A February the task lives through must not degrade its value
+      for (const date of ["2026-02-01", "2026-02-28", "2026-03-01"]) {
+        await request(app).post("/cron/run").send({ date }).expect(200);
+      }
 
       const tasks = await getTasksForHeader(h._id);
       const updated = tasks.find((task) => task._id === t._id);
-      // 15 is fine, 30→28, 31→28
-      expect(updated.ecd.value).toEqual([15, 28, 28]);
+      expect(updated.ecd.value).toEqual([15, 30, 31]);
     });
 
-    test("does NOT clamp on non-1st of month", async () => {
+    test("is not due on a day that only a clamp would match in a longer month", async () => {
       const h = await createHeader("H");
       const t = await createTask({
         name: "DOM 31",
         headerId: h._id,
         ecd: { type: "day_of_month", value: [31] },
       });
+      await request(app).put(`/tasks/${t._id}`).send({ done: true });
 
-      // Feb 15th — should NOT clamp
+      // March 30th — March has 31 days, so the 31st has not arrived yet
       await request(app)
         .post("/cron/run")
-        .send({ date: "2026-02-15" })
+        .send({ date: "2026-03-30" })
         .expect(200);
 
       const tasks = await getTasksForHeader(h._id);
       const updated = tasks.find((task) => task._id === t._id);
-      expect(updated.ecd.value).toEqual([31]); // unchanged
+      expect(updated.done).toBe(true); // stays done
+      expect(updated.ecd.value).toEqual([31]);
     });
   });
 
-  describe("Step 6 — Delete empty headers & rearrange header priorities", () => {
+  describe("Step 5 — Delete empty headers & re-assert header order", () => {
     test("deletes a header with no tasks, keeps headers that have tasks", async () => {
       const withTasks = await createHeader("HasTasks");
       const empty = await createHeader("Empty");
@@ -517,9 +564,78 @@ describe("Cron Job", () => {
       expect(byId[a._id]).toBe(0);
       expect(byId[b._id]).toBe(1);
     });
+
+    test("re-asserts the project header block after deleting an empty header", async () => {
+      // Projects in priority order: P1, P2
+      const p1 = await createProject({ name: "P1" });
+      const p2 = await createProject({ name: "P2" });
+
+      const daily = await createHeader("Daily");
+      const hp1 = await createHeader("P1", p1._id);
+      const hp2 = await createHeader("P2", p2._id);
+      const misc = await createHeader("Misc");
+
+      await createTask({ name: "T", headerId: hp1._id });
+      await createTask({ name: "T", headerId: hp2._id });
+      await createTask({ name: "T", headerId: misc._id });
+      // `daily` is left empty, so the cron deletes it
+
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+      expect(res.body.headersDeleted).toBe(1);
+
+      // Plain re-numbering would leave [P1, P2, Misc]; the block rule puts the
+      // surviving top non-project header back at slot 0 in the same run, so
+      // the next project action has nothing left to reshuffle.
+      const headers = await getHeaders();
+      expect(headers.map((h) => h.name)).toEqual(["Misc", "P1", "P2"]);
+      expect(headers.map((h) => h.priority)).toEqual([0, 1, 2]);
+      expect(headers.find((h) => h.name === "P1").projectId).toBe(p1._id);
+    });
+
+    test("unlinks a header whose project was deleted outside the cron", async () => {
+      const p1 = await createProject({ name: "P1" });
+      const hp1 = await createHeader("P1", p1._id);
+      await createTask({ name: "T", headerId: hp1._id });
+
+      const db = await getDatabase();
+      await db
+        .collection("Projects-Test")
+        .deleteMany({ _id: { $exists: true } });
+
+      await request(app).post("/cron/run").send({}).expect(200);
+
+      const headers = await getHeaders();
+      expect(headers.find((h) => h._id === hp1._id).projectId).toBeNull();
+    });
+
+    test("normalizes a pre-projectId header with no matching project to projectId: null", async () => {
+      const db = await getDatabase();
+      const inserted = await db
+        .collection("Headers-Test")
+        .insertOne({ name: "Legacy", priority: 0 });
+      await createTask({ name: "T", headerId: inserted.insertedId.toString() });
+
+      await request(app).post("/cron/run").send({}).expect(200);
+
+      const headers = await getHeaders();
+      expect(headers[0]).toHaveProperty("projectId", null);
+    });
+
+    test("backfills projectId on a pre-existing header that matches a project by name", async () => {
+      const legacy = await createHeader("Automated Stock Market");
+      await createTask({ name: "T", headerId: legacy._id });
+      const project = await createProject({ name: "Automated Stock Market" });
+
+      await request(app).post("/cron/run").send({}).expect(200);
+
+      const headers = await getHeaders();
+      expect(headers.find((h) => h._id === legacy._id).projectId).toBe(
+        project._id,
+      );
+    });
   });
 
-  describe("Step 7 — Reorder priorities per header", () => {
+  describe("Step 6 — Reorder priorities per header", () => {
     test("undone tasks are sorted before done tasks after cron", async () => {
       const h = await createHeader("H");
 
@@ -604,9 +720,123 @@ describe("Cron Job", () => {
         .map((t) => t._id);
       expect(orderedIds).toEqual([e._id, b._id, c._id, a._id, f._id, d._id]);
     });
+
+    test("a day_of_year task sorts by its next anniversary, not its stored year", async () => {
+      const h = await createHeader("H");
+
+      // Cron runs as 2026-07-15. The yearly task's anniversary (Jan 1) has
+      // already passed this year, so its next occurrence is 2027-01-01 —
+      // later than the August date task, not "the past" pinned to the top.
+      const yearly = await createTask({
+        name: "Yearly-passed",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "1/1/2026" },
+      });
+      const soon = await createTask({
+        name: "Soon-date",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-08-01" },
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-15" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const orderedIds = tasks
+        .sort((x, y) => x.priority - y.priority)
+        .map((t) => t._id);
+      expect(orderedIds).toEqual([soon._id, yearly._id]);
+    });
+
+    test("a day_of_year task due later this year sorts before a later date task", async () => {
+      const h = await createHeader("H");
+
+      const yearly = await createTask({
+        name: "Yearly-upcoming",
+        headerId: h._id,
+        ecd: { type: "day_of_year", value: "20/7/2025" },
+      });
+      const later = await createTask({
+        name: "Later-date",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-09-01" },
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-15" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const orderedIds = tasks
+        .sort((x, y) => x.priority - y.priority)
+        .map((t) => t._id);
+      expect(orderedIds).toEqual([yearly._id, later._id]);
+    });
+
+    test("tasks due the same day keep their existing relative order (stable sort)", async () => {
+      const h = await createHeader("H");
+      const first = await createTask({
+        name: "First",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+      const second = await createTask({
+        name: "Second",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+      const third = await createTask({
+        name: "Third",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-07-20" },
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-15" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(h._id);
+      const orderedIds = tasks
+        .sort((x, y) => x.priority - y.priority)
+        .map((t) => t._id);
+      expect(orderedIds).toEqual([first._id, second._id, third._id]);
+    });
+
+    test("does not stamp updatedAt when it only changes priority", async () => {
+      const h = await createHeader("H");
+      const late = await createTask({
+        name: "Late",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-12-31" },
+      });
+      const early = await createTask({
+        name: "Early",
+        headerId: h._id,
+        ecd: { type: "date", value: "2026-08-01" },
+      });
+
+      const before = await getTasksForHeader(h._id);
+      const earlyBefore = before.find((t) => t._id === early._id).updatedAt;
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-15" })
+        .expect(200);
+
+      const after = await getTasksForHeader(h._id);
+      const earlyAfter = after.find((t) => t._id === early._id);
+      expect(earlyAfter.priority).toBeLessThan(
+        after.find((t) => t._id === late._id).priority,
+      );
+      expect(earlyAfter.updatedAt).toBe(earlyBefore);
+    });
   });
 
-  describe("Step 8 — Reset calls at period boundaries", () => {
+  describe("Step 7 — Reset calls at period boundaries", () => {
     async function seedDoneCalls() {
       const biweekly = await createCall({
         name: "Grandma",

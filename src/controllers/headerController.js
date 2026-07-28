@@ -1,5 +1,9 @@
 const Header = require("../models/Header");
 const { Task } = require("../models/Task");
+const {
+  applyProjectHeaderOrder,
+  isValidObjectId,
+} = require("../services/headerOrder");
 
 /**
  * GET /headers
@@ -23,7 +27,7 @@ const getAllHeaders = async (req, res) => {
  */
 const createHeader = async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, projectId } = req.body;
 
     if (!name || typeof name !== "string" || name.trim() === "") {
       return res
@@ -31,7 +35,29 @@ const createHeader = async (req, res) => {
         .json({ error: "Header name must be a non-empty string" });
     }
 
-    const header = await Header.create({ name: name.trim() });
+    if (
+      projectId !== undefined &&
+      projectId !== null &&
+      !isValidObjectId(projectId)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "projectId must be a valid id string or null" });
+    }
+
+    const { header, created } = await Header.create({
+      name: name.trim(),
+      projectId: projectId || null,
+    });
+
+    // A project header belongs in the projects' priority order, not at the
+    // bottom where a plain create leaves it.
+    if (header.projectId) {
+      await applyProjectHeaderOrder();
+      const placed = await Header.findById(header._id.toString());
+      return res.status(created ? 201 : 200).json(placed || header);
+    }
+
     res.status(201).json(header);
   } catch (error) {
     console.error("Error creating header:", error);

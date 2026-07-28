@@ -3,6 +3,8 @@ module.exports = {
   coveragePathIgnorePatterns: ["/node_modules/"],
   testMatch: ["**/__tests__/**/*.test.js", "**/?(*.)+(spec|test).js"],
   setupFilesAfterEnv: ["<rootDir>/tests/setup.js"],
-  testTimeout: 10000,
+  // Tests run against a real (remote) MongoDB; individual requests can stall
+  // well past 10s when the shared cluster is overloaded.
+  testTimeout: 30000,
   verbose: true,
 };

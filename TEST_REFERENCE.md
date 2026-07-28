@@ -139,8 +139,8 @@ Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/
 | Test                                                  | What it checks                                                                |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
 | returns empty array when no goals exist               | `GET /goals` returns `[]` on a clean DB                                        |
-| creates a goal with a step list                       | `POST /goals` returns 201 with `_id`, `name`, `steps`, timestamps; omitted step status defaults to `pending` |
-| creates a goal without steps (defaults to empty list) | `POST /goals { name }` → 201 with `steps: []`                                  |
+| creates a goal with a step list                       | `POST /goals` returns 201 with `_id`, `name`, `steps`, timestamps; omitted step status defaults to `pending`; first goal gets `priority: 0` |
+| creates a goal without steps (defaults to empty list) | `POST /goals { name }` → 201 with `steps: []` and the next `priority` (appended at end) |
 | rejects missing name                                  | `POST /goals { steps }` → 400                                                  |
 | rejects empty name                                    | `{ name: "  " }` → 400                                                         |
 | rejects steps that are not an array                   | `{ steps: "Wake up at 6" }` → 400                                              |
@@ -149,7 +149,7 @@ Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/
 | rejects steps with an invalid status                  | `{ status: "done" }` → 400 (must be `pending`/`under_progress`)                |
 | normalizes legacy statuses (achieved, active) to under_progress | `{ status: "achieved" }` and `{ status: "active" }` → 201 with `status: "under_progress"` (pre-rename data stays editable) |
 | trims whitespace from name and step names             | `"  Trimmed  "` → `"Trimmed"`; step names trimmed too                          |
-| returns all goals sorted by name ascending            | `GET /goals` array is ascending by `name`                                      |
+| returns all goals sorted by priority ascending (creation order) | `GET /goals` is ordered by `priority`; names and priorities match creation order, with a deleted goal's gap closed |
 | updates goal name                                     | `PUT /goals/:id { name }` → 200, steps untouched                               |
 | updates goal steps (replace wholesale)                | `PUT /goals/:id { steps }` → 200, name untouched; status changes persist       |
 | allows clearing steps with an empty array             | `{ steps: [] }` → 200 with `steps: []` (unlike events)                         |
@@ -161,9 +161,25 @@ Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/
 
 ---
 
+### Goal priority ordering
+
+Goal-level reordering, mirroring the header/project priority scheme. Each test re-seeds three goals A/B/C at priorities 0/1/2.
+
+| Test                                                        | What it checks                                                              |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| moves a goal up and shifts the displaced one down           | `PUT { priority: 0 }` on C → `C:0, A:1, B:2`                                |
+| moves a goal down and shifts the displaced ones up          | `PUT { priority: 2 }` on A → `B:0, C:1, A:2`                                |
+| moving to the same priority is a no-op                      | `PUT { priority: 1 }` on B leaves the order untouched                        |
+| updates name and priority together                          | One `PUT` applies both; the response carries the new name and priority       |
+| rejects a priority beyond the last goal                     | `{ priority: 99 }` → 400 and the order is unchanged                          |
+| rejects a negative priority                                 | `{ priority: -1 }` → 400                                                     |
+| rejects a non-integer priority                              | `{ priority: 1.5 }` → 400                                                    |
+| closes the gap when a middle goal is deleted                | Deleting B leaves `A:0, C:1`                                                 |
+| backfills priorities for goals stored before the field existed | `$unset` priority on all goals; first `GET` assigns `0..n-1` in name order, persists them, and a move straight after works |
+
 ## tests/projects.test.js
 
-Projects CRUD — long-term projects with ordered task lists, header-style priorities and a done/undone barrier inside each project (the todo connection is client-driven; the cron side is covered in `chron.test.js`).
+Projects CRUD — long-term projects with ordered task lists, header-style priorities and a done/undone barrier inside each project, plus the server-owned project↔header ordering cascades (task-level todo sync is client-driven; the cron side is covered in `chron.test.js`).
 
 | Test                                                      | What it checks                                                                |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -197,6 +213,19 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | returns 404 for unknown id (PUT)                          | Fake ObjectId → 404                                                            |
 | deletes a project and shifts remaining priorities         | `DELETE /projects/:id` → `{ deleted: id }`; remaining priorities close the gap |
 | returns 404 when deleting again                           | Second delete → 404                                                            |
+
+### Project ↔ todo header ordering (server-owned)
+
+| Test                                                                | What it checks                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| a new project header is placed in the project block, not at the bottom | `POST /headers { projectId }` → order `[Daily, P1, P2, Misc]`: top ordinary header keeps slot 0, project headers follow in project order |
+| the block starts at 0 when there is no non-project header            | With only project headers → `[P1, P2]` at priorities 0, 1                       |
+| creating a header for a project that already has one is idempotent   | Second `POST /headers { projectId }` → `200` with the same `_id`, still one header |
+| adopts a pre-projectId header that matches the project by name       | Legacy header with the project's name is adopted (`200`, `projectId` set) instead of duplicated |
+| moving a project re-orders the todo headers                          | `PUT /projects/:id { priority: 0 }` → header block re-ordered to match          |
+| renaming a project renames its todo header                           | `PUT /projects/:id { name }` → the linked header is renamed                     |
+| deleting a project unlinks its header and closes the block           | `DELETE /projects/:id` → `{ headersUnlinked: 1 }`, header survives with `projectId: null` and leaves the block |
+| rejects a malformed projectId                                        | `POST /headers { projectId: "not-an-id" }` → 400                                |
 
 ---
 
@@ -397,35 +426,44 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 
 | Test                                                            | What it checks                                                         |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| deletes done date tasks and leaves undone date tasks            | Step 5: done `date` tasks deleted; undone `date` tasks untouched       |
-| deletes done no-ecd tasks                                       | Step 5: done tasks with `ecd: null` are also archived and deleted      |
-| does not delete done recurring tasks (dow, dom, doy)            | Step 5: recurring ECD types are never deleted, even when done          |
-| marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted | Step 5 project sync: deleted done todo task → matching project task `done: true`, `todoTaskId: null`, `date` kept, re-sorted below undone tasks; `projectTasksCompleted: 1` |
-| leaves project tasks alone when the linked todo task is not done | Step 5 project sync: undone linked todo task survives; project task stays undone and linked; `projectTasksCompleted: 0` |
-| does not touch unlinked project tasks when other done tasks are deleted | Step 5 project sync: deletions without a matching `todoTaskId` never flip project tasks |
-| marks done day_of_week tasks undone when today's day matches    | Step 3: `done: true` → `done: false` when day name matches             |
-| does not affect day_of_week tasks whose day does not match      | Step 3: no change when today's day is not in `ecd.value`               |
-| marks done day_of_month tasks undone when today's date matches  | Step 4: same logic for day-of-month                                    |
-| updates year and marks undone when today matches task month/day | Step 2: past-year value advanced to today's year, `done` reset to false |
-| does not update task when today does not match task month/day   | Step 2: non-matching day → ECD value and `done` untouched              |
-| clamps Feb 29 to Feb 28 on Feb 28 of a non-leap year            | Step 2: `29/2/<past year>` → `28/2/<current year>` and reset           |
-| clamps values exceeding days in that month on the 1st           | Step 1: `[15, 30, 31]` in February → `[15, 28, 28]`                    |
-| does NOT clamp on non-1st of month                              | Step 1: skipped except on the 1st                                      |
-| deletes a header with no tasks, keeps headers that have tasks   | Step 6: an empty header is deleted, a header with a task survives, `headersDeleted: 1` |
-| rearranges surviving header priorities to stay contiguous (0..n-1) | Step 6: deleting the middle empty header collapses remaining priorities to `0..n-1` |
-| deletes a header emptied by step 5 done-date-task deletion      | Step 6: header whose only task was a done `date` task (deleted by step 5) is removed, `headersDeleted: 1` |
-| no empty headers → headersDeleted is 0 and priorities untouched | Step 6: every header has a task → nothing deleted, priorities unchanged, `headersDeleted: 0` |
-| undone tasks are sorted before done tasks after cron            | Step 7: all undone tasks have lower priority than all done tasks       |
-| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 7: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
-| resets done biweekly calls on the 15th, monthly untouched       | Step 8: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
-| resets ALL done calls on the last day of the month              | Step 8: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
-| treats Feb 28 as the last day of a non-leap February            | Step 8: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
-| does not reset any calls mid-month                              | Step 8: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
-| leaves undone calls untouched on the 15th                       | Step 8: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
-| archives call_result for due biweekly calls (done and missed) on the 15th | Step 8: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
-| archives call_result for ALL calls on the last day of the month | Step 8: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
-| does not double-log call_result when cron re-runs for the same date | Step 8: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
-| logs no call_result mid-month                                   | Step 8: run on `2026-03-10` → zero `call_result` events                        |
+| deletes done date tasks and leaves undone date tasks            | Step 4: done `date` tasks deleted; undone `date` tasks untouched       |
+| deletes done no-ecd tasks                                       | Step 4: done tasks with `ecd: null` are also archived and deleted      |
+| does not delete done recurring tasks (dow, dom, doy)            | Step 4: recurring ECD types are never deleted, even when done          |
+| marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted | Step 4 project sync: deleted done todo task → matching project task `done: true`, `todoTaskId: null`, `date` kept, re-sorted below undone tasks; `projectTasksCompleted: 1` |
+| leaves project tasks alone when the linked todo task is not done | Step 4 project sync: undone linked todo task survives; project task stays undone and linked; `projectTasksCompleted: 0` |
+| does not touch unlinked project tasks when other done tasks are deleted | Step 4 project sync: deletions without a matching `todoTaskId` never flip project tasks |
+| marks done day_of_week tasks undone when today's day matches    | Step 2: `done: true` → `done: false` when day name matches             |
+| does not affect day_of_week tasks whose day does not match      | Step 2: no change when today's day is not in `ecd.value`               |
+| marks done day_of_month tasks undone when today's date matches  | Step 3: same logic for day-of-month                                    |
+| updates year and marks undone when today matches task month/day | Step 1: past-year value advanced to today's year, `done` reset to false |
+| does not update task when today does not match task month/day   | Step 1: non-matching day → ECD value and `done` untouched              |
+| treats Feb 29 as due on Feb 28 of a non-leap year without rewriting the day | Step 1: `29/2/2024` on `2026-02-28` → `29/2/2026` (day preserved), `done: false`, `tasksClamped ≥ 1` |
+| keeps firing on Feb 29 in a leap year after a non-leap-year clamp | Step 1: `29/2/2026` on `2028-02-29` → `29/2/2028`, `done: false` — the Feb 29 intent survives |
+| a task set to the 31st is due on the last day of a short month   | Step 3: `[15, 30, 31]` on `2026-02-28` → marked undone, `tasksClamped ≥ 1` |
+| the stored value is never rewritten, so the 31st is still the 31st in a long month | Step 3: three runs across February leave `ecd.value` as `[15, 30, 31]` |
+| is not due on a day that only a clamp would match in a longer month | Step 3: `[31]` on `2026-03-30` → stays done (March has a 31st)      |
+| deletes a header with no tasks, keeps headers that have tasks   | Step 5: an empty header is deleted, a header with a task survives, `headersDeleted: 1` |
+| rearranges surviving header priorities to stay contiguous (0..n-1) | Step 5: deleting the middle empty header collapses remaining priorities to `0..n-1` |
+| deletes a header emptied by step 4 done-date-task deletion      | Step 5: header whose only task was a done `date` task (deleted by step 4) is removed, `headersDeleted: 1` |
+| no empty headers → headersDeleted is 0 and priorities untouched | Step 5: every header has a task → nothing deleted, priorities unchanged, `headersDeleted: 0` |
+| re-asserts the project header block after deleting an empty header | Step 5: deleting the empty top header leaves `[Misc, P1, P2]` at `0..2` (block rule), not the plain re-numbering `[P1, P2, Misc]` |
+| unlinks a header whose project was deleted outside the cron      | Step 5: header pointing at a missing project gets `projectId: null` |
+| backfills projectId on a pre-existing header that matches a project by name | Step 5: legacy header adopts the same-named project's `_id` |
+| undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
+| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 6: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
+| a day_of_year task sorts by its next anniversary, not its stored year | Step 6: `1/1/2026` on `2026-07-15` sorts **after** a `2026-08-01` date task (next occurrence is 2027-01-01), instead of being pinned to the top by its past stored year |
+| a day_of_year task due later this year sorts before a later date task | Step 6: `20/7/2025` on `2026-07-15` resolves to 2026-07-20 and sorts before a `2026-09-01` date task |
+| tasks due the same day keep their existing relative order (stable sort) | Step 6: three tasks on `2026-07-20` keep creation order after the re-sort |
+| does not stamp updatedAt when it only changes priority           | Step 6: a re-prioritised task keeps its previous `updatedAt`         |
+| resets done biweekly calls on the 15th, monthly untouched       | Step 7: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
+| resets ALL done calls on the last day of the month              | Step 7: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
+| treats Feb 28 as the last day of a non-leap February            | Step 7: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
+| does not reset any calls mid-month                              | Step 7: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
+| leaves undone calls untouched on the 15th                       | Step 7: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
+| archives call_result for due biweekly calls (done and missed) on the 15th | Step 7: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
+| archives call_result for ALL calls on the last day of the month | Step 7: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
+| does not double-log call_result when cron re-runs for the same date | Step 7: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
+| logs no call_result mid-month                                   | Step 7: run on `2026-03-10` → zero `call_result` events                        |
 
 ---
 
@@ -453,6 +491,8 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
+| skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ skipInsights: true }` → `generateInsights` not called, no `insightGenerated` key |
+| without skipInsights the insight step still runs        | Same env, empty body → `generateInsights` called once, `insightGenerated: true`                 |
 
 ---
 
@@ -471,7 +511,7 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | logs task_result for a day_of_year task whose month/day matched yesterday       | Year in the stored value is ignored for the match                                      |
 | is idempotent — rerunning the cron for the same date does not double-log        | Same taskId + dueDate is skipped on re-run for all three types (dow, dom, doy)         |
 
-### Cron Step 5 — task_completed archived before deletion
+### Cron Step 4 — task_completed archived before deletion
 
 | Test                                                                          | What it checks                                                              |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
@@ -580,8 +620,8 @@ Tests the `doneAt` timestamp lifecycle across user toggles and cron resets.
 | marking done sets doneAt to a current timestamp | `PUT { done: true }` → valid ISO datetime close to now            |
 | marking undone clears doneAt back to null     | `PUT { done: false }` → `doneAt: null`                              |
 | re-sending done=true does not move doneAt     | Done→done is a no-op; timestamp unchanged                           |
-| cron day_of_week reset clears doneAt          | Step 3 reset → `done: false`, `doneAt: null`                        |
-| cron day_of_year reset clears doneAt          | Step 2 reset → `done: false`, `doneAt: null`, year advanced to today's |
+| cron day_of_week reset clears doneAt          | Step 2 reset → `done: false`, `doneAt: null`                        |
+| cron day_of_year reset clears doneAt          | Step 1 reset → `done: false`, `doneAt: null`, year advanced to today's |
 
 ---
 

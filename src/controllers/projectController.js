@@ -1,4 +1,9 @@
 const { Project, sortProjectTasks } = require("../models/Project");
+const {
+  applyProjectHeaderOrder,
+  renameProjectHeader,
+  unlinkProjectHeader,
+} = require("../services/headerOrder");
 
 /**
  * Validate and normalize a project task list.
@@ -150,6 +155,15 @@ const updateProject = async (req, res) => {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    // Cascade to the project's todo header: a rename keeps the header's name
+    // in step, a move re-orders the project header block.
+    if (updates.name !== undefined) {
+      await renameProjectHeader(id, updated.name);
+    }
+    if (updates.priority !== undefined) {
+      await applyProjectHeaderOrder();
+    }
+
     res.json(updated);
   } catch (error) {
     console.error("Error updating project:", error);
@@ -164,8 +178,9 @@ const updateProject = async (req, res) => {
 
 /**
  * DELETE /projects/:id
- * Deletes a project (and shifts remaining project priorities). Tasks already
- * added to the todo from its dated tasks are untouched.
+ * Deletes a project (and shifts remaining project priorities). Its todo
+ * header and the tasks already added from its dated tasks are kept, but the
+ * header is unlinked so it stops being ordered with the projects.
  */
 const deleteProject = async (req, res) => {
   try {
@@ -177,7 +192,11 @@ const deleteProject = async (req, res) => {
       return res.status(404).json({ error: "Project not found" });
     }
 
-    res.json({ deleted: id });
+    const headersUnlinked = await unlinkProjectHeader(id);
+    // Remaining project headers close the gap the unlinked one left behind.
+    await applyProjectHeaderOrder();
+
+    res.json({ deleted: id, headersUnlinked });
   } catch (error) {
     console.error("Error deleting project:", error);
     res

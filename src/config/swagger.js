@@ -46,6 +46,13 @@ const options = {
             _id: { type: "string", example: "507f1f77bcf86cd799439011" },
             name: { type: "string", example: "Work" },
             priority: { type: "integer", example: 0 },
+            projectId: {
+              type: "string",
+              nullable: true,
+              description:
+                "_id of the long-term project this header mirrors, or null for a plain header. Project headers are kept in the projects' priority order as one contiguous block.",
+              example: null,
+            },
           },
         },
         ECD: {
@@ -142,6 +149,12 @@ const options = {
                 { name: "Wake up at 6", status: "under_progress" },
                 { name: "Have 1 fruit a day", status: "pending" },
               ],
+            },
+            priority: {
+              type: "integer",
+              description:
+                "Display order, contiguous 0..n-1. New goals append at the end; changing it shifts the other goals to keep the sequence contiguous.",
+              example: 0,
             },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
@@ -252,6 +265,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersDeleted: { type: "integer", example: 0 },
+            headersReprioritized: { type: "integer", example: 2 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
@@ -269,6 +283,7 @@ const options = {
             tasksMarkedUndone: { type: "integer", example: 3 },
             tasksClamped: { type: "integer", example: 1 },
             headersDeleted: { type: "integer", example: 0 },
+            headersReprioritized: { type: "integer", example: 2 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },

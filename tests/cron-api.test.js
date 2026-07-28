@@ -1,6 +1,16 @@
 const request = require("supertest");
+
+// The insight step never runs under NODE_ENV=test; the skipInsights tests
+// below flip the env to reach it, so generateInsights must be a mock (a real
+// call would hit the Anthropic API).
+jest.mock("../src/services/insightsService", () => ({
+  ...jest.requireActual("../src/services/insightsService"),
+  generateInsights: jest.fn().mockResolvedValue({ report: "mock" }),
+}));
+
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
+const { generateInsights } = require("../src/services/insightsService");
 
 async function clearCollections() {
   const db = await getDatabase();
@@ -274,6 +284,43 @@ describe("Cron API Endpoints", () => {
       const res = await request(app).get("/cron/details").expect(200);
       expect(res.body).not.toHaveProperty("ranAt");
       expect(res.body).toHaveProperty("lastRanAt");
+    });
+  });
+
+  describe("POST /cron/run — skipInsights flag", () => {
+    // The insight branch requires NODE_ENV !== "test" and an API key; flip
+    // both for these tests only (generateInsights is mocked at the top of
+    // this file, so no real API call happens).
+    const origNodeEnv = process.env.NODE_ENV;
+    const origApiKey = process.env.ANTHROPIC_API_KEY;
+
+    beforeEach(() => {
+      process.env.NODE_ENV = "development";
+      process.env.ANTHROPIC_API_KEY = "test-key";
+      generateInsights.mockClear();
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = origNodeEnv;
+      if (origApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = origApiKey;
+    });
+
+    test("skipInsights: true suppresses the insight report", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ skipInsights: true })
+        .expect(200);
+
+      expect(generateInsights).not.toHaveBeenCalled();
+      expect(res.body).not.toHaveProperty("insightGenerated");
+    });
+
+    test("without skipInsights the insight step still runs", async () => {
+      const res = await request(app).post("/cron/run").send({}).expect(200);
+
+      expect(generateInsights).toHaveBeenCalledTimes(1);
+      expect(res.body.insightGenerated).toBe(true);
     });
   });
 });

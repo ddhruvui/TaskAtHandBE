@@ -1,6 +1,11 @@
 const { getDatabase } = require("../config/db");
 const { ObjectId } = require("mongodb");
 
+/** Escape a string for safe use inside a RegExp (header names are free text). */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 class Header {
   /**
    * Get the Headers collection for the current environment
@@ -33,21 +38,57 @@ class Header {
   }
 
   /**
-   * Create a new header. Priority is assigned as total existing headers (appended at end).
-   * @param {Object} data  { name }
-   * @returns {Promise<Object>} Created header
+   * Find the header belonging to a long-term project, if one exists.
+   * @param {string} projectId
+   * @returns {Promise<Object|null>}
+   */
+  static async findByProject(projectId) {
+    const collection = await this.getCollection();
+    return collection.findOne({ projectId });
+  }
+
+  /**
+   * Create a new header. Priority is assigned as total existing headers
+   * (appended at end); a caller that passes `projectId` should follow up with
+   * `applyProjectHeaderOrder()` to move it into the project block.
+   *
+   * Creating with a `projectId` that already has a header is idempotent — the
+   * existing header is returned instead of a duplicate, so two clients racing
+   * to mirror the same project task cannot end up with two headers.
+   *
+   * @param {Object} data  { name, projectId? }
+   * @returns {Promise<{header: Object, created: boolean}>}
    */
   static async create(data) {
     const collection = await this.getCollection();
+    const projectId = data.projectId || null;
+
+    if (projectId) {
+      const existing = await this.findByProject(projectId);
+      if (existing) return { header: existing, created: false };
+
+      // Adopt a pre-`projectId` header that matches the project by name (the
+      // old identity rule) instead of creating a duplicate alongside it.
+      const legacy = await collection.findOne({
+        projectId: null,
+        name: { $regex: `^${escapeRegex(data.name)}$`, $options: "i" },
+      });
+      if (legacy) {
+        await collection.updateOne({ _id: legacy._id }, { $set: { projectId } });
+        return { header: { ...legacy, projectId }, created: false };
+      }
+    }
+
     const count = await collection.countDocuments();
 
     const header = {
       name: data.name,
       priority: count,
+      projectId,
     };
 
     const result = await collection.insertOne(header);
-    return { _id: result.insertedId, ...header };
+    return { header: { _id: result.insertedId, ...header }, created: true };
   }
 
   /**

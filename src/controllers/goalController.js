@@ -93,7 +93,7 @@ const createGoal = async (req, res) => {
 const updateGoal = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, steps } = req.body;
+    const { name, steps, priority } = req.body;
 
     if (
       name !== undefined &&
@@ -104,8 +104,18 @@ const updateGoal = async (req, res) => {
         .json({ error: "Goal name must be a non-empty string" });
     }
 
+    if (
+      priority !== undefined &&
+      (!Number.isInteger(priority) || priority < 0)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Priority must be a non-negative integer" });
+    }
+
     const updates = {};
     if (name !== undefined) updates.name = name.trim();
+    if (priority !== undefined) updates.priority = priority;
     if (steps !== undefined) {
       try {
         updates.steps = validateSteps(steps);
@@ -123,6 +133,9 @@ const updateGoal = async (req, res) => {
     res.json(updated);
   } catch (error) {
     console.error("Error updating goal:", error);
+    if (error.message.startsWith("Priority must be")) {
+      return res.status(400).json({ error: error.message });
+    }
     res
       .status(500)
       .json({ error: "Failed to update goal", message: error.message });

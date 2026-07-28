@@ -32,6 +32,13 @@ router.get("/", getAllHeaders);
  *   post:
  *     tags: [Headers]
  *     summary: Create a new header
+ *     description: >
+ *       Creates a header at the bottom of the list. Passing `projectId` marks
+ *       it as the todo header for that long-term project: it is placed in the
+ *       projects' priority order instead of at the bottom, and the call is
+ *       idempotent — if the project already has a header (or a pre-`projectId`
+ *       header matches the project by name) that header is adopted and
+ *       returned with 200 rather than creating a duplicate.
  *     requestBody:
  *       required: true
  *       content:
@@ -42,7 +49,17 @@ router.get("/", getAllHeaders);
  *             properties:
  *               name:
  *                 type: string
+ *               projectId:
+ *                 type: string
+ *                 nullable: true
+ *                 description: _id of the long-term project this header mirrors
  *     responses:
+ *       200:
+ *         description: Existing project header reused
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Header'
  *       201:
  *         description: Created header
  *         content:

@@ -9,7 +9,8 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Affirmations** — single short lines the user reads daily (e.g. "Thank you blessing"); completely independent of tasks and headers
 - **Calls** — people the user must call biweekly or monthly (e.g. "Grandma"); completely independent of tasks and headers, with the "called" checkmark auto-reset by the cron at each period boundary (the 15th and the last day of the month)
 - **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong daily habit); clients start one step at a time as a daily task under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side
-- **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering and a done/undone barrier inside each project; giving a task a date mirrors it into the todo under a header named after the project (client-driven), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
+- **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering and a done/undone barrier inside each project; giving a task a date mirrors it into the todo under the project's own header (created via `POST /headers` with a `projectId`), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
+- **Server-owned header ordering** — headers linked to a project (`projectId`) are kept in the projects' priority order as one contiguous block, re-applied atomically on header create, project move/rename/delete and nightly by the cron; clients never reorder them
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
 - **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
@@ -129,7 +130,7 @@ Server listens on **port 3002** by default.
 | Method   | Path           | Description                               |
 | -------- | -------------- | ----------------------------------------- |
 | `GET`    | `/headers`     | List all headers (sorted by priority)     |
-| `POST`   | `/headers`     | Create a header                           |
+| `POST`   | `/headers`     | Create a header (optional `projectId` links it to a project and places it in the project block; idempotent per project) |
 | `PUT`    | `/headers/:id` | Update header name and/or priority        |
 | `DELETE` | `/headers/:id` | Delete header and all its tasks (cascade) |
 
@@ -173,9 +174,9 @@ Server listens on **port 3002** by default.
 
 | Method   | Path         | Description                                                     |
 | -------- | ------------ | --------------------------------------------------------------- |
-| `GET`    | `/goals`     | List all goals (sorted by name)                                 |
+| `GET`    | `/goals`     | List all goals (sorted by priority)                             |
 | `POST`   | `/goals`     | Create a goal (`{ name, steps?: [{ name, status? }] }`)         |
-| `PUT`    | `/goals/:id` | Update goal name and/or steps (steps replaced wholesale)        |
+| `PUT`    | `/goals/:id` | Update goal name, steps and/or priority (steps replaced wholesale) |
 | `DELETE` | `/goals/:id` | Delete a goal (created tasks remain)                            |
 
 ### Projects
@@ -185,13 +186,13 @@ Server listens on **port 3002** by default.
 | `GET`    | `/projects`     | List all projects (sorted by priority)                          |
 | `POST`   | `/projects`     | Create a project (`{ name, tasks?: [{ name, notes?, date?, done?, todoTaskId? }] }`) |
 | `PUT`    | `/projects/:id` | Update project name, tasks (replaced wholesale) and/or priority |
-| `DELETE` | `/projects/:id` | Delete a project (created todo tasks remain)                    |
+| `DELETE` | `/projects/:id` | Delete a project (its todo header survives, unlinked) (created todo tasks remain)                    |
 
 ### Cron
 
 | Method | Path            | Description                                             |
 | ------ | --------------- | ------------------------------------------------------- |
-| `POST` | `/cron/run`     | Manually trigger the cron job (accepts `date` override) |
+| `POST` | `/cron/run`     | Manually trigger the cron job (accepts `date` override and `skipInsights` flag) |
 | `GET`  | `/cron/run`     | Manually trigger the cron job (no body needed)          |
 | `GET`  | `/cron/status`  | Stats from the most recent cron run                     |
 | `GET`  | `/cron/details` | Stats from the most recent cron run (alias for status)  |
@@ -250,12 +251,12 @@ npm run cleartest
 | `events.test.js`         | Events CRUD, validation, trimming, and sorting             |
 | `affirmations.test.js`   | Affirmations CRUD, validation, trimming, and sorting       |
 | `calls.test.js`          | Calls CRUD, validation, doneAt lifecycle, and sorting      |
-| `goals.test.js`          | Goals CRUD, step/status validation, trimming, and sorting  |
-| `projects.test.js`       | Projects CRUD, task validation, done-first sorting, priority moves |
+| `goals.test.js`          | Goals CRUD, step/status validation, trimming, and priority ordering |
+| `projects.test.js`       | Projects CRUD, task validation, done-first sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
-| `chron.test.js`          | Cron step logic (clamp, reset, delete, empty-header deletion, reorder, call resets, project task sync) |
+| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, task reorder, call resets, project task sync) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |

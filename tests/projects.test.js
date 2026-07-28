@@ -356,4 +356,136 @@ describe("Projects CRUD", () => {
       await request(app).delete(`/projects/${projectId}`).expect(404);
     });
   });
+
+  describe("Project ↔ todo header ordering (server-owned)", () => {
+    async function clearHeaders() {
+      const db = await getDatabase();
+      await db.collection("Headers-Test").deleteMany({});
+      await db.collection("Tasks-Test").deleteMany({});
+      await db.collection("Projects-Test").deleteMany({});
+    }
+
+    const headerNames = async () => {
+      const res = await request(app).get("/headers").expect(200);
+      return res.body.map((h) => h.name);
+    };
+
+    const createProject = async (name) =>
+      (await request(app).post("/projects").send({ name }).expect(201)).body;
+
+    const createProjectHeader = async (name, projectId) =>
+      (await request(app).post("/headers").send({ name, projectId })).body;
+
+    beforeEach(clearHeaders);
+
+    test("a new project header is placed in the project block, not at the bottom", async () => {
+      const p1 = await createProject("P1");
+      const p2 = await createProject("P2");
+
+      await request(app).post("/headers").send({ name: "Daily" }).expect(201);
+      await request(app).post("/headers").send({ name: "Misc" }).expect(201);
+      await createProjectHeader("P2", p2._id);
+      await createProjectHeader("P1", p1._id);
+
+      // Top non-project header keeps slot 0; project headers follow in the
+      // projects' own order; the rest fill in after.
+      expect(await headerNames()).toEqual(["Daily", "P1", "P2", "Misc"]);
+    });
+
+    test("the block starts at 0 when there is no non-project header", async () => {
+      const p1 = await createProject("P1");
+      const p2 = await createProject("P2");
+      await createProjectHeader("P2", p2._id);
+      await createProjectHeader("P1", p1._id);
+
+      expect(await headerNames()).toEqual(["P1", "P2"]);
+    });
+
+    test("creating a header for a project that already has one is idempotent", async () => {
+      const p1 = await createProject("P1");
+      const first = await request(app)
+        .post("/headers")
+        .send({ name: "P1", projectId: p1._id })
+        .expect(201);
+      const again = await request(app)
+        .post("/headers")
+        .send({ name: "P1", projectId: p1._id })
+        .expect(200);
+
+      expect(again.body._id).toBe(first.body._id);
+      expect(await headerNames()).toEqual(["P1"]);
+    });
+
+    test("adopts a pre-projectId header that matches the project by name", async () => {
+      const legacy = await request(app)
+        .post("/headers")
+        .send({ name: "Automated Stock Market" })
+        .expect(201);
+      const project = await createProject("Automated Stock Market");
+
+      const res = await request(app)
+        .post("/headers")
+        .send({ name: "Automated Stock Market", projectId: project._id })
+        .expect(200);
+
+      expect(res.body._id).toBe(legacy.body._id);
+      expect(res.body.projectId).toBe(project._id);
+      expect(await headerNames()).toEqual(["Automated Stock Market"]);
+    });
+
+    test("moving a project re-orders the todo headers", async () => {
+      const p1 = await createProject("P1");
+      const p2 = await createProject("P2");
+      await request(app).post("/headers").send({ name: "Daily" }).expect(201);
+      await createProjectHeader("P1", p1._id);
+      await createProjectHeader("P2", p2._id);
+      expect(await headerNames()).toEqual(["Daily", "P1", "P2"]);
+
+      await request(app)
+        .put(`/projects/${p2._id}`)
+        .send({ priority: 0 })
+        .expect(200);
+
+      expect(await headerNames()).toEqual(["Daily", "P2", "P1"]);
+    });
+
+    test("renaming a project renames its todo header", async () => {
+      const p1 = await createProject("P1");
+      await createProjectHeader("P1", p1._id);
+
+      await request(app)
+        .put(`/projects/${p1._id}`)
+        .send({ name: "Renamed" })
+        .expect(200);
+
+      expect(await headerNames()).toEqual(["Renamed"]);
+    });
+
+    test("deleting a project unlinks its header and closes the block", async () => {
+      const p1 = await createProject("P1");
+      const p2 = await createProject("P2");
+      await request(app).post("/headers").send({ name: "Daily" }).expect(201);
+      const h1 = await createProjectHeader("P1", p1._id);
+      await createProjectHeader("P2", p2._id);
+
+      const res = await request(app)
+        .delete(`/projects/${p1._id}`)
+        .expect(200);
+      expect(res.body.headersUnlinked).toBe(1);
+
+      const headers = (await request(app).get("/headers")).body;
+      // The header survives (its tasks are still the user's), but it leaves
+      // the project block and the remaining project header moves up.
+      expect(headers.find((h) => h._id === h1._id).projectId).toBeNull();
+      expect(headers.map((h) => h.name)).toEqual(["Daily", "P2", "P1"]);
+    });
+
+    test("rejects a malformed projectId", async () => {
+      const res = await request(app)
+        .post("/headers")
+        .send({ name: "P", projectId: "not-an-id" })
+        .expect(400);
+      expect(res.body.error).toMatch(/projectId/);
+    });
+  });
 });

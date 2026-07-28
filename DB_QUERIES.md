@@ -44,6 +44,26 @@ db.Headers.find().sort({ priority: 1 });
 db.Tasks.find({ headerId: "<header _id as string>" }).sort({ priority: 1 });
 ```
 
+### Project headers and their ordering block
+
+Headers with a `projectId` are kept in the projects' priority order by the
+server (see `src/services/headerOrder.js`).
+
+```javascript
+db.Headers.find({ projectId: { $ne: null } }).sort({ priority: 1 });
+```
+
+### Headers pointing at a project that no longer exists
+
+These self-heal to `projectId: null` on the next cron run or project write.
+
+```javascript
+const projectIds = db.Projects.find({}, { _id: 1 })
+  .toArray()
+  .map((p) => p._id.toString());
+db.Headers.find({ projectId: { $nin: [null, ...projectIds] } });
+```
+
 ### All done tasks that the next cron run will delete (date or no ECD)
 
 ```javascript

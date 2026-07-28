@@ -99,6 +99,10 @@ app.use("/insights", require("./routes/insightRoutes"));
  *                 type: string
  *                 description: ISO date string to run cron as if it were that date
  *                 example: "2026-01-01T00:00:00.000Z"
+ *               skipInsights:
+ *                 type: boolean
+ *                 description: Skip the daily AI insight report for this run (used by e2e tests to avoid a real Anthropic API call)
+ *                 example: true
  *     responses:
  *       200:
  *         description: Cron ran successfully
@@ -127,7 +131,9 @@ app.post("/cron/run", async (req, res) => {
   try {
     const overrideDate =
       req.body && req.body.date ? new Date(req.body.date) : undefined;
-    const stats = await runCron(overrideDate);
+    const stats = await runCron(overrideDate, {
+      skipInsights: Boolean(req.body && req.body.skipInsights),
+    });
     res.json(stats);
   } catch (error) {
     console.error("Error running cron:", error);

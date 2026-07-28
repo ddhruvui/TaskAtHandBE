@@ -1,5 +1,6 @@
 const { getDatabase } = require("../config/db");
 const Archive = require("../models/Archive");
+const { applyProjectHeaderOrder } = require("../services/headerOrder");
 
 // ─── Date / Day helpers ───────────────────────────────────────────────────────
 
@@ -10,11 +11,6 @@ function daysInMonth(year, month) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-/** Returns true if the year is a leap year */
-function isLeapYear(year) {
-  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-}
-
 /**
  * Parse a D/M/YYYY string into { day, month, year } numbers.
  * e.g. "7/3/2006" → { day: 7, month: 3, year: 2006 }
@@ -22,6 +18,66 @@ function isLeapYear(year) {
 function parseDayOfYear(str) {
   const [d, m, y] = str.split("/").map(Number);
   return { day: d, month: m, year: y };
+}
+
+/**
+ * Resolve stored `day_of_month` values against a specific month, clamping any
+ * day the month is too short for onto its last day (so "the 31st" fires on
+ * Feb 28 and is still the 31st in March).
+ *
+ * This is deliberately computed on read: an earlier version clamped
+ * `ecd.value` in the database on the 1st of each month, which permanently
+ * rewrote "the 31st" to 28 after the first February it survived.
+ *
+ * @param {number[]} values
+ * @param {number} year
+ * @param {number} month  1-indexed
+ * @returns {{days: number[], clamped: boolean}}
+ */
+function effectiveDaysOfMonth(values, year, month) {
+  const maxDay = daysInMonth(year, month);
+  let clamped = false;
+  const days = values.map((v) => {
+    if (v > maxDay) clamped = true;
+    return Math.min(v, maxDay);
+  });
+  return { days, clamped };
+}
+
+/**
+ * Resolve a `day_of_year` value against a specific year, clamping Feb 29 to
+ * Feb 28 in non-leap years. Like `effectiveDaysOfMonth`, the stored value is
+ * left alone so the Feb 29 intent survives.
+ * @returns {{day: number, clamped: boolean}}
+ */
+function effectiveDayOfYear(day, month, year) {
+  const maxDay = daysInMonth(year, month);
+  return { day: Math.min(day, maxDay), clamped: day > maxDay };
+}
+
+/**
+ * The timestamp of the next occurrence of a `day_of_year` ECD, on or after
+ * today — the same "next upcoming" semantics `day_of_week` and `day_of_month`
+ * use. The stored year is ignored: it records the last occurrence the cron
+ * rolled over, not the next one, so reading it directly pinned every yearly
+ * task to a past date (and therefore to the top of its header) for the whole
+ * year between anniversaries.
+ */
+function nextDayOfYearTimestamp(value, today) {
+  const { day, month } = parseDayOfYear(value);
+  const todayTs = Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate(),
+  );
+  for (let year = today.getUTCFullYear(); ; year++) {
+    const ts = Date.UTC(
+      year,
+      month - 1,
+      effectiveDayOfYear(day, month, year).day,
+    );
+    if (ts >= todayTs) return ts;
+  }
 }
 
 /**
@@ -60,27 +116,29 @@ function nextEcdTimestamp(ecd, today) {
     }
 
     case "day_of_month": {
+      const nm = todayMonth === 12 ? 1 : todayMonth + 1;
+      const ny = todayMonth === 12 ? todayYear + 1 : todayYear;
+      // Both months are clamped: "the 31st" is due Feb 28, not March 3.
+      const thisMonth = effectiveDaysOfMonth(
+        ecd.value,
+        todayYear,
+        todayMonth,
+      ).days;
+      const nextMonth = effectiveDaysOfMonth(ecd.value, ny, nm).days;
+
       let minTs = Infinity;
-      for (const dom of ecd.value) {
-        let ts;
-        if (dom >= todayDate) {
-          ts = Date.UTC(todayYear, todayMonth - 1, dom);
-        } else {
-          // next month
-          const nm = todayMonth === 12 ? 1 : todayMonth + 1;
-          const ny = todayMonth === 12 ? todayYear + 1 : todayYear;
-          const clamped = Math.min(dom, daysInMonth(ny, nm));
-          ts = Date.UTC(ny, nm - 1, clamped);
-        }
+      for (let i = 0; i < ecd.value.length; i++) {
+        const ts =
+          thisMonth[i] >= todayDate
+            ? Date.UTC(todayYear, todayMonth - 1, thisMonth[i])
+            : Date.UTC(ny, nm - 1, nextMonth[i]);
         if (ts < minTs) minTs = ts;
       }
       return minTs;
     }
 
-    case "day_of_year": {
-      const { day, month, year } = parseDayOfYear(ecd.value);
-      return Date.UTC(year, month - 1, day);
-    }
+    case "day_of_year":
+      return nextDayOfYearTimestamp(ecd.value, today);
 
     default:
       return Infinity;
@@ -163,11 +221,15 @@ async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
     });
   }
 
-  // Recurring tasks: day_of_month due yesterday
+  // Recurring tasks: day_of_month due yesterday. Values are resolved against
+  // yesterday's month, so a task set to the 31st is picked up on Feb 28.
+  const yYear = yesterday.getUTCFullYear();
   const monthly = await tasksCol
-    .find({ "ecd.type": "day_of_month", "ecd.value": yDom })
+    .find({ "ecd.type": "day_of_month" })
     .toArray();
   for (const task of monthly) {
+    const { days } = effectiveDaysOfMonth(task.ecd.value, yYear, yMonth);
+    if (!days.includes(yDom)) continue;
     if (alreadyLogged.has(task._id.toString())) continue;
     events.push({
       type: "task_result",
@@ -177,11 +239,13 @@ async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
     });
   }
 
-  // Recurring tasks: day_of_year due yesterday (match day/month, any year)
+  // Recurring tasks: day_of_year due yesterday (match day/month, any year;
+  // a Feb 29 task counts as due on Feb 28 of a non-leap year)
   const yearly = await tasksCol.find({ "ecd.type": "day_of_year" }).toArray();
   for (const task of yearly) {
     const { day, month } = parseDayOfYear(task.ecd.value);
-    if (day !== yDom || month !== yMonth) continue;
+    if (month !== yMonth) continue;
+    if (effectiveDayOfYear(day, month, yYear).day !== yDom) continue;
     if (alreadyLogged.has(task._id.toString())) continue;
     events.push({
       type: "task_result",
@@ -196,42 +260,14 @@ async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
 }
 
 /**
- * Step 1 — Clamp day_of_month values (runs on the 1st of every month).
- * @returns {Promise<number>} Number of tasks whose values were clamped
- */
-async function step1ClampDayOfMonth(tasksCol, today) {
-  if (today.getUTCDate() !== 1) return 0;
-
-  const year = today.getUTCFullYear();
-  const month = today.getUTCMonth() + 1;
-  const maxDay = daysInMonth(year, month);
-
-  const tasks = await tasksCol.find({ "ecd.type": "day_of_month" }).toArray();
-
-  let tasksClamped = 0;
-  for (const task of tasks) {
-    const clamped = task.ecd.value.map((v) => Math.min(v, maxDay));
-    const changed = clamped.some((v, i) => v !== task.ecd.value[i]);
-    if (changed) {
-      await tasksCol.updateOne(
-        { _id: task._id },
-        { $set: { "ecd.value": clamped, updatedAt: new Date() } },
-      );
-      tasksClamped++;
-    }
-  }
-  return tasksClamped;
-}
-
-/**
- * Step 2 — Mark undone: day_of_year (runs daily).
- * - If today's month/day matches a task's ECD month/day and the ECD year is
- *   in the past, the task is marked undone and the year is advanced to today.
- * - On Feb 28 of a non-leap year, any task with Feb 29 of a past year is
- *   clamped to Feb 28 of the current year and marked undone.
+ * Step 1 — Mark undone: day_of_year (runs daily).
+ * A task is due today when its stored month/day resolves to today — Feb 29
+ * resolves to Feb 28 in a non-leap year. The stored day is never rewritten
+ * (so a Feb 29 task stays a Feb 29 task); only the year is advanced, which is
+ * what marks the occurrence as consumed for the rest of the year.
  * @returns {Promise<{clamped: number, markedUndone: number}>}
  */
-async function step2IncrementDayOfYear(tasksCol, today) {
+async function step1IncrementDayOfYear(tasksCol, today) {
   const todayYear = today.getUTCFullYear();
   const todayMonth = today.getUTCMonth() + 1; // 1-indexed
   const todayDate = today.getUTCDate();
@@ -245,52 +281,33 @@ async function step2IncrementDayOfYear(tasksCol, today) {
 
     // Skip tasks already set to the current year or a future year
     if (year >= todayYear) continue;
+    if (month !== todayMonth) continue;
 
-    let finalDay = day;
-    let shouldUpdate = false;
+    const effective = effectiveDayOfYear(day, month, todayYear);
+    if (effective.day !== todayDate) continue;
+    if (effective.clamped) clamped++;
 
-    // Case 1: Feb 28 of a non-leap year — clamp past Feb 29 tasks
-    if (
-      todayMonth === 2 &&
-      todayDate === 28 &&
-      !isLeapYear(todayYear) &&
-      month === 2 &&
-      day === 29
-    ) {
-      finalDay = 28;
-      shouldUpdate = true;
-      clamped++;
-    }
-
-    // Case 2: Today's month/day matches the task's scheduled month/day
-    if (month === todayMonth && day === todayDate) {
-      shouldUpdate = true;
-    }
-
-    if (shouldUpdate) {
-      const newValue = `${finalDay}/${month}/${todayYear}`;
-      await tasksCol.updateOne(
-        { _id: task._id },
-        {
-          $set: {
-            "ecd.value": newValue,
-            done: false,
-            doneAt: null,
-            updatedAt: new Date(),
-          },
+    await tasksCol.updateOne(
+      { _id: task._id },
+      {
+        $set: {
+          "ecd.value": `${day}/${month}/${todayYear}`,
+          done: false,
+          doneAt: null,
+          updatedAt: new Date(),
         },
-      );
-      if (task.done) markedUndone++;
-    }
+      },
+    );
+    if (task.done) markedUndone++;
   }
   return { clamped, markedUndone };
 }
 
 /**
- * Step 3 — Mark undone: day_of_week
+ * Step 2 — Mark undone: day_of_week
  * @returns {Promise<number>} Number of tasks marked undone
  */
-async function step3MarkUndoneDayOfWeek(tasksCol, today) {
+async function step2MarkUndoneDayOfWeek(tasksCol, today) {
   const todayDow = DOW_NAMES[today.getUTCDay()];
 
   const result = await tasksCol.updateMany(
@@ -301,28 +318,60 @@ async function step3MarkUndoneDayOfWeek(tasksCol, today) {
 }
 
 /**
- * Step 4 — Mark undone: day_of_month
- * @returns {Promise<number>} Number of tasks marked undone
+ * Step 3 — Mark undone: day_of_month.
+ * Stored days are resolved against the current month, so a task set to the
+ * 31st is due on Feb 28 without its value ever being rewritten.
+ * @returns {Promise<{clamped: number, markedUndone: number}>}
  */
-async function step4MarkUndoneDayOfMonth(tasksCol, today) {
+async function step3MarkUndoneDayOfMonth(tasksCol, today) {
+  const todayYear = today.getUTCFullYear();
+  const todayMonth = today.getUTCMonth() + 1;
   const todayDate = today.getUTCDate();
+  const maxDay = daysInMonth(todayYear, todayMonth);
+
+  // Only the month's last day can carry a clamped value; on every other day
+  // the stored value must match exactly, which the index can answer directly.
+  if (todayDate !== maxDay) {
+    const result = await tasksCol.updateMany(
+      { "ecd.type": "day_of_month", "ecd.value": todayDate, done: true },
+      { $set: { done: false, doneAt: null, updatedAt: new Date() } },
+    );
+    return { clamped: 0, markedUndone: result.modifiedCount };
+  }
+
+  const tasks = await tasksCol.find({ "ecd.type": "day_of_month" }).toArray();
+
+  const dueIds = [];
+  let clamped = 0;
+  for (const task of tasks) {
+    const { days, clamped: wasClamped } = effectiveDaysOfMonth(
+      task.ecd.value,
+      todayYear,
+      todayMonth,
+    );
+    if (!days.includes(todayDate)) continue;
+    if (wasClamped) clamped++;
+    if (task.done) dueIds.push(task._id);
+  }
+
+  if (dueIds.length === 0) return { clamped, markedUndone: 0 };
 
   const result = await tasksCol.updateMany(
-    { "ecd.type": "day_of_month", "ecd.value": todayDate, done: true },
+    { _id: { $in: dueIds } },
     { $set: { done: false, doneAt: null, updatedAt: new Date() } },
   );
-  return result.modifiedCount;
+  return { clamped, markedUndone: result.modifiedCount };
 }
 
 /**
- * Step 5 — Delete completed date tasks and completed no-ECD tasks.
+ * Step 4 — Delete completed date tasks and completed no-ECD tasks.
  * Each deleted task is archived first so completion history is preserved.
  * Deleted tasks linked from a long-term project (ProjectTask.todoTaskId)
  * mark that project task done — the todo entry disappears but the project
  * keeps it as a completed step.
  * @returns {Promise<{tasksDeleted: number, projectTasksCompleted: number}>}
  */
-async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
+async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
   const tasks = await tasksCol
     .find({
       done: true,
@@ -358,102 +407,107 @@ async function step5DeleteDoneDateTasks(tasksCol, headerNames) {
 }
 
 /**
- * Step 6 — Delete headers with no tasks and rearrange header priorities.
- * Runs after step 5 so headers emptied by task deletion are cleaned up too.
+ * Step 5 — Delete headers with no tasks, then re-assert the header order.
+ * Runs after step 4 so headers emptied by task deletion are cleaned up too.
  * Any header without at least one task is deleted (including headers that
- * were always empty), then the surviving headers are re-numbered so their
- * priorities stay contiguous (0..n-1) in their existing order.
- * @returns {Promise<number>} Number of empty headers deleted
+ * were always empty).
+ *
+ * The surviving headers are then re-numbered by `applyProjectHeaderOrder`,
+ * which keeps priorities contiguous (0..n-1) *and* keeps project headers in
+ * their projects' order. Doing both here is what stops the cron and the
+ * clients from drifting apart: plain re-numbering could leave a project
+ * header above the todo's top non-project header, and the next project
+ * action would then visibly reshuffle the list.
+ *
+ * @returns {Promise<{headersDeleted: number, headersReprioritized: number}>}
  */
-async function step6DeleteEmptyHeaders(tasksCol, headersCol) {
-  const headers = await headersCol.find({}).sort({ priority: 1 }).toArray();
-  if (headers.length === 0) return 0;
+async function step5DeleteEmptyHeaders(tasksCol, headersCol) {
+  const headers = await headersCol.find({}).toArray();
+  if (headers.length === 0)
+    return { headersDeleted: 0, headersReprioritized: 0 };
 
   // headerId is stored as a string on tasks
   const headerIdsWithTasks = new Set(
     (await tasksCol.distinct("headerId")).map((id) => id.toString()),
   );
 
-  const emptyIds = [];
-  const remaining = [];
-  for (const header of headers) {
-    if (headerIdsWithTasks.has(header._id.toString())) {
-      remaining.push(header);
-    } else {
-      emptyIds.push(header._id);
-    }
+  const emptyIds = headers
+    .filter((h) => !headerIdsWithTasks.has(h._id.toString()))
+    .map((h) => h._id);
+
+  if (emptyIds.length > 0) {
+    await headersCol.deleteMany({ _id: { $in: emptyIds } });
   }
 
-  if (emptyIds.length === 0) return 0;
-
-  await headersCol.deleteMany({ _id: { $in: emptyIds } });
-
-  // Re-number surviving headers to keep priority contiguous (0..n-1)
-  const bulkOps = [];
-  for (let i = 0; i < remaining.length; i++) {
-    if (remaining[i].priority !== i) {
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: remaining[i]._id },
-          update: { $set: { priority: i } },
-        },
-      });
-    }
-  }
-  if (bulkOps.length > 0) await headersCol.bulkWrite(bulkOps);
-
-  return emptyIds.length;
+  const { headersReordered } = await applyProjectHeaderOrder();
+  return {
+    headersDeleted: emptyIds.length,
+    headersReprioritized: headersReordered,
+  };
 }
 
 /**
- * Step 7 — Reorder priorities per header
+ * Step 6 — Reorder priorities per header.
+ *
+ * Undone tasks first, sorted by their next upcoming ECD ascending; then done
+ * tasks.
+ *
+ * Ties (two tasks due the same day) keep their existing relative order —
+ * `Array.prototype.sort` is required to be stable, so a manual ordering
+ * within a single day survives the nightly re-sort.
+ *
+ * `updatedAt` is deliberately left alone: priority is a system-managed field,
+ * and stamping every task the cron touches would make "recently edited" mean
+ * "the cron ran".
+ *
  * @returns {Promise<number>} Number of headers whose tasks were reordered
  */
-async function step7ReorderPriorities(tasksCol, headersCol, today) {
-  const headers = await headersCol.find({}).toArray();
+async function step6ReorderPriorities(tasksCol, today) {
+  // One pass over the task collection, grouped in memory, instead of a query
+  // per header.
+  const tasks = await tasksCol.find({}).sort({ priority: 1 }).toArray();
 
+  const byHeader = new Map();
+  for (const task of tasks) {
+    const list = byHeader.get(task.headerId);
+    if (list) list.push(task);
+    else byHeader.set(task.headerId, [task]);
+  }
+
+  const bulkOps = [];
   let headersReordered = 0;
-  for (const header of headers) {
-    const headerId = header._id.toString();
-    const tasks = await tasksCol
-      .find({ headerId })
-      .sort({ priority: 1 })
-      .toArray();
+  const byEcd = (a, b) =>
+    nextEcdTimestamp(a.ecd, today) - nextEcdTimestamp(b.ecd, today);
 
-    if (tasks.length === 0) continue;
+  for (const headerTasks of byHeader.values()) {
+    const undone = headerTasks.filter((t) => !t.done);
+    const done = headerTasks.filter((t) => t.done);
 
-    const undone = tasks.filter((t) => !t.done);
-    const done = tasks.filter((t) => t.done);
-
-    // Sort undone by next upcoming ECD timestamp ascending
-    undone.sort(
-      (a, b) => nextEcdTimestamp(a.ecd, today) - nextEcdTimestamp(b.ecd, today),
-    );
+    undone.sort(byEcd);
 
     const ordered = [...undone, ...done];
 
-    const bulkOps = [];
+    let changed = false;
     for (let i = 0; i < ordered.length; i++) {
       if (ordered[i].priority !== i) {
+        changed = true;
         bulkOps.push({
           updateOne: {
             filter: { _id: ordered[i]._id },
-            update: { $set: { priority: i, updatedAt: new Date() } },
+            update: { $set: { priority: i } },
           },
         });
       }
     }
-
-    if (bulkOps.length > 0) {
-      await tasksCol.bulkWrite(bulkOps);
-      headersReordered++;
-    }
+    if (changed) headersReordered++;
   }
+
+  if (bulkOps.length > 0) await tasksCol.bulkWrite(bulkOps);
   return headersReordered;
 }
 
 /**
- * Step 8 — Archive call outcomes and reset done calls at period boundaries
+ * Step 7 — Archive call outcomes and reset done calls at period boundaries
  * (independent of tasks/headers).
  * Biweekly calls are due twice per month (periods 1st–14th and 15th–end),
  * monthly calls once; the reset clears the "called" checkmark at each period
@@ -467,7 +521,7 @@ async function step7ReorderPriorities(tasksCol, headersCol, today) {
  * cron re-runs don't double-log.
  * @returns {Promise<number>} Number of calls reset
  */
-async function step8ResetCalls(callsCol, today) {
+async function step7ResetCalls(callsCol, today) {
   const todayDate = today.getUTCDate();
   const lastDay = daysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
 
@@ -519,9 +573,11 @@ let lastRun = null;
 /**
  * Run the full cron sequence.
  * @param {Date} [now]  Override for testing (defaults to current local midnight)
+ * @param {Object} [options]
+ * @param {boolean} [options.skipInsights]  Skip the AI insight report (used by e2e runs)
  * @returns {Promise<Object>} Stats about what the run did
  */
-async function runCron(now) {
+async function runCron(now, { skipInsights = false } = {}) {
   const today = now || new Date();
   // Normalise to UTC midnight for timezone-independent operations
   today.setUTCHours(0, 0, 0, 0);
@@ -536,35 +592,38 @@ async function runCron(now) {
     headerNames,
     today,
   );
-  const tasksClamped1 = await step1ClampDayOfMonth(tasksCol, today);
-  const { clamped: tasksClamped2, markedUndone: markedUndone2 } =
-    await step2IncrementDayOfYear(tasksCol, today);
-  const markedUndone3 = await step3MarkUndoneDayOfWeek(tasksCol, today);
-  const markedUndone4 = await step4MarkUndoneDayOfMonth(tasksCol, today);
+  const { clamped: clampedDoy, markedUndone: markedUndoneDoy } =
+    await step1IncrementDayOfYear(tasksCol, today);
+  const markedUndoneDow = await step2MarkUndoneDayOfWeek(tasksCol, today);
+  const { clamped: clampedDom, markedUndone: markedUndoneDom } =
+    await step3MarkUndoneDayOfMonth(tasksCol, today);
   const { tasksDeleted, projectTasksCompleted } =
-    await step5DeleteDoneDateTasks(tasksCol, headerNames);
-  const headersDeleted = await step6DeleteEmptyHeaders(tasksCol, headersCol);
-  const headersReordered = await step7ReorderPriorities(
-    tasksCol,
-    headersCol,
-    today,
-  );
-  const callsReset = await step8ResetCalls(callsCol, today);
+    await step4DeleteDoneDateTasks(tasksCol, headerNames);
+  const { headersDeleted, headersReprioritized } =
+    await step5DeleteEmptyHeaders(tasksCol, headersCol);
+  const headersReordered = await step6ReorderPriorities(tasksCol, today);
+  const callsReset = await step7ResetCalls(callsCol, today);
 
   const stats = {
     ranAt: today.toISOString(),
     tasksDeleted,
-    tasksMarkedUndone: markedUndone2 + markedUndone3 + markedUndone4,
-    tasksClamped: tasksClamped1 + tasksClamped2,
+    tasksMarkedUndone: markedUndoneDoy + markedUndoneDow + markedUndoneDom,
+    tasksClamped: clampedDoy + clampedDom,
     headersDeleted,
+    headersReprioritized,
     headersReordered,
     projectTasksCompleted,
     outcomesArchived,
     callsReset,
   };
 
-  // Generate the daily AI insight report (skipped in tests / without an API key)
-  if (process.env.NODE_ENV !== "test" && process.env.ANTHROPIC_API_KEY) {
+  // Generate the daily AI insight report (skipped in tests / without an API key
+  // / when the caller opts out via skipInsights)
+  if (
+    !skipInsights &&
+    process.env.NODE_ENV !== "test" &&
+    process.env.ANTHROPIC_API_KEY
+  ) {
     try {
       const { generateInsights } = require("../services/insightsService");
       const insight = await generateInsights();
