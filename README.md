@@ -6,6 +6,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 
 - **Headers & Tasks** — two-collection data model with automatic, contiguous priority management
 - **Events** — reusable task bundles (e.g. "Burger Night" with its shopping list); clients schedule them as dated tasks under a header named after the event (reused if it exists, created otherwise)
+- **Life Events** — annually recurring dates (e.g. "Wife's birthday" on 7/3); every year on the day, the nightly cron adds a linked one-time task to the todo under an "Events" header (reused case-insensitively, created otherwise), and when the done task is cleaned up the event is marked done — never deleted — so it fires again next year
 - **Affirmations** — single short lines the user reads daily (e.g. "Thank you blessing"); completely independent of tasks and headers
 - **Calls** — people the user must call biweekly or monthly (e.g. "Grandma"); completely independent of tasks and headers, with the "called" checkmark auto-reset by the cron at each period boundary (the 15th and the last day of the month)
 - **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong daily habit); clients start one step at a time as a daily task under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side
@@ -36,6 +37,7 @@ TaskAtHandBE/
 │   │   ├── callController.js
 │   │   ├── goalController.js
 │   │   ├── projectController.js
+│   │   ├── lifeEventController.js
 │   │   └── insightController.js
 │   ├── cron/
 │   │   └── cronJob.js          # Daily cron logic (steps 0–8 + AI report)
@@ -43,6 +45,7 @@ TaskAtHandBE/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
 │   │   ├── Event.js            # Reusable task bundles (templates)
+│   │   ├── LifeEvent.js        # Annually recurring life events (cron adds them to the todo)
 │   │   ├── Affirmation.js      # Daily short lines (independent of tasks)
 │   │   ├── Call.js             # Biweekly/monthly call reminders (independent of tasks)
 │   │   ├── Goal.js             # Habit backlogs built one step at a time
@@ -56,6 +59,7 @@ TaskAtHandBE/
 │       ├── headerRoutes.js
 │       ├── taskRoutes.js
 │       ├── eventRoutes.js
+│       ├── lifeEventRoutes.js
 │       ├── affirmationRoutes.js
 │       ├── callRoutes.js
 │       ├── goalRoutes.js
@@ -112,7 +116,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, Affirmations, Calls, Goals, Projects, TaskArchive, Insights) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Goals, Projects, TaskArchive, Insights) |
 | `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
@@ -151,6 +155,15 @@ Server listens on **port 3002** by default.
 | `POST`   | `/events`     | Create an event (`{ name, tasks: [string] }`)   |
 | `PUT`    | `/events/:id` | Update event name and/or task list              |
 | `DELETE` | `/events/:id` | Delete an event template (created tasks remain) |
+
+### Life Events
+
+| Method   | Endpoint          | Description                                                   |
+| -------- | ----------------- | ------------------------------------------------------------- |
+| `GET`    | `/lifeevents`     | List all life events (sorted by priority)                     |
+| `POST`   | `/lifeevents`     | Create a life event (`{ name, date: "D/M" }`)                 |
+| `PUT`    | `/lifeevents/:id` | Update name, date, done, todoTaskId and/or priority           |
+| `DELETE` | `/lifeevents/:id` | Delete a life event (this year's todo task, if any, remains)  |
 
 ### Affirmations
 
@@ -249,6 +262,7 @@ npm run cleartest
 | ------------------------ | ---------------------------------------------------------- |
 | `crud.test.js`           | Basic CRUD for headers and tasks                           |
 | `events.test.js`         | Events CRUD, validation, trimming, and sorting             |
+| `lifeevents.test.js`     | Life Events CRUD, date validation, lastAddedYear baselining, priority moves |
 | `affirmations.test.js`   | Affirmations CRUD, validation, trimming, and sorting       |
 | `calls.test.js`          | Calls CRUD, validation, doneAt lifecycle, and sorting      |
 | `goals.test.js`          | Goals CRUD, step/status validation, trimming, and priority ordering |
@@ -256,7 +270,7 @@ npm run cleartest
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
-| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, task reorder, call resets, project task sync) |
+| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |

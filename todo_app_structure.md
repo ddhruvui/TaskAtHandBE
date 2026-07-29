@@ -157,6 +157,55 @@ a project is backfilled, and a header pointing at a deleted project has its
 
 ---
 
+### LifeEvent (annually recurring life event)
+
+```json
+{
+  "_id": "uuid",
+  "name": "string",
+  "date": "D/M (no zero-padding, no year)",
+  "lastAddedYear": "number (server-managed)",
+  "done": "boolean (default: false)",
+  "todoTaskId": "string | null",
+  "priority": "number (0-based, contiguous across life events)",
+  "createdAt": "ISO 8601 datetime",
+  "updatedAt": "ISO 8601 datetime"
+}
+```
+
+**Rules:**
+
+- `name` must be a non-empty string (trimmed)
+- `date` is a `"D/M"` string (trimmed, no zero-padding, no year — e.g. `"7/3"`
+  for March 7). The month must be 1–12 and the day valid for that month;
+  Feb 29 is allowed and fires on Feb 28 in non-leap years, same clamping as
+  `day_of_year` ECDs
+- A life event recurs **annually**: every year on its day, cron step 6 adds a
+  one-time `date`-ECD Task named after it to the todo under a Header named
+  **"Events"** (an existing header with that name is reused
+  case-insensitively; a new one is created at the end of the list only when
+  none exists) and stores the task's `_id` in `todoTaskId`
+- `lastAddedYear` is **server-managed**: it records the year of the last
+  occurrence the cron consumed (the same role the year plays in `day_of_year`
+  ECDs), which is what makes same-day cron reruns idempotent. It is baselined
+  on create and on a date **change** (last year while this year's occurrence
+  is still upcoming — today included — this year once it has passed); a no-op
+  date write does not re-baseline it. Clients must treat it as read-only
+- `done` means "this year's occurrence completed". Clients keep it in sync
+  with the linked todo task (toggling done on either side flips the other,
+  and deleting the todo task or its header clears `todoTaskId`); cron step 4
+  completes the loop when it deletes the done todo task. Step 6 resets it to
+  `false` when it adds the next occurrence
+- `priority` is managed exactly like project priority: new life events append
+  at the end, moves shift the affected neighbors, deletes close the gap —
+  always contiguous `0..n-1`
+- Deleting a life event keeps the todo task created from it (if any); the
+  cron **never** deletes life events — completing a year's occurrence only
+  marks the event done and clears the link, and it fires again on its next
+  anniversary
+
+---
+
 ### Affirmation (daily short line)
 
 ```json
@@ -203,7 +252,7 @@ a project is backfilled, and a header pointing at a deleted project has its
   to `true`, set back to `null` when `done` flips to `false` (by the user or
   by a cron reset)
 - Listed in the order they were added (`createdAt` ascending)
-- The daily cron resets done calls at period boundaries (see Cron Step 7)
+- The daily cron resets done calls at period boundaries (see Cron Step 8)
 
 ---
 
@@ -324,7 +373,7 @@ them.
 | `task_completed`   | Cron step 4 · `Task.deleteByHeader` | A done task captured (with `plannedFor`, `doneAt`, `headerName`) before deletion — logged both when cron step 4 removes a completed one-off task **and** when a header delete cascades over its done tasks (any ECD type), so completion history is never orphaned |
 | `task_rescheduled` | `Task.update`         | An ECD change: `{ taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater, reason }`. `pushedLater` is `true` when a one-time `date` moves later (a postpone). `reason` is the user's optional stated cause for the postpone (`null` when none, or when the reason was blank). A pushed-later reschedule with `reason: null` is unexcused procrastination; a valid stated reason is a legitimate deferral. The reason rides in on the `PUT /tasks/:id` body and is **never** written to the task document. |
 | `task_deleted`     | `Task.delete`         | An **undone** task deleted manually, with the user's `reason`: `{ taskId, taskName, headerId, headerName, ecdType, ecd, reason, taskCreatedAt }`. Logged only for undone tasks (done tasks log nothing); `reason` is `null` when none is supplied. Header-cascade deletes (`Task.deleteByHeader`) do **not** log `task_deleted` for their undone tasks, but their **done** tasks are archived as `task_completed`. |
-| `call_result`      | Cron step 7           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
+| `call_result`      | Cron step 8           | A call's done/missed outcome for one period, logged at the period boundary before the reset: `{ callId, callName, frequency, dueDate, completed, doneAt }` (`dueDate` = the reset day; no header fields — calls have no header) |
 
 ```json
 {
@@ -444,6 +493,10 @@ outcome is only knowable at the following midnight:
   list so done tasks sit at the bottom. The task leaves the todo but is
   retained in the project as a completed step. Counted in the run stats as
   `projectTasksCompleted`
+- Life events sync the same way: for every life event whose `todoTaskId`
+  matches a deleted task's `_id`, set `done = true` and clear `todoTaskId`.
+  The event itself is **never deleted** — it fires again on its next
+  anniversary. Counted in the run stats as `lifeEventsCompleted`
 
 #### Step 5 — Delete empty headers & re-assert header order
 
@@ -463,7 +516,29 @@ same run:
 - The same pass repairs `projectId` links (backfill by name, clear when the
   project is gone)
 
-#### Step 6 — Reorder priorities per header
+#### Step 6 — Add due life events to the todo
+
+- For every life event whose `lastAddedYear` is behind the current year:
+  - Resolve the stored `"D/M"` against the current year — Feb 29 resolves to
+    Feb 28 in a non-leap year (the stored day is never rewritten)
+  - If the resolved month/day is today **and** the event's linked task (if
+    any) no longer exists: create a one-time Task named after the event with
+    `ecd: { type: "date", value: today }` under a Header named **"Events"**
+    (matched case-insensitively; created at the end of the list when none
+    exists), then set `todoTaskId` to the new task's `_id`, `done = false`
+    and `lastAddedYear` = today's year. Counted in the run stats as
+    `lifeEventTasksCreated`
+- The `lastAddedYear` advance is what makes same-day reruns idempotent — even
+  after the task was completed and cleaned up by a rerun's step 4, the event
+  cannot fire twice in one year (the same year-advance trick step 1 uses)
+- An event whose linked task **still exists** (last year's occurrence never
+  completed) is skipped without advancing `lastAddedYear`: the pending task
+  already represents it in the todo, so occurrences don't stack
+- Runs after step 5 so the header landscape is settled, and before step 7 so
+  the new task is sorted into place by its ECD (a task due today sorts to the
+  top of its header)
+
+#### Step 7 — Reorder priorities per header
 
 - For each header, collect all its tasks and sort as follows:
   1. **Undone tasks** (`done === false`) — sorted by next upcoming ECD date **ascending** → assigned priorities `0, 1, 2, ...` (sooner = closer to 0)
@@ -483,7 +558,7 @@ same run:
 | `day_of_year`  | The **next anniversary** of the stored day/month on or after today, Feb 29 clamped to Feb 28 in non-leap years. The stored year records the last occurrence the cron consumed, not the next one, so it is not used here |
 | _none_         | Infinity — no-ECD tasks sort last among undone tasks                           |
 
-#### Step 7 — Archive call outcomes and reset calls at period boundaries _(runs last)_
+#### Step 8 — Archive call outcomes and reset calls at period boundaries _(runs last)_
 
 Calls are independent of tasks/headers, so this step runs after all task
 steps. Biweekly calls are due twice per month (periods 1st–14th and
@@ -498,7 +573,7 @@ each period boundary:
 
 #### Final step — Generate the daily AI insight report
 
-- After step 7, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+- After step 8, when `ANTHROPIC_API_KEY` is set (and not in test mode):
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
   - Send stats + recent events + the previous report to `claude-sonnet-4-6` with a structured-output schema
@@ -749,6 +824,77 @@ the same as on create when present.
 #### `DELETE /events/:id`
 
 Deletes an event template. Headers/tasks previously created from it remain.
+
+**Response `200`**
+
+```json
+{
+  "deleted": "uuid"
+}
+```
+
+---
+
+### Life Events
+
+#### `GET /lifeevents`
+
+Returns all life events sorted by `priority` ascending.
+
+**Response `200`**
+
+```json
+[
+  {
+    "_id": "uuid",
+    "name": "Wife's birthday",
+    "date": "7/3",
+    "lastAddedYear": 2026,
+    "done": false,
+    "todoTaskId": null,
+    "priority": 0,
+    "createdAt": "2026-07-10T00:00:00Z",
+    "updatedAt": "2026-07-10T00:00:00Z"
+  }
+]
+```
+
+---
+
+#### `POST /lifeevents`
+
+Creates a new life event. `priority` is auto-assigned (appended at end);
+`lastAddedYear` is baselined server-side (see the model rules).
+
+**Request body**
+
+```json
+{
+  "name": "string",
+  "date": "D/M"
+}
+```
+
+**Response `201`** — returns created life event with defaults applied
+
+---
+
+#### `PUT /lifeevents/:id`
+
+Updates a life event's `name`, `date`, `done`, `todoTaskId` and/or
+`priority`. A date **change** re-baselines `lastAddedYear`; a priority change
+shifts the other life events to keep contiguous `0..n-1` order. Clients
+toggle `done` here when the linked todo task is toggled (and vice versa) so
+the two views agree.
+
+**Response `200`** — returns updated life event
+
+---
+
+#### `DELETE /lifeevents/:id`
+
+Deletes a life event and closes the priority gap. The todo task created from
+it this year (if any) remains.
 
 **Response `200`**
 
@@ -1037,11 +1183,12 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 1. Mark undone: `day_of_year` _(daily — advance the year and reset when today matches the task's month/day; Feb 29 resolves to Feb 28 in non-leap years)_
 2. Mark undone: `day_of_week`
 3. Mark undone: `day_of_month` _(values are resolved against the current month's length; the stored value is never rewritten)_
-4. Archive + delete completed `date` tasks (and mark linked long-term project tasks done)
+4. Archive + delete completed `date` tasks (and mark linked long-term project tasks and life events done)
 5. Delete headers with no tasks & re-assert header order (contiguous, project headers in project order)
-6. Reorder priorities per header
-7. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
-8. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
+6. Add due life events to the todo _(a linked date task under the "Events" header, once per year)_
+7. Reorder priorities per header
+8. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
+9. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
 
 **Response `200`**
 
@@ -1055,6 +1202,8 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
   "headersReprioritized": 2,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
+  "lifeEventsCompleted": 0,
+  "lifeEventTasksCreated": 1,
   "outcomesArchived": 4,
   "callsReset": 0,
   "insightGenerated": true
@@ -1079,6 +1228,8 @@ Manually triggers the cron job. No request body required. Runs the same steps as
   "headersReprioritized": 2,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
+  "lifeEventsCompleted": 0,
+  "lifeEventTasksCreated": 1,
   "callsReset": 0
 }
 ```
@@ -1101,6 +1252,8 @@ Returns metadata about the last cron run.
   "headersReprioritized": 2,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
+  "lifeEventsCompleted": 0,
+  "lifeEventTasksCreated": 1,
   "callsReset": 0
 }
 ```
@@ -1123,6 +1276,8 @@ Returns metadata about the last cron run. Alias for `GET /cron/status`.
   "headersReprioritized": 2,
   "headersReordered": 3,
   "projectTasksCompleted": 1,
+  "lifeEventsCompleted": 0,
+  "lifeEventTasksCreated": 1,
   "callsReset": 0
 }
 ```

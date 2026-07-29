@@ -75,6 +75,7 @@ app.get("/health", (req, res) => {
 app.use("/headers", require("./routes/headerRoutes"));
 app.use("/tasks", require("./routes/taskRoutes"));
 app.use("/events", require("./routes/eventRoutes"));
+app.use("/lifeevents", require("./routes/lifeEventRoutes"));
 app.use("/affirmations", require("./routes/affirmationRoutes"));
 app.use("/calls", require("./routes/callRoutes"));
 app.use("/goals", require("./routes/goalRoutes"));

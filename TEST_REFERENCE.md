@@ -80,6 +80,32 @@ Events CRUD — reusable task bundles (templates only; scheduling happens client
 
 ---
 
+## tests/lifeevents.test.js
+
+Life Events CRUD — annually recurring dates (e.g. "Wife's birthday" on "7/3") that cron step 6 adds to the todo every year on their day.
+
+| Test                                                            | What it checks                                                              |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| returns empty array when no life events exist                   | `GET /lifeevents` returns `[]` on a clean DB                                 |
+| creates a life event with defaults applied                      | `POST /lifeevents` returns 201 with `done: false`, `todoTaskId: null`, `priority: 0`, a baselined `lastAddedYear` and timestamps |
+| appends subsequent life events at the end (contiguous priorities) | Second and third events get priorities 1 and 2                             |
+| trims the name and date                                         | `"  Trimmed  "` / `" 5/6 "` → `"Trimmed"` / `"5/6"`                          |
+| rejects a missing or empty name                                 | `POST` without `name` or with `"   "` → 400                                  |
+| rejects invalid dates                                           | `"2026-03-07"`, `"7/3/2026"`, `"0/3"`, `"32/1"`, `"7/13"`, `"30/2"`, `"31/4"`, non-string → 400 |
+| accepts Feb 29                                                  | `{ date: "29/2" }` → 201 (clamped to Feb 28 by the cron in non-leap years)   |
+| returns all life events sorted by priority                      | `GET /lifeevents` array is ascending by `priority`                           |
+| renames a life event without touching date or lastAddedYear     | `PUT { name }` → date and `lastAddedYear` unchanged                          |
+| toggles done and sets/clears the todo link                      | `PUT { done, todoTaskId }` → both persisted; null clears the link            |
+| a date change re-baselines lastAddedYear                        | `PUT { date: "8/3" }` → `lastAddedYear` recomputed for the new date          |
+| a no-op date write does not re-baseline lastAddedYear           | `PUT { date: <same> }` with a sentinel `lastAddedYear` in the DB → sentinel kept |
+| rejects invalid updates                                         | Empty name, bad date, non-boolean done, non-string todoTaskId, out-of-range priority → 400 |
+| moves a life event and shifts the others to stay contiguous     | `PUT { priority: 0 }` on the last event reorders the list, priorities stay `0..n-1` |
+| returns 404 for an unknown id (PUT)                             | Fake ObjectId → 404                                                          |
+| deletes a life event and closes the priority gap                | `DELETE /lifeevents/:id` → `{ deleted: id }`, remaining priorities contiguous |
+| returns 404 for an unknown id (DELETE)                          | Fake ObjectId → 404                                                          |
+
+---
+
 ## tests/affirmations.test.js
 
 Affirmations CRUD — single short lines the user reads daily (completely independent of tasks/headers).
@@ -432,6 +458,16 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | marks a linked project task done (link cleared, date kept, moved to bottom) when its done todo task is deleted | Step 4 project sync: deleted done todo task → matching project task `done: true`, `todoTaskId: null`, `date` kept, re-sorted below undone tasks; `projectTasksCompleted: 1` |
 | leaves project tasks alone when the linked todo task is not done | Step 4 project sync: undone linked todo task survives; project task stays undone and linked; `projectTasksCompleted: 0` |
 | does not touch unlinked project tasks when other done tasks are deleted | Step 4 project sync: deletions without a matching `todoTaskId` never flip project tasks |
+| creates a linked date task under a new Events header on the event's day | Step 6: due life event → task named after it with `ecd: { date, today }` under a new "Events" header; `todoTaskId` linked, `done: false`, `lastAddedYear` advanced, `lifeEventTasksCreated: 1` |
+| reuses an existing Events header case-insensitively and sorts the task by ECD | Step 6: a header named "events" is reused (no duplicate); the dated task sorts above a no-ECD task after step 7 |
+| does nothing on a non-matching day                              | Step 6: no headers/tasks created, link stays null, `lifeEventTasksCreated: 0` |
+| a same-day rerun does not create a duplicate                    | Step 6: second run on the same date → still exactly one task (`lastAddedYear` guard) |
+| a same-day rerun after the task was completed and cleaned up cannot re-add it | Step 6: rerun deletes the done task (step 4 → `lifeEventsCompleted: 1`, event done, link cleared) and creates nothing new |
+| marks the event done (kept, link cleared) when the cron deletes its done todo task | Step 4 life-event sync: next-midnight run → event `done: true`, `todoTaskId: null`, event never deleted |
+| next anniversary resets done and links a fresh task             | Step 6: a year after completion → new task created, event `done: false`, `lastAddedYear` = new year |
+| an event whose linked task is still pending is skipped next year | Step 6: uncompleted task from last year → no second task stacked, `lastAddedYear` unchanged |
+| a malformed todoTaskId is treated as no link instead of crashing the run | Step 6: an invalid ObjectId string in `todoTaskId` → run succeeds, a fresh task is created and linked |
+| a Feb 29 event fires on Feb 28 in non-leap years                | Step 6: `29/2` on `2027-02-28` → task created with `ecd.value: "2027-02-28"` |
 | marks done day_of_week tasks undone when today's day matches    | Step 2: `done: true` → `done: false` when day name matches             |
 | does not affect day_of_week tasks whose day does not match      | Step 2: no change when today's day is not in `ecd.value`               |
 | marks done day_of_month tasks undone when today's date matches  | Step 3: same logic for day-of-month                                    |
@@ -449,21 +485,21 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | re-asserts the project header block after deleting an empty header | Step 5: deleting the empty top header leaves `[Misc, P1, P2]` at `0..2` (block rule), not the plain re-numbering `[P1, P2, Misc]` |
 | unlinks a header whose project was deleted outside the cron      | Step 5: header pointing at a missing project gets `projectId: null` |
 | backfills projectId on a pre-existing header that matches a project by name | Step 5: legacy header adopts the same-named project's `_id` |
-| undone tasks are sorted before done tasks after cron            | Step 6: all undone tasks have lower priority than all done tasks       |
-| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 6: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
-| a day_of_year task sorts by its next anniversary, not its stored year | Step 6: `1/1/2026` on `2026-07-15` sorts **after** a `2026-08-01` date task (next occurrence is 2027-01-01), instead of being pinned to the top by its past stored year |
-| a day_of_year task due later this year sorts before a later date task | Step 6: `20/7/2025` on `2026-07-15` resolves to 2026-07-20 and sorts before a `2026-09-01` date task |
-| tasks due the same day keep their existing relative order (stable sort) | Step 6: three tasks on `2026-07-20` keep creation order after the re-sort |
-| does not stamp updatedAt when it only changes priority           | Step 6: a re-prioritised task keeps its previous `updatedAt`         |
-| resets done biweekly calls on the 15th, monthly untouched       | Step 7: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
-| resets ALL done calls on the last day of the month              | Step 7: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
-| treats Feb 28 as the last day of a non-leap February            | Step 7: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
-| does not reset any calls mid-month                              | Step 7: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
-| leaves undone calls untouched on the 15th                       | Step 7: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
-| archives call_result for due biweekly calls (done and missed) on the 15th | Step 7: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
-| archives call_result for ALL calls on the last day of the month | Step 7: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
-| does not double-log call_result when cron re-runs for the same date | Step 7: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
-| logs no call_result mid-month                                   | Step 7: run on `2026-03-10` → zero `call_result` events                        |
+| undone tasks are sorted before done tasks after cron            | Step 7: all undone tasks have lower priority than all done tasks       |
+| undone tasks are ordered by soonest upcoming ECD across all types, null ECD last | Step 7: date/day_of_week/day_of_month resolve to their next due date and sort ascending (a day-of-month value that already passed rolls to next month); no-ECD tasks sort last among undone |
+| a day_of_year task sorts by its next anniversary, not its stored year | Step 7: `1/1/2026` on `2026-07-15` sorts **after** a `2026-08-01` date task (next occurrence is 2027-01-01), instead of being pinned to the top by its past stored year |
+| a day_of_year task due later this year sorts before a later date task | Step 7: `20/7/2025` on `2026-07-15` resolves to 2026-07-20 and sorts before a `2026-09-01` date task |
+| tasks due the same day keep their existing relative order (stable sort) | Step 7: three tasks on `2026-07-20` keep creation order after the re-sort |
+| does not stamp updatedAt when it only changes priority           | Step 7: a re-prioritised task keeps its previous `updatedAt`         |
+| resets done biweekly calls on the 15th, monthly untouched       | Step 8: run on `2026-03-15` → done biweekly call reset (`done: false`, `doneAt: null`), done monthly call untouched, `callsReset: 1` |
+| resets ALL done calls on the last day of the month              | Step 8: run on `2026-03-31` → both biweekly and monthly done calls reset, `callsReset: 2` |
+| treats Feb 28 as the last day of a non-leap February            | Step 8: run on `2026-02-28` → all done calls reset (2026 is not a leap year)   |
+| does not reset any calls mid-month                              | Step 8: run on `2026-03-10` → no-op, `callsReset: 0`, done calls stay done     |
+| leaves undone calls untouched on the 15th                       | Step 8: undone calls (both frequencies) keep `done: false` and their `updatedAt` |
+| archives call_result for due biweekly calls (done and missed) on the 15th | Step 8: run on `2026-03-15` → `call_result` events for done (completed: true, doneAt set) and missed (completed: false) biweekly calls; monthly call not logged |
+| archives call_result for ALL calls on the last day of the month | Step 8: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
+| does not double-log call_result when cron re-runs for the same date | Step 8: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
+| logs no call_result mid-month                                   | Step 8: run on `2026-03-10` → zero `call_result` events                        |
 
 ---
 
@@ -474,7 +510,7 @@ Tests the four cron HTTP endpoints.
 | Test                                                    | What it checks                                                                                  |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | returns 404 when cron has never run                     | `GET /cron/status` before any run → 404 with `{ error }`                                        |
-| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, callsReset }` |
+| returns correct response shape                          | `POST /cron/run` → `{ ranAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, lifeEventsCompleted, lifeEventTasksCreated, callsReset }` |
 | ranAt is a valid ISO 8601 datetime string               | `ranAt` parses as a valid date and round-trips via `.toISOString()`                             |
 | numeric stat fields are non-negative integers           | All 6 stat fields (including `projectTasksCompleted` and `callsReset`) are integers ≥ 0         |
 | accepts an optional date override in body               | `{ date: "2026-01-01T00:00:00.000Z" }` → `ranAt` reflects that date                             |
@@ -487,7 +523,7 @@ Tests the four cron HTTP endpoints.
 | GET /cron/run ranAt is a valid ISO 8601 datetime string | `ranAt` parses and round-trips correctly                                                        |
 | GET /cron/run numeric stat fields are non-negative      | All 6 stat fields (including `projectTasksCompleted` and `callsReset`) are integers ≥ 0         |
 | GET /cron/run updates /cron/status lastRanAt            | After `GET /cron/run`, status `lastRanAt` reflects the new run                                  |
-| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, callsReset }` |
+| GET /cron/details returns shape matching /cron/status   | `{ lastRanAt, tasksDeleted, tasksMarkedUndone, tasksClamped, headersReordered, projectTasksCompleted, lifeEventsCompleted, lifeEventTasksCreated, callsReset }` |
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |

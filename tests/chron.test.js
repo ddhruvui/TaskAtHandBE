@@ -8,6 +8,7 @@ async function clearCollections() {
   await db.collection("Tasks-Test").deleteMany({});
   await db.collection("Calls-Test").deleteMany({});
   await db.collection("Projects-Test").deleteMany({});
+  await db.collection("LifeEvents-Test").deleteMany({});
   await db.collection("TaskArchive-Test").deleteMany({});
 }
 
@@ -49,6 +50,16 @@ async function createCall(data) {
 async function createProject(data) {
   const res = await request(app).post("/projects").send(data);
   return res.body;
+}
+
+async function createLifeEvent(data) {
+  const res = await request(app).post("/lifeevents").send(data);
+  return res.body;
+}
+
+async function getLifeEvent(id) {
+  const res = await request(app).get("/lifeevents");
+  return res.body.find((e) => e._id === id);
 }
 
 async function getProject(id) {
@@ -635,7 +646,257 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 6 — Reorder priorities per header", () => {
+  describe("Step 6 — Add due life events to the todo", () => {
+    test("creates a linked date task under a new Events header on the event's day", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(1);
+
+      const headers = await getHeaders();
+      expect(headers).toHaveLength(1);
+      expect(headers[0].name).toBe("Events");
+
+      const tasks = await getTasksForHeader(headers[0]._id);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].name).toBe("Wife's birthday");
+      expect(tasks[0].ecd).toEqual({ type: "date", value: "2027-03-07" });
+      expect(tasks[0].done).toBe(false);
+
+      const updated = await getLifeEvent(event._id);
+      expect(updated.todoTaskId).toBe(tasks[0]._id);
+      expect(updated.done).toBe(false);
+      expect(updated.lastAddedYear).toBe(2027);
+    });
+
+    test("reuses an existing Events header case-insensitively and sorts the task by ECD", async () => {
+      const h = await createHeader("events");
+      await createTask({ name: "keep header alive", headerId: h._id });
+      await createLifeEvent({ name: "Wife's birthday", date: "7/3" });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+
+      const headers = await getHeaders();
+      expect(headers).toHaveLength(1);
+      expect(headers[0].name).toBe("events");
+
+      // The dated birthday task sorts above the no-ECD keep-alive in step 7
+      const tasks = await getTasksForHeader(h._id);
+      expect(tasks.map((t) => t.name)).toEqual([
+        "Wife's birthday",
+        "keep header alive",
+      ]);
+    });
+
+    test("does nothing on a non-matching day", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-08" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(0);
+
+      expect(await getHeaders()).toHaveLength(0);
+      const updated = await getLifeEvent(event._id);
+      expect(updated.todoTaskId).toBeNull();
+    });
+
+    test("a same-day rerun does not create a duplicate", async () => {
+      await createLifeEvent({ name: "Wife's birthday", date: "7/3" });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      const rerun = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      expect(rerun.body.lifeEventTasksCreated).toBe(0);
+
+      const headers = await getHeaders();
+      const tasks = await getTasksForHeader(headers[0]._id);
+      expect(tasks).toHaveLength(1);
+    });
+
+    test("a same-day rerun after the task was completed and cleaned up cannot re-add it", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      const created = await getLifeEvent(event._id);
+      await request(app)
+        .put(`/tasks/${created.todoTaskId}`)
+        .send({ done: true })
+        .expect(200);
+
+      // Rerun on the same day: step 4 deletes the done task and completes the
+      // event; step 6 must not re-add it (lastAddedYear is already 2027).
+      const rerun = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      expect(rerun.body.lifeEventsCompleted).toBe(1);
+      expect(rerun.body.lifeEventTasksCreated).toBe(0);
+
+      const completed = await getLifeEvent(event._id);
+      expect(completed.done).toBe(true);
+      expect(completed.todoTaskId).toBeNull();
+      expect(completed.lastAddedYear).toBe(2027);
+    });
+
+    test("marks the event done (kept, link cleared) when the cron deletes its done todo task", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      const created = await getLifeEvent(event._id);
+      await request(app)
+        .put(`/tasks/${created.todoTaskId}`)
+        .send({ done: true })
+        .expect(200);
+
+      const nextDay = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-08" })
+        .expect(200);
+      expect(nextDay.body.lifeEventsCompleted).toBe(1);
+
+      const completed = await getLifeEvent(event._id);
+      expect(completed).toBeDefined(); // never deleted from Life Events
+      expect(completed.done).toBe(true);
+      expect(completed.todoTaskId).toBeNull();
+    });
+
+    test("next anniversary resets done and links a fresh task", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      const created = await getLifeEvent(event._id);
+      await request(app)
+        .put(`/tasks/${created.todoTaskId}`)
+        .send({ done: true })
+        .expect(200);
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-08" })
+        .expect(200);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2028-03-07" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(1);
+
+      const next = await getLifeEvent(event._id);
+      expect(next.done).toBe(false);
+      expect(next.lastAddedYear).toBe(2028);
+      expect(next.todoTaskId).not.toBeNull();
+
+      const headers = await getHeaders();
+      const tasks = await getTasksForHeader(headers[0]._id);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]._id).toBe(next.todoTaskId);
+      expect(tasks[0].ecd).toEqual({ type: "date", value: "2028-03-07" });
+    });
+
+    test("an event whose linked task is still pending is skipped next year", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+
+      // Task never completed — a year later no second task is stacked
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2028-03-07" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(0);
+
+      const headers = await getHeaders();
+      const tasks = await getTasksForHeader(headers[0]._id);
+      expect(tasks).toHaveLength(1);
+
+      const updated = await getLifeEvent(event._id);
+      expect(updated.lastAddedYear).toBe(2027);
+    });
+
+    test("a malformed todoTaskId is treated as no link instead of crashing the run", async () => {
+      const event = await createLifeEvent({
+        name: "Wife's birthday",
+        date: "7/3",
+      });
+      await request(app)
+        .put(`/lifeevents/${event._id}`)
+        .send({ todoTaskId: "not-an-objectid" })
+        .expect(200);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-03-07" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(1);
+
+      const updated = await getLifeEvent(event._id);
+      expect(updated.todoTaskId).not.toBe("not-an-objectid");
+    });
+
+    test("a Feb 29 event fires on Feb 28 in non-leap years", async () => {
+      const event = await createLifeEvent({
+        name: "Leap anniversary",
+        date: "29/2",
+      });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2027-02-28" })
+        .expect(200);
+      expect(res.body.lifeEventTasksCreated).toBe(1);
+
+      const headers = await getHeaders();
+      const tasks = await getTasksForHeader(headers[0]._id);
+      expect(tasks[0].ecd).toEqual({ type: "date", value: "2027-02-28" });
+
+      const updated = await getLifeEvent(event._id);
+      expect(updated.lastAddedYear).toBe(2027);
+    });
+  });
+
+  describe("Step 7 — Reorder priorities per header", () => {
     test("undone tasks are sorted before done tasks after cron", async () => {
       const h = await createHeader("H");
 
@@ -836,7 +1097,7 @@ describe("Cron Job", () => {
     });
   });
 
-  describe("Step 7 — Reset calls at period boundaries", () => {
+  describe("Step 8 — Reset calls at period boundaries", () => {
     async function seedDoneCalls() {
       const biweekly = await createCall({
         name: "Grandma",

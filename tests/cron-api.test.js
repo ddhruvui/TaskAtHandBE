@@ -52,6 +52,8 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
+      expect(res.body).toHaveProperty("lifeEventsCompleted");
+      expect(res.body).toHaveProperty("lifeEventTasksCreated");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -152,6 +154,8 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
+      expect(res.body).toHaveProperty("lifeEventsCompleted");
+      expect(res.body).toHaveProperty("lifeEventTasksCreated");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -202,6 +206,8 @@ describe("Cron API Endpoints", () => {
       expect(res.body).toHaveProperty("headersDeleted");
       expect(res.body).toHaveProperty("headersReordered");
       expect(res.body).toHaveProperty("projectTasksCompleted");
+      expect(res.body).toHaveProperty("lifeEventsCompleted");
+      expect(res.body).toHaveProperty("lifeEventTasksCreated");
       expect(res.body).toHaveProperty("callsReset");
     });
 
@@ -257,6 +263,8 @@ describe("Cron API Endpoints", () => {
       expect(detailsRes.body).toHaveProperty("headersDeleted");
       expect(detailsRes.body).toHaveProperty("headersReordered");
       expect(detailsRes.body).toHaveProperty("projectTasksCompleted");
+      expect(detailsRes.body).toHaveProperty("lifeEventsCompleted");
+      expect(detailsRes.body).toHaveProperty("lifeEventTasksCreated");
       expect(detailsRes.body).toHaveProperty("callsReset");
     });
 

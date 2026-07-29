@@ -18,6 +18,10 @@ const options = {
       { name: "Tasks", description: "Task management endpoints" },
       { name: "Events", description: "Event template management endpoints" },
       {
+        name: "LifeEvents",
+        description: "Annually recurring life event management endpoints",
+      },
+      {
         name: "Affirmations",
         description: "Daily affirmation management endpoints",
       },
@@ -223,6 +227,46 @@ const options = {
             updatedAt: { type: "string", format: "date-time" },
           },
         },
+        LifeEvent: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            name: { type: "string", example: "Wife's birthday" },
+            date: {
+              type: "string",
+              description:
+                '"D/M" (no zero-padding, no year) — the event recurs annually on this day. Feb 29 clamps to Feb 28 in non-leap years.',
+              example: "7/3",
+            },
+            lastAddedYear: {
+              type: "integer",
+              description:
+                "Server-managed: the year of the last occurrence the cron added to the todo (baselined on create/date change). The cron only fires when this is behind the current year, which makes reruns idempotent.",
+              example: 2026,
+            },
+            done: {
+              type: "boolean",
+              description:
+                "This year's occurrence completed. Set by clients when the linked todo task is toggled and by the cron when it deletes the done todo task; reset to false when the next occurrence is added.",
+              example: false,
+            },
+            todoTaskId: {
+              type: "string",
+              nullable: true,
+              description:
+                "_id of the linked todo task while one exists; cleared by the cron when it deletes the done todo task and marks this event done.",
+              example: null,
+            },
+            priority: {
+              type: "integer",
+              description:
+                "Display order, contiguous 0..n-1. New life events append at the end; changing it shifts the others to keep the sequence contiguous.",
+              example: 0,
+            },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
         Call: {
           type: "object",
           properties: {
@@ -268,6 +312,8 @@ const options = {
             headersReprioritized: { type: "integer", example: 2 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
+            lifeEventsCompleted: { type: "integer", example: 0 },
+            lifeEventTasksCreated: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
           },
         },
@@ -286,6 +332,8 @@ const options = {
             headersReprioritized: { type: "integer", example: 2 },
             headersReordered: { type: "integer", example: 4 },
             projectTasksCompleted: { type: "integer", example: 1 },
+            lifeEventsCompleted: { type: "integer", example: 0 },
+            lifeEventTasksCreated: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
           },
         },

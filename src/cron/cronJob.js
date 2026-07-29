@@ -1,4 +1,5 @@
 const { getDatabase } = require("../config/db");
+const { ObjectId } = require("mongodb");
 const Archive = require("../models/Archive");
 const { applyProjectHeaderOrder } = require("../services/headerOrder");
 
@@ -368,8 +369,10 @@ async function step3MarkUndoneDayOfMonth(tasksCol, today) {
  * Each deleted task is archived first so completion history is preserved.
  * Deleted tasks linked from a long-term project (ProjectTask.todoTaskId)
  * mark that project task done — the todo entry disappears but the project
- * keeps it as a completed step.
- * @returns {Promise<{tasksDeleted: number, projectTasksCompleted: number}>}
+ * keeps it as a completed step. Deleted tasks linked from a life event
+ * (LifeEvent.todoTaskId) mark that life event done the same way — the event
+ * itself is never deleted and fires again on its next anniversary.
+ * @returns {Promise<{tasksDeleted: number, projectTasksCompleted: number, lifeEventsCompleted: number}>}
  */
 async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
   const tasks = await tasksCol
@@ -379,7 +382,8 @@ async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
     })
     .toArray();
 
-  if (tasks.length === 0) return { tasksDeleted: 0, projectTasksCompleted: 0 };
+  if (tasks.length === 0)
+    return { tasksDeleted: 0, projectTasksCompleted: 0, lifeEventsCompleted: 0 };
 
   await Archive.logMany(
     tasks.map((task) => ({
@@ -399,11 +403,17 @@ async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
   const result = await tasksCol.deleteMany({ _id: { $in: ids } });
 
   const { Project } = require("../models/Project");
-  const projectTasksCompleted = await Project.completeTasksByTodoIds(
-    ids.map((id) => id.toString()),
-  );
+  const idStrings = ids.map((id) => id.toString());
+  const projectTasksCompleted = await Project.completeTasksByTodoIds(idStrings);
 
-  return { tasksDeleted: result.deletedCount, projectTasksCompleted };
+  const { LifeEvent } = require("../models/LifeEvent");
+  const lifeEventsCompleted = await LifeEvent.completeByTodoIds(idStrings);
+
+  return {
+    tasksDeleted: result.deletedCount,
+    projectTasksCompleted,
+    lifeEventsCompleted,
+  };
 }
 
 /**
@@ -447,7 +457,95 @@ async function step5DeleteEmptyHeaders(tasksCol, headersCol) {
 }
 
 /**
- * Step 6 — Reorder priorities per header.
+ * Step 6 — Add due life events to the todo.
+ *
+ * A life event (e.g. "Wife's birthday" on "7/3") is due when its stored
+ * day/month resolves to today — Feb 29 resolves to Feb 28 in a non-leap year,
+ * same as `day_of_year` ECDs. On its day, a one-time date task named after
+ * the event is created under a header named **"Events"** (matched
+ * case-insensitively, created at the end of the list otherwise) and linked
+ * via `todoTaskId`; `done` is reset for the new occurrence.
+ *
+ * Idempotency mirrors step 1's year-advance trick: `lastAddedYear` records
+ * the last occurrence consumed, and only events still behind the current
+ * year fire — so a manual rerun on the same day (even after the task was
+ * completed and cleaned up) cannot create a duplicate. An event whose linked
+ * task still exists (last year's occurrence never completed) is skipped too:
+ * the pending task already represents it in the todo.
+ *
+ * Runs after step 5 so the header landscape is settled, and before step 7 so
+ * the new task is sorted into place by its ECD.
+ * @returns {Promise<number>} Number of todo tasks created
+ */
+async function step6AddDueLifeEvents(tasksCol, headersCol, today) {
+  const { LifeEvent } = require("../models/LifeEvent");
+  const { Task } = require("../models/Task");
+
+  const todayYear = today.getUTCFullYear();
+  const todayMonth = today.getUTCMonth() + 1; // 1-indexed
+  const todayDate = today.getUTCDate();
+
+  const lifeEvents = await LifeEvent.findAll();
+
+  let tasksCreated = 0;
+  let eventsHeaderId = null;
+
+  for (const event of lifeEvents) {
+    const [day, month] = event.date.split("/").map(Number);
+
+    if (event.lastAddedYear >= todayYear) continue;
+    if (month !== todayMonth) continue;
+    if (effectiveDayOfYear(day, month, todayYear).day !== todayDate) continue;
+
+    // Last year's task still pending — don't stack a second occurrence.
+    // A malformed stored id (PUT accepts any string) counts as no link —
+    // it must not throw and take the whole cron run down with it.
+    if (event.todoTaskId) {
+      let linked = null;
+      try {
+        linked = await tasksCol.findOne({
+          _id: new ObjectId(event.todoTaskId),
+        });
+      } catch (_err) {
+        // invalid ObjectId string — treat as unlinked
+      }
+      if (linked) continue;
+    }
+
+    if (!eventsHeaderId) {
+      const existing = await headersCol
+        .find({ name: { $regex: "^Events$", $options: "i" } })
+        .sort({ priority: 1 })
+        .limit(1)
+        .toArray();
+      if (existing.length > 0) {
+        eventsHeaderId = existing[0]._id.toString();
+      } else {
+        const Header = require("../models/Header");
+        const { header } = await Header.create({ name: "Events" });
+        eventsHeaderId = header._id.toString();
+      }
+    }
+
+    const task = await Task.create({
+      name: event.name,
+      headerId: eventsHeaderId,
+      ecd: { type: "date", value: utcDayString(today) },
+    });
+
+    await LifeEvent.update(event._id.toString(), {
+      todoTaskId: task._id.toString(),
+      done: false,
+      lastAddedYear: todayYear,
+    });
+    tasksCreated++;
+  }
+
+  return tasksCreated;
+}
+
+/**
+ * Step 7 — Reorder priorities per header.
  *
  * Undone tasks first, sorted by their next upcoming ECD ascending; then done
  * tasks.
@@ -462,7 +560,7 @@ async function step5DeleteEmptyHeaders(tasksCol, headersCol) {
  *
  * @returns {Promise<number>} Number of headers whose tasks were reordered
  */
-async function step6ReorderPriorities(tasksCol, today) {
+async function step7ReorderPriorities(tasksCol, today) {
   // One pass over the task collection, grouped in memory, instead of a query
   // per header.
   const tasks = await tasksCol.find({}).sort({ priority: 1 }).toArray();
@@ -507,7 +605,7 @@ async function step6ReorderPriorities(tasksCol, today) {
 }
 
 /**
- * Step 7 — Archive call outcomes and reset done calls at period boundaries
+ * Step 8 — Archive call outcomes and reset done calls at period boundaries
  * (independent of tasks/headers).
  * Biweekly calls are due twice per month (periods 1st–14th and 15th–end),
  * monthly calls once; the reset clears the "called" checkmark at each period
@@ -521,7 +619,7 @@ async function step6ReorderPriorities(tasksCol, today) {
  * cron re-runs don't double-log.
  * @returns {Promise<number>} Number of calls reset
  */
-async function step7ResetCalls(callsCol, today) {
+async function step8ResetCalls(callsCol, today) {
   const todayDate = today.getUTCDate();
   const lastDay = daysInMonth(today.getUTCFullYear(), today.getUTCMonth() + 1);
 
@@ -597,12 +695,17 @@ async function runCron(now, { skipInsights = false } = {}) {
   const markedUndoneDow = await step2MarkUndoneDayOfWeek(tasksCol, today);
   const { clamped: clampedDom, markedUndone: markedUndoneDom } =
     await step3MarkUndoneDayOfMonth(tasksCol, today);
-  const { tasksDeleted, projectTasksCompleted } =
+  const { tasksDeleted, projectTasksCompleted, lifeEventsCompleted } =
     await step4DeleteDoneDateTasks(tasksCol, headerNames);
   const { headersDeleted, headersReprioritized } =
     await step5DeleteEmptyHeaders(tasksCol, headersCol);
-  const headersReordered = await step6ReorderPriorities(tasksCol, today);
-  const callsReset = await step7ResetCalls(callsCol, today);
+  const lifeEventTasksCreated = await step6AddDueLifeEvents(
+    tasksCol,
+    headersCol,
+    today,
+  );
+  const headersReordered = await step7ReorderPriorities(tasksCol, today);
+  const callsReset = await step8ResetCalls(callsCol, today);
 
   const stats = {
     ranAt: today.toISOString(),
@@ -613,6 +716,8 @@ async function runCron(now, { skipInsights = false } = {}) {
     headersReprioritized,
     headersReordered,
     projectTasksCompleted,
+    lifeEventsCompleted,
+    lifeEventTasksCreated,
     outcomesArchived,
     callsReset,
   };

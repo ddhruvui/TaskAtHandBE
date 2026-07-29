@@ -10,7 +10,7 @@ Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoos
 
 ## Environment
 
-`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `Affirmations-Test`, `Calls-Test`, `Goals-Test`, `Projects-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
+`MONGO_URI` (may contain a `<db_password>` placeholder replaced by `DB_PASSWORD` — see `src/config/db.js:12-16`), `PORT` (default 3002), `NODE_ENV` (`test` skips server + cron startup), `USE_TEST_DB=true` (switches every model to `Headers-Test`, `Tasks-Test`, `Events-Test`, `LifeEvents-Test`, `Affirmations-Test`, `Calls-Test`, `Goals-Test`, `Projects-Test`, `TaskArchive-Test`, `Insights-Test`), `ANTHROPIC_API_KEY` (optional; insights return 503 without it).
 
 ## Architecture rules
 
@@ -24,10 +24,10 @@ Node.js/Express 5 REST API backed by MongoDB via the **native driver (no Mongoos
 
 - **Priority contiguity**: header priorities and per-header task priorities are always `0..n-1`. New headers append at end; new tasks insert at `priority = undoneCount` (before the first done task). Every move/delete shifts neighbors to keep contiguity.
 - **Cron step 7 re-sorts all task priorities nightly** (undone by soonest ECD, then done). Manual priority edits don't survive the next cron run.
-- **Cron step 6 deletes headers with no tasks nightly** (including ones emptied by step 5) and re-numbers surviving header priorities to stay contiguous. An empty header a user just created won't survive the next cron run.
+- **Cron step 5 deletes headers with no tasks nightly** (including ones emptied by step 4) and re-numbers surviving header priorities to stay contiguous. An empty header a user just created won't survive the next cron run.
 - **ECD types**: `date` (`"YYYY-MM-DD"`, one-time), `day_of_week` (array of `"Sun".."Sat"`), `day_of_month` (array of 1–31, clamped monthly), `day_of_year` (`"D/M/YYYY"`, auto-advanced yearly), or `null`.
 - **`doneAt`**: set when `done` flips true, cleared on undo and on cron resets.
-- **Cron runs at UTC midnight**, steps 0–8 in order (archive yesterday → clamp DOM → advance DOY → mark undone DOW/DOM → delete done date/no-ECD tasks after archiving (and mark project tasks whose `todoTaskId` matches a deleted task as done, link cleared) → delete empty headers and rearrange header priorities → reorder tasks per header → reset done calls on the 15th (biweekly) / last day of month (all)), then AI report generation (not a numbered step). All date math is UTC.
+- **Cron runs at UTC midnight**, steps 0–8 in order (archive yesterday → advance DOY → mark undone DOW/DOM → delete done date/no-ECD tasks after archiving (and mark project tasks/life events whose `todoTaskId` matches a deleted task as done, link cleared) → delete empty headers and rearrange header priorities → add due life events to the todo (a linked `date` task under an "Events" header, once per year via `lastAddedYear`) → reorder tasks per header → reset done calls on the 15th (biweekly) / last day of month (all)), then AI report generation (not a numbered step). All date math is UTC.
 - **TaskArchive is append-only** with event types `habit_result`, `task_result`, `task_completed`, `task_rescheduled`. `Archive.log()` never throws — archive failures are silent by design.
 - **Header delete cascades** to its tasks (controller-level). `Task.deleteByHeader` archives the header's **done** tasks as `task_completed` events before removing them (so completion history isn't orphaned); undone tasks are removed without archiving. Event deletion does NOT touch tasks created from it.
 
@@ -40,7 +40,8 @@ Where tests live, by change type:
 | If you change...              | Tests to update                                            |
 | ------------------------------ | ---------------------------------------------------------- |
 | CRUD endpoints / basic priority| `crud.test.js`, `error-handling.test.js`                   |
-| Projects                       | `projects.test.js` (+ `chron.test.js` for step 5 sync)     |
+| Projects                       | `projects.test.js` (+ `chron.test.js` for step 4 sync)     |
+| Life events                    | `lifeevents.test.js` (+ `chron.test.js` for steps 4/6)     |
 | Priority/reorder business logic| `business-logic.test.js` (+ `crud.test.js` basics)         |
 | Cron algorithm (steps 0–8)     | `chron.test.js` AND `cron-api.test.js` (API contract side) |
 | ECD types/validation           | `ecd-validation.test.js` + `chron.test.js` (step handling) |
@@ -48,7 +49,7 @@ Where tests live, by change type:
 | Archive logging                | `archive.test.js`                                          |
 | Events                         | `events.test.js`                                           |
 | Affirmations                   | `affirmations.test.js`                                     |
-| Calls                          | `calls.test.js` (+ `chron.test.js` for step 7 resets)      |
+| Calls                          | `calls.test.js` (+ `chron.test.js` for step 8 resets)      |
 | Goals                          | `goals.test.js`                                            |
 | Insights/stats                 | `insights.test.js`                                         |
 | Header↔Task cascade/isolation  | `collections.test.js`                                      |
