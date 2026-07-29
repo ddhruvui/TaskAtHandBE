@@ -17,7 +17,8 @@ const {
  *     project
  *   - done: boolean (default false)
  *   - todoTaskId: string _id of the linked todo task or null (default null)
- * The list is re-sorted so undone tasks come before done tasks (stable).
+ * The list is re-sorted (stable) so undone tasks come before done tasks,
+ * with dated undone tasks before undated ones.
  * Returns the normalized tasks or throws a validation Error.
  */
 function validateTasks(tasks) {
@@ -113,7 +114,8 @@ const createProject = async (req, res) => {
  * PUT /projects/:id
  * Updates a project's name, task list and/or priority. Tasks are replaced
  * wholesale, which covers adding, renaming, reordering, removing, date and
- * done changes; done tasks always end up at the bottom of the list.
+ * done changes; dated undone tasks sort above undated ones and done tasks
+ * always end up at the bottom of the list.
  */
 const updateProject = async (req, res) => {
   try {

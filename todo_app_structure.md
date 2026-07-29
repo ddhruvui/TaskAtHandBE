@@ -329,8 +329,12 @@ a project is backfilled, and a header pointing at a deleted project has its
   `todoTaskId` (string or `null`, default `null`)
 - `tasks` is replaced wholesale on update — clients send the full list to
   add, rename, reorder, remove or change tasks. On **every** write the
-  server re-sorts the list so undone tasks come before done tasks (stable) —
-  marking a task done moves it to the bottom, same barrier as the todo
+  server re-sorts the list into three stable groups: undone **dated** tasks
+  first, then undone **undated** tasks, then done tasks — marking a task done
+  moves it to the bottom (same barrier as the todo), and giving a task a date
+  lifts it above the undated backlog (a dated step is committed to the todo,
+  so it outranks steps with no date yet). Ordering within a group is whatever
+  the client sent — the server never sorts by date value
 - Giving a project task a `date` creates a one-time `date`-ECD Task in the
   todo under the project's own Header and stores its `_id` in `todoTaskId`.
   The client obtains that header with `POST /headers { name, projectId }`,
@@ -490,7 +494,8 @@ outcome is only knowable at the following midnight:
 - After deleting, sync long-term projects: for every project task whose
   `todoTaskId` matches a deleted task's `_id`, set `done = true`, clear
   `todoTaskId` (keep `date` for the record) and re-sort the project's task
-  list so done tasks sit at the bottom. The task leaves the todo but is
+  list (dated undone, undated undone, done) so done tasks sit at the bottom.
+  The task leaves the todo but is
   retained in the project as a completed step. Counted in the run stats as
   `projectTasksCompleted`
 - Life events sync the same way: for every life event whose `todoTaskId`
@@ -1138,8 +1143,9 @@ Returns all projects sorted by `priority` ascending.
 #### `POST /projects`
 
 Creates a project. `name` required (non-empty, trimmed); `tasks` optional
-(defaults to `[]`, validated and re-sorted undone-first as described in the
-model rules). `priority` is auto-assigned (appended at the end).
+(defaults to `[]`, validated and re-sorted dated-undone → undated-undone →
+done as described in the model rules). `priority` is auto-assigned (appended
+at the end).
 
 **Response `201`** — the created project.
 
@@ -1148,8 +1154,9 @@ model rules). `priority` is auto-assigned (appended at the end).
 #### `PUT /projects/:id`
 
 Updates `name`, `tasks` and/or `priority`. `tasks` is replaced wholesale and
-re-sorted so done tasks sit at the bottom; `priority` moves shift the other
-projects to stay contiguous (same as headers).
+re-sorted so dated undone tasks come first, then undated undone ones, then
+done tasks at the bottom; `priority` moves shift the other projects to stay
+contiguous (same as headers).
 
 **Response `200`** — the updated project. **`400`** on validation errors
 (including out-of-range priority), **`404`** when not found.

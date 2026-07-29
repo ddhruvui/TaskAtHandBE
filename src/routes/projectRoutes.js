@@ -32,7 +32,7 @@ router.get("/", getAllProjects);
  *   post:
  *     tags: [Projects]
  *     summary: Create a new long-term project
- *     description: A long-term project (e.g. "Automated Stock Market") is an ordered list of tasks/steps (e.g. "get data from EODHD"). Giving a task a date mirrors it into the todo as a task under the project's own header (created on demand via POST /headers with this project's projectId, and kept in the projects' priority order by the server); when the todo task is done and the nightly cron deletes it, the project task is marked done and kept for the record. Tasks default to an empty list; priority is auto-assigned (appended at end). Undone tasks always sort before done tasks.
+ *     description: A long-term project (e.g. "Automated Stock Market") is an ordered list of tasks/steps (e.g. "get data from EODHD"). Giving a task a date mirrors it into the todo as a task under the project's own header (created on demand via POST /headers with this project's projectId, and kept in the projects' priority order by the server); when the todo task is done and the nightly cron deletes it, the project task is marked done and kept for the record. Tasks default to an empty list; priority is auto-assigned (appended at end). Undone tasks always sort before done tasks, and dated undone tasks before undated ones.
  *     requestBody:
  *       required: true
  *       content:
@@ -67,7 +67,7 @@ router.post("/", createProject);
  *   put:
  *     tags: [Projects]
  *     summary: Update a long-term project
- *     description: Tasks are replaced wholesale — send the full list to add, rename, reorder, remove or change the date/done state of tasks (the server re-sorts so done tasks sit at the bottom). Priority changes shift the other projects to keep contiguous 0..n-1 order, same as headers, and re-order the matching todo headers to match. A name change is cascaded onto the project's todo header.
+ *     description: Tasks are replaced wholesale — send the full list to add, rename, reorder, remove or change the date/done state of tasks (the server re-sorts so dated undone tasks come first, then undated undone ones, then done tasks at the bottom). Priority changes shift the other projects to keep contiguous 0..n-1 order, same as headers, and re-order the matching todo headers to match. A name change is cascaded onto the project's todo header.
  *     parameters:
  *       - in: path
  *         name: id

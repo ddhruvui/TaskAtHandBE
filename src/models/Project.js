@@ -2,14 +2,17 @@ const { getDatabase } = require("../config/db");
 const { ObjectId } = require("mongodb");
 
 /**
- * Stable sort for a project's task list: undone tasks first, done tasks last,
- * relative order preserved on both sides — the same done/undone barrier the
- * todo enforces per header.
+ * Stable sort for a project's task list: undone tasks first with dated ones
+ * before undated ones (a dated step is already committed to the todo, so it
+ * outranks the undated backlog), done tasks last, relative order preserved
+ * within each group — the done/undone barrier is the same one the todo
+ * enforces per header.
  */
 function sortProjectTasks(tasks) {
-  const undone = tasks.filter((t) => !t.done);
+  const dated = tasks.filter((t) => !t.done && t.date);
+  const undated = tasks.filter((t) => !t.done && !t.date);
   const done = tasks.filter((t) => t.done);
-  return [...undone, ...done];
+  return [...dated, ...undated, ...done];
 }
 
 class Project {

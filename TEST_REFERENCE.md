@@ -205,7 +205,7 @@ Goal-level reordering, mirroring the header/project priority scheme. Each test r
 
 ## tests/projects.test.js
 
-Projects CRUD — long-term projects with ordered task lists, header-style priorities and a done/undone barrier inside each project, plus the server-owned project↔header ordering cascades (task-level todo sync is client-driven; the cron side is covered in `chron.test.js`).
+Projects CRUD — long-term projects with ordered task lists, header-style priorities, a done/undone barrier and a dated-above-undated rule inside each project, plus the server-owned project↔header ordering cascades (task-level todo sync is client-driven; the cron side is covered in `chron.test.js`).
 
 | Test                                                      | What it checks                                                                |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -214,6 +214,7 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | creates a project without tasks (defaults to empty list)  | `POST /projects { name }` → 201 with `tasks: []`                               |
 | appends priorities contiguously                           | Three creates get priorities 0, 1, 2                                           |
 | sorts done tasks to the bottom on create                  | `[done, undone, done]` list is stored as `[undone, done, done]` (stable)       |
+| sorts dated undone tasks above undated ones on create (stable within each group) | `[undated, dated, done+dated, dated]` is stored as `[dated, dated, undated, done]` — input order kept inside each group, never re-sorted by date value |
 | trims whitespace from name and task names                 | `"  Trimmed  "` → `"Trimmed"`; task names trimmed too                          |
 | persists task notes and defaults missing notes to empty string | Task `notes` are stored; a task without `notes` defaults to `""`         |
 | rejects missing name                                      | `POST /projects { tasks }` → 400                                               |
@@ -226,7 +227,7 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | rejects tasks with non-string notes                       | `{ notes: 42 }` → 400 (notes must be a string)                                 |
 | returns all projects sorted by priority ascending         | `GET /projects` array is ascending by `priority` (0, 1, 2)                     |
 | updates project name                                      | `PUT /projects/:id { name }` → 200, tasks untouched                            |
-| replaces tasks wholesale (dates, links, done → bottom)    | `PUT` with a full list persists dates/`todoTaskId` and re-sorts done tasks to the bottom |
+| replaces tasks wholesale (dated first, links, done → bottom) | `PUT` with a full list persists dates/`todoTaskId`, lifts the dated undone task above the undated one and re-sorts done tasks to the bottom |
 | updates task notes wholesale                              | `PUT` with a task carrying `notes` persists the new notes                      |
 | allows clearing a task date with null                     | `{ date: null }` → 200 with `date: null`                                       |
 | allows clearing tasks with an empty array                 | `{ tasks: [] }` → 200 with `tasks: []`                                         |

@@ -101,6 +101,30 @@ describe("Projects CRUD", () => {
       await request(app).delete(`/projects/${res.body._id}`).expect(200);
     });
 
+    test("sorts dated undone tasks above undated ones on create (stable within each group)", async () => {
+      const res = await request(app)
+        .post("/projects")
+        .send({
+          name: "Dated First",
+          tasks: [
+            { name: "A undated" },
+            { name: "B dated", date: "2026-09-01" },
+            { name: "C done dated", done: true, date: "2026-08-01" },
+            { name: "D dated", date: "2026-08-20" },
+          ],
+        })
+        .expect(201);
+      // Dated undone first in input order (not date order), then undated
+      // undone, then done at the bottom.
+      expect(res.body.tasks.map((t) => t.name)).toEqual([
+        "B dated",
+        "D dated",
+        "A undated",
+        "C done dated",
+      ]);
+      await request(app).delete(`/projects/${res.body._id}`).expect(200);
+    });
+
     test("trims whitespace from name and task names", async () => {
       const res = await request(app)
         .post("/projects")
@@ -205,7 +229,7 @@ describe("Projects CRUD", () => {
       expect(res.body.tasks.length).toBe(2);
     });
 
-    test("replaces tasks wholesale (dates, links, done → bottom)", async () => {
+    test("replaces tasks wholesale (dated first, links, done → bottom)", async () => {
       const res = await request(app)
         .put(`/projects/${projectId}`)
         .send({
@@ -216,8 +240,8 @@ describe("Projects CRUD", () => {
               done: true,
               todoTaskId: "507f1f77bcf86cd799439011",
             },
-            { name: "get data from Nasdaq", date: "2026-08-15" },
             { name: "deploy to cpu" },
+            { name: "get data from Nasdaq", date: "2026-08-15" },
           ],
         })
         .expect(200);

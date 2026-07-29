@@ -208,7 +208,7 @@ interface Project {
   _id: string; // MongoDB ObjectId
   name: string; // Project name (required), e.g. "Automated Stock Market"
   priority: number; // 0-based global priority (0 = highest); auto-managed
-  tasks: ProjectTask[]; // Ordered task list (may be empty); undone before done
+  tasks: ProjectTask[]; // Ordered task list (may be empty); dated undone, then undated undone, then done
   createdAt: string; // ISO 8601 timestamp
   updatedAt: string; // ISO 8601 timestamp
 }
@@ -218,8 +218,11 @@ Projects are long-term efforts (e.g. "Automated Stock Market") broken into
 ordered tasks/steps (e.g. "get data from EODHD", "deploy to cpu"). Projects
 carry a contiguous 0-based `priority` exactly like headers (created at the
 end, moves shift neighbors, deletes close the gap), and within a project the
-task list always keeps undone tasks before done tasks (the server re-sorts on
-every write, so marking a task done moves it to the bottom).
+task list always keeps undone tasks before done tasks, and among the undone
+ones dated tasks before undated ones (the server re-sorts on every write, so
+marking a task done moves it to the bottom and giving a task a date lifts it
+above the undated backlog; ordering inside each group is the client's, never
+sorted by date value).
 
 The todo connection is client-driven, mirroring goals/events: giving a
 project task a `date` creates a one-time `date`-ECD Task in the todo under a
@@ -1086,7 +1089,7 @@ Creates a new project. Priority is auto-assigned (appended at the end).
 | Field   | Required | Type          | Notes                                                                            |
 | ------- | -------- | ------------- | -------------------------------------------------------------------------------- |
 | `name`  | Yes      | string        | Non-empty; trimmed                                                                |
-| `tasks` | No       | ProjectTask[] | Defaults to `[]`. Each task needs a non-empty `name` (trimmed); `notes` optional string (default `""`, mirrored onto the linked todo task); `date` optional (`"YYYY-MM-DD"` or `null`, default `null`); `done` optional boolean (default `false`); `todoTaskId` optional string/`null` (default `null`). The list is re-sorted so undone tasks come before done tasks |
+| `tasks` | No       | ProjectTask[] | Defaults to `[]`. Each task needs a non-empty `name` (trimmed); `notes` optional string (default `""`, mirrored onto the linked todo task); `date` optional (`"YYYY-MM-DD"` or `null`, default `null`); `done` optional boolean (default `false`); `todoTaskId` optional string/`null` (default `null`). The list is re-sorted into dated undone → undated undone → done |
 
 **Response `201`:** the created project.
 
@@ -1104,8 +1107,9 @@ Updates a project's `name`, `tasks` and/or `priority`. All fields are
 optional but must pass the same validation as `POST /projects` when present.
 `tasks` is replaced wholesale — send the full list to add, rename, reorder,
 remove or change the date/done state of tasks (an empty array clears them;
-the server re-sorts so done tasks sit at the bottom). Priority changes shift
-the other projects to keep contiguous `0..n-1` order, same as headers.
+the server re-sorts so dated undone tasks come first, then undated undone
+ones, then done tasks at the bottom). Priority changes shift the other
+projects to keep contiguous `0..n-1` order, same as headers.
 
 **Response `200`:** the updated project.
 **Error `400`:** validation error (including out-of-range priority).

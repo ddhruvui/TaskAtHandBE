@@ -205,7 +205,7 @@ const options = {
               type: "array",
               items: { $ref: "#/components/schemas/ProjectTask" },
               description:
-                "Ordered task list; undone tasks always come before done tasks",
+                "Ordered task list; undone tasks always come before done tasks, and dated undone tasks before undated ones",
               example: [
                 {
                   name: "get data from EODHD",
