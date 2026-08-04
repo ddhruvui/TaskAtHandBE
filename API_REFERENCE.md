@@ -1381,6 +1381,8 @@ Base path: `/insights`
 
 Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, manual-deletion counts (`deletions` — from `task_deleted` events), per-header rollups, and per-person call completion (`calls` — from `call_result` events; calls are excluded from `byHeader` since they have no header).
 
+**Slippage is a whole-UTC-calendar-day count**: `slippageDays` (and the `avgSlippageDays` derived from it) is the number of days between the date the task was scheduled for (`plannedFor` — the *postponed-to* ECD when the user rescheduled it, since a postpone rewrites `task.ecd` before the archive event is written) and the calendar day `doneAt` falls on. Both sides are snapped to midnight UTC before subtracting, so a task ticked off at any time of day on its scheduled date is `0`, one done the next day is `1`, and one finished early is negative. Events with a null `plannedFor` (recurring or no-ECD tasks) get `slippageDays: null` and are excluded from the average.
+
 **Response `200`** (abridged):
 
 ```json

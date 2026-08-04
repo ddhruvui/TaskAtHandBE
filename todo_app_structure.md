@@ -1304,6 +1304,17 @@ Exact computed stats (no AI): per-habit completion rates, current/longest
 streaks, missed-by-weekday, one-time-task slippage, reschedule counts, and
 per-header rollups.
 
+Slippage is counted in **whole UTC calendar days** between the date the task
+was scheduled for (`plannedFor`) and the day it was actually completed
+(`doneAt`). Both sides are snapped to midnight UTC before subtracting, so a
+task completed at any time of day on its scheduled date scores `0` — not the
+`1` a raw timestamp subtraction would round up to for anything after 12:00
+UTC. Because a postpone rewrites `task.ecd` before the `task_completed` event
+is archived, `plannedFor` is the *postponed-to* date, so slip is measured
+against the date the task was last scheduled for, not the one it was
+originally created with. A null `plannedFor` (recurring or no-ECD task) yields
+`slippageDays: null` and is left out of the average.
+
 #### `GET /insights/latest`
 
 Most recent stored AI report. `404` if none has been generated yet.

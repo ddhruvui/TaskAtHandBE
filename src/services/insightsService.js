@@ -3,6 +3,21 @@ const Insight = require("../models/Insight");
 
 const DEFAULT_PERIOD_DAYS = 28;
 
+/**
+ * Midnight-UTC epoch ms of the calendar day a timestamp falls on.
+ * Slippage is a whole-day count, so both sides of the subtraction must be
+ * snapped to day boundaries — comparing a `doneAt` instant against a midnight
+ * `plannedFor` made any completion after 12:00 UTC round up to a full day of
+ * slip on the very day the task was scheduled.
+ * @param {Date|string} value
+ * @returns {number} epoch ms, or NaN if unparseable
+ */
+function utcDayStart(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return NaN;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
 // ─── Stats (exact math, computed in JS — the model interprets, never counts) ──
 
 /**
@@ -68,11 +83,17 @@ function computeStats(events) {
         break;
       }
       case "task_completed": {
+        // Slip is measured in whole calendar days between the date the task
+        // was scheduled for (plannedFor — the postponed-to ECD when the user
+        // rescheduled it) and the day it was actually done. Done on the
+        // scheduled day = 0, whatever time of day it was ticked off.
         let slippageDays = null;
         if (e.plannedFor && e.doneAt) {
-          const planned = Date.parse(`${e.plannedFor}T00:00:00Z`);
-          const done = Date.parse(e.doneAt);
-          slippageDays = Math.round((done - planned) / 86400000);
+          const planned = utcDayStart(`${e.plannedFor}T00:00:00Z`);
+          const done = utcDayStart(e.doneAt);
+          if (!Number.isNaN(planned) && !Number.isNaN(done)) {
+            slippageDays = Math.round((done - planned) / 86400000);
+          }
         }
         completedTasks.push({
           taskName: e.taskName,

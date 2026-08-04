@@ -610,6 +610,8 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | aggregates call_result events into per-person rates and miss streaks | 3 periods (1 done, 2 recent misses) → rate 33, `currentMissStreak: 2`, sorted `recentResults`; calls excluded from `byHeader` |
 | returns an empty calls array when there are no call_result events | Habit-only archive → `calls: []`                                              |
 | computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
+| reports zero slippage for a task completed on its scheduled date, whatever the time of day | Planned Jul 6, done Jul 6 at 07:15 / 12:30 / 23:59 → `slippageDays: 0` for all three and `avgSlippageDays: 0` (part-days never round up to a day of slip) |
+| counts slippage in whole days across a boundary and stays negative when done early | Planned Jul 6, done Jul 7 at 00:30 → `1`; done Jul 4 at 18:00 → `-2`; `avgSlippageDays: -0.5` |
 | counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
 | splits pushed-later postpones by reason and collects stated reasons | Per task: `pushedLaterWithReason`/`pushedLaterNoReason` split, `reasons[]` holds only the stated postpone reasons |
 | rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types (incl. `deleted` field)                |

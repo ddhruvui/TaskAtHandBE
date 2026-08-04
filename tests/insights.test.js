@@ -129,6 +129,44 @@ describe("Insights", () => {
       expect(noPlan.slippageDays).toBeNull();
     });
 
+    test("reports zero slippage for a task completed on its scheduled date, whatever the time of day", async () => {
+      await seedArchive([
+        // Late-evening completion on the scheduled day: the day-boundary diff
+        // must stay 0 rather than rounding the part-day up to a full day slip
+        { type: "task_completed", taskId: "t1", taskName: "Evening finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T23:59:00Z" },
+        { type: "task_completed", taskId: "t2", taskName: "Midday finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T12:30:00Z" },
+        { type: "task_completed", taskId: "t3", taskName: "Morning finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T07:15:00Z" },
+      ]);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      for (const name of ["Evening finish", "Midday finish", "Morning finish"]) {
+        const task = res.body.oneTimeTasks.recent.find(
+          (t) => t.taskName === name,
+        );
+        expect(task.slippageDays).toBe(0);
+      }
+      expect(res.body.oneTimeTasks.avgSlippageDays).toBe(0);
+    });
+
+    test("counts slippage in whole days across a boundary and stays negative when done early", async () => {
+      await seedArchive([
+        // 07-07T00:30 is 1 calendar day past 07-06, not 0 as a raw-ms round would give
+        { type: "task_completed", taskId: "t1", taskName: "Just past midnight", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-07T00:30:00Z" },
+        { type: "task_completed", taskId: "t2", taskName: "Done early", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-04T18:00:00Z" },
+      ]);
+
+      const res = await request(app).get("/insights/stats").expect(200);
+      const late = res.body.oneTimeTasks.recent.find(
+        (t) => t.taskName === "Just past midnight",
+      );
+      expect(late.slippageDays).toBe(1);
+      const early = res.body.oneTimeTasks.recent.find(
+        (t) => t.taskName === "Done early",
+      );
+      expect(early.slippageDays).toBe(-2);
+      expect(res.body.oneTimeTasks.avgSlippageDays).toBe(-0.5);
+    });
+
     test("counts reschedules and pushedLater per task, most-rescheduled first", async () => {
       await seedArchive([
         { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true },
