@@ -1150,7 +1150,8 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 6    | Every day          | Add **due life events** to the todo: for every life event whose `"D/M"` resolves to today (Feb 29 → Feb 28 in non-leap years) and whose `lastAddedYear` is behind the current year, create a linked one-time `date` task named after it under an **"Events"** header (matched case-insensitively, created otherwise), reset `done` and advance `lastAddedYear` (what makes same-day reruns idempotent). Skipped while a linked task still exists, so occurrences never stack |
 | 7    | Every day          | Re-sort each header: undone tasks by next upcoming ECD ascending, done tasks last. Same-day ties keep their existing relative order (stable sort); only `priority` is written — `updatedAt` is untouched |
 | 8    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
-| —    | Every day          | Generate the daily AI insight report (requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run) |
+| 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `ANTHROPIC_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
+| —    | Fridays            | Generate the AI insight report — only when today is **Friday (UTC)** and no report was already generated that Friday; on any other day (or a repeat run the same Friday) the response carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
 
 #### Resolving "next upcoming ECD" for step 7
 
@@ -1210,7 +1211,7 @@ Manually triggers the cron job with an optional date override in the request bod
 | Field          | Required | Notes                                                                                          |
 | -------------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `date`         | No       | ISO date string; defaults to today (UTC)                                                       |
-| `skipInsights` | No       | Skip the daily AI insight report for this run (used by e2e tests to avoid a real Anthropic API call) |
+| `skipInsights` | No       | Skip the weekly AI insight report for this run (used by e2e tests to avoid a real Anthropic API call). Does **not** skip the step-9 stats snapshot, which costs nothing |
 
 **Response `200`:**
 
@@ -1228,9 +1229,16 @@ Manually triggers the cron job with an optional date override in the request bod
   "lifeEventTasksCreated": 1,
   "outcomesArchived": 5,
   "callsReset": 0,
+  "statsRefreshed": true,
   "insightGenerated": true
 }
 ```
+
+`insightGenerated` is only present when the run reached the insight step
+(`skipInsights` unset, not test mode, `ANTHROPIC_API_KEY` configured). The
+report is weekly: on any day that is not Friday (UTC) — or on a Friday it
+already ran for — it is `false` and the response also carries
+`"insightSkipped": "not-due"`.
 
 **Error `500`:**
 
@@ -1260,6 +1268,7 @@ Manually triggers the cron job. No request body needed.
   "lifeEventTasksCreated": 1,
   "outcomesArchived": 5,
   "callsReset": 0,
+  "statsRefreshed": true,
   "insightGenerated": true
 }
 ```
@@ -1381,7 +1390,9 @@ Base path: `/insights`
 
 Exact computed stats over the archive — no AI involved. Returns per-habit completion rates, current/longest streaks, missed-by-weekday counts, one-time-task slippage, reschedule counts, manual-deletion counts (`deletions` — from `task_deleted` events), per-header rollups, and per-person call completion (`calls` — from `call_result` events; calls are excluded from `byHeader` since they have no header).
 
-**Slippage is a whole-UTC-calendar-day count**: `slippageDays` (and the `avgSlippageDays` derived from it) is the number of days between the date the task was scheduled for (`plannedFor` — the *postponed-to* ECD when the user rescheduled it, since a postpone rewrites `task.ecd` before the archive event is written) and the calendar day `doneAt` falls on. Both sides are snapped to midnight UTC before subtracting, so a task ticked off at any time of day on its scheduled date is `0`, one done the next day is `1`, and one finished early is negative. Events with a null `plannedFor` (recurring or no-ECD tasks) get `slippageDays: null` and are excluded from the average.
+**Slippage is a whole-UTC-calendar-day count**: `slippageDays` is the number of days between the date the task was scheduled for (`plannedFor` — the *postponed-to* ECD when the user rescheduled it, since a postpone rewrites `task.ecd` before the archive event is written) and the calendar day `doneAt` falls on. Both sides are snapped to midnight UTC before subtracting, so a task ticked off at any time of day on its scheduled date is `0`, one done the next day is `1`, and one finished early is negative. Events with a null `plannedFor` (recurring or no-ECD tasks) get `slippageDays: null` and are excluded from the rollups.
+
+**Finishing on or before the planned date counts as good.** Each entry in `oneTimeTasks.recent` carries `onTime` — `true` when `slippageDays <= 0`, `false` when it is positive, `null` when there is no `plannedFor` — and `oneTimeTasks` rolls those up as `onTimeCount` / `lateCount`. `avgSlippageDays` measures **lateness only**: early and on-the-day completions contribute `0` rather than a negative number, so an early finish can never cancel out a late one. It is `null` when no completed task had a `plannedFor`.
 
 **Response `200`** (abridged):
 
@@ -1404,7 +1415,22 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
     }
   ],
   "recurringTasks": [],
-  "oneTimeTasks": { "completedCount": 9, "avgSlippageDays": 1.4, "recent": [] },
+  "oneTimeTasks": {
+    "completedCount": 9,
+    "onTimeCount": 6,
+    "lateCount": 3,
+    "avgSlippageDays": 1.4,
+    "recent": [
+      {
+        "taskName": "Ship report",
+        "headerName": "Work",
+        "plannedFor": "2026-07-06",
+        "doneAt": "2026-07-04T18:00:00.000Z",
+        "slippageDays": -2,
+        "onTime": true
+      }
+    ]
+  },
   "reschedules": [
     {
       "taskName": "Write blog",
@@ -1436,6 +1462,38 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
     }
   ]
 }
+```
+
+---
+
+### `GET /insights/stats/latest`
+
+The stats snapshot the **nightly cron** stored (cron step 9) — the same numbers
+as `GET /insights/stats` without recomputing them, plus `computedAt`. No AI is
+involved in either endpoint; this one exists so streaks and rates are available
+as of the last cron run, refreshed nightly even though the AI report is weekly.
+
+**Response `200`:** the `/insights/stats` body plus `computedAt`:
+
+```json
+{
+  "computedAt": "2026-07-24T00:00:03.412Z",
+  "periodDays": 28,
+  "eventCount": 42,
+  "habits": [],
+  "recurringTasks": [],
+  "oneTimeTasks": {},
+  "reschedules": [],
+  "deletions": {},
+  "byHeader": {},
+  "calls": []
+}
+```
+
+**Error `404`** — the cron has never written a snapshot:
+
+```json
+{ "error": "No stats snapshot yet — it is written by the nightly cron run" }
 ```
 
 ---
@@ -1488,7 +1546,10 @@ Recent AI reports, newest first. `limit` defaults to 14 (max 100).
 
 ### `POST /insights/generate`
 
-Generates a fresh AI report now and stores it.
+Generates a fresh AI report now and stores it. The cron generates a report
+only on Fridays; this endpoint is an explicit user request, so it ignores that
+gate and always generates — and a report generated here does not consume that
+week's Friday run.
 
 **Request Body (optional):**
 

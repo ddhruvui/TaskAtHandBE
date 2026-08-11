@@ -295,40 +295,178 @@ describe("Cron API Endpoints", () => {
     });
   });
 
-  describe("POST /cron/run — skipInsights flag", () => {
-    // The insight branch requires NODE_ENV !== "test" and an API key; flip
-    // both for these tests only (generateInsights is mocked at the top of
-    // this file, so no real API call happens).
-    const origNodeEnv = process.env.NODE_ENV;
+  describe("POST /cron/run — nightly stats snapshot (step 9, no AI)", () => {
     const origApiKey = process.env.ANTHROPIC_API_KEY;
 
-    beforeEach(() => {
-      process.env.NODE_ENV = "development";
-      process.env.ANTHROPIC_API_KEY = "test-key";
-      generateInsights.mockClear();
+    beforeEach(async () => {
+      // The snapshot is pure arithmetic — it must not depend on the AI key
+      delete process.env.ANTHROPIC_API_KEY;
+      const db = await getDatabase();
+      await db.collection("InsightStats-Test").deleteMany({});
+      await db.collection("TaskArchive-Test").deleteMany({});
     });
 
-    afterEach(() => {
-      process.env.NODE_ENV = origNodeEnv;
+    afterEach(async () => {
       if (origApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
       else process.env.ANTHROPIC_API_KEY = origApiKey;
+      const db = await getDatabase();
+      await db.collection("InsightStats-Test").deleteMany({});
+      await db.collection("TaskArchive-Test").deleteMany({});
     });
 
-    test("skipInsights: true suppresses the insight report", async () => {
+    test("every run refreshes the snapshot and reports statsRefreshed", async () => {
+      const res = await request(app).post("/cron/run").expect(200);
+      expect(res.body.statsRefreshed).toBe(true);
+
+      const snapshot = await request(app)
+        .get("/insights/stats/latest")
+        .expect(200);
+      expect(snapshot.body.computedAt).toBeDefined();
+      expect(snapshot.body.periodDays).toBe(28);
+    });
+
+    test("streaks are updated on a non-Friday run, with no report generated", async () => {
+      const db = await getDatabase();
+      await db.collection("TaskArchive-Test").insertMany([
+        { type: "habit_result", at: new Date(), taskId: "h1", taskName: "Stretch", headerName: "Health", scheduledDays: ["Mon"], dueDate: "2026-07-06", completed: true },
+        { type: "habit_result", at: new Date(), taskId: "h1", taskName: "Stretch", headerName: "Health", scheduledDays: ["Mon"], dueDate: "2026-07-13", completed: true },
+      ]);
+
+      // Thursday: no AI report, but the streak must still be current
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-07-23T00:00:00.000Z" })
+        .expect(200);
+      expect(res.body.statsRefreshed).toBe(true);
+      expect(res.body).not.toHaveProperty("insightGenerated");
+
+      const snapshot = await request(app)
+        .get("/insights/stats/latest")
+        .expect(200);
+      const habit = snapshot.body.habits.find((h) => h.taskName === "Stretch");
+      expect(habit.currentStreak).toBe(2);
+      expect(habit.completionRate).toBe(100);
+    });
+
+    test("skipInsights does not suppress the snapshot", async () => {
+      // skipInsights exists to avoid the paid API call; step 9 costs nothing
       const res = await request(app)
         .post("/cron/run")
         .send({ skipInsights: true })
         .expect(200);
 
-      expect(generateInsights).not.toHaveBeenCalled();
-      expect(res.body).not.toHaveProperty("insightGenerated");
+      expect(res.body.statsRefreshed).toBe(true);
+      await request(app).get("/insights/stats/latest").expect(200);
+    });
+  });
+
+  describe("POST /cron/run — insight report (skipInsights + weekly cadence)", () => {
+    // The insight branch requires NODE_ENV !== "test" and an API key; flip
+    // both for these tests only (generateInsights is mocked at the top of
+    // this file, so no real API call happens).
+    const origNodeEnv = process.env.NODE_ENV;
+    const origApiKey = process.env.ANTHROPIC_API_KEY;
+    // The report runs on Fridays: 2026-07-24 is a Friday, 2026-07-23 a Thursday
+    const FRIDAY = "2026-07-24T00:00:00.000Z";
+    const THURSDAY = "2026-07-23T00:00:00.000Z";
+
+    async function seedInsight(daysBeforeFriday) {
+      const db = await getDatabase();
+      await db.collection("Insights-Test").insertOne({
+        generatedAt: new Date(
+          new Date(FRIDAY).getTime() - daysBeforeFriday * 86400000,
+        ),
+        report: { summary: "previous" },
+      });
+    }
+
+    beforeEach(async () => {
+      process.env.NODE_ENV = "development";
+      process.env.ANTHROPIC_API_KEY = "test-key";
+      generateInsights.mockClear();
+      // The cadence gate reads the stored reports, so start each test with none
+      const db = await getDatabase();
+      await db.collection("Insights-Test").deleteMany({});
     });
 
-    test("without skipInsights the insight step still runs", async () => {
-      const res = await request(app).post("/cron/run").send({}).expect(200);
+    afterEach(async () => {
+      process.env.NODE_ENV = origNodeEnv;
+      if (origApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = origApiKey;
+      const db = await getDatabase();
+      await db.collection("Insights-Test").deleteMany({});
+    });
+
+    test("skipInsights: true suppresses the insight report", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY, skipInsights: true })
+        .expect(200);
+
+      expect(generateInsights).not.toHaveBeenCalled();
+      expect(res.body).not.toHaveProperty("insightGenerated");
+      expect(res.body).not.toHaveProperty("insightSkipped");
+    });
+
+    test("without skipInsights the Friday insight step still runs", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
 
       expect(generateInsights).toHaveBeenCalledTimes(1);
       expect(res.body.insightGenerated).toBe(true);
+      expect(res.body).not.toHaveProperty("insightSkipped");
+    });
+
+    test("skips the report on a non-Friday run", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: THURSDAY })
+        .expect(200);
+
+      expect(generateInsights).not.toHaveBeenCalled();
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("not-due");
+    });
+
+    test("skips a second run on a Friday that already reported", async () => {
+      await seedInsight(0);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
+
+      expect(generateInsights).not.toHaveBeenCalled();
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("not-due");
+    });
+
+    test("runs the report on the Friday after the last one", async () => {
+      await seedInsight(7);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
+
+      expect(generateInsights).toHaveBeenCalledTimes(1);
+      expect(res.body.insightGenerated).toBe(true);
+      expect(res.body).not.toHaveProperty("insightSkipped");
+    });
+
+    test("the rest of the cron still runs on a day the report is skipped", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: THURSDAY })
+        .expect(200);
+
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.ranAt).toBe(THURSDAY);
+      expect(res.body).toHaveProperty("tasksDeleted");
+      expect(res.body).toHaveProperty("headersReordered");
+      expect(res.body).toHaveProperty("outcomesArchived");
     });
   });
 });

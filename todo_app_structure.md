@@ -419,8 +419,9 @@ The `Insights` collection stores one AI coaching report per generation:
 }
 ```
 
-Reports are generated at the end of every cron run (when `ANTHROPIC_API_KEY`
-is set) and on demand via `POST /insights/generate`. The previous report is
+Reports are generated **once a week, on Friday (UTC)**, at the end of that
+night's cron run (when `ANTHROPIC_API_KEY` is set), and on demand via
+`POST /insights/generate`, which ignores the weekly gate. The previous report is
 fed into the next generation so suggestions build on each other. Tasks
 scheduled by `day_of_week` are treated as **habits**; everything else is a
 task. Calls feed in two ways: `call_result` archive events become a `calls`
@@ -439,6 +440,32 @@ bucket; the raw reasons ride along in the recent events. The report interprets
 them as abandoned intentions — separating healthy pruning from avoidance — in a
 required `deletionInsights` array (empty when nothing was deleted; absent from
 reports stored before the feature, so clients must tolerate its absence).
+
+---
+
+### InsightStats (nightly stats snapshot, no AI)
+
+The `InsightStats` collection holds a **single** document — the exact stats as
+of the last cron run:
+
+```json
+{
+  "key": "latest",
+  "computedAt": "ISO 8601 datetime",
+  "periodDays": 28,
+  "eventCount": 42,
+  "stats": "the same object GET /insights/stats returns (habits, recurringTasks, oneTimeTasks, reschedules, deletions, byHeader, calls)"
+}
+```
+
+This is the AI-free half of insights. Cron **step 9** recomputes it every
+night from `TaskArchive` — pure arithmetic, no Anthropic call, no
+`ANTHROPIC_API_KEY` needed — so habit streaks and completion rates are current
+the morning after the day they were earned, even though the coaching narrative
+in `Insights` is only written on Fridays. The document is replaced in place
+(never appended to): the history it is derived from lives in `TaskArchive`, so
+any past snapshot can be recomputed. Read it via `GET /insights/stats/latest`;
+`GET /insights/stats` still computes live on request.
 
 ---
 
@@ -576,14 +603,32 @@ each period boundary:
 - For every due call (done **and** missed): log a `call_result` archive event `{ callId, callName, frequency, dueDate: today, completed: call.done, doneAt }` **before** resetting, so insights can track miss patterns. Idempotent: calls already archived for this `dueDate` are skipped on manual re-runs.
 - Then reset every due call that is done → `done = false`, `doneAt = null`, update `updatedAt` (the `callsReset` stat counts only these resets, not archive events)
 
-#### Final step — Generate the daily AI insight report
+#### Step 9 — Refresh the stats snapshot _(every night, no AI)_
+
+- Recompute the exact stats over the last 28 days of `TaskArchive` — habit
+  completion rates and streaks, missed-by-weekday, on-time vs late one-time
+  tasks, reschedules, deletions, per-header rollups, per-person call results —
+  and replace the single document in `InsightStats` (`computedAt` = now)
+- **Runs on every cron run, needs no `ANTHROPIC_API_KEY`, and is not affected
+  by `skipInsights`** (that flag exists to avoid the paid API call; this step
+  is arithmetic). Streak counts therefore stay current nightly while the AI
+  narrative is weekly
+- Runs after step 8 so the night's `call_result` events are already archived,
+  and before the report so Friday's prompt and the snapshot agree
+- The window ends at the **real current time**, not the run's `date` override,
+  because archive events are stamped with their real insertion time
+- A failure never fails the cron run (logged, `statsRefreshed: false` in stats)
+
+#### Final step — Generate the weekly AI insight report
 
 - After step 8, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+  - **Once per week, on Friday — not nightly.** The cron runs every night, but the analysis costs an Anthropic call, so it only fires when today is **Friday (UTC)** and no report has been generated yet on that Friday (so a second cron run the same day, e.g. a manual `POST /cron/run`, doesn't pay for a second call). On any other day, or on a Friday already reported on, the run records `insightGenerated: false` and `insightSkipped: "not-due"` and moves on. A report generated on some other day — e.g. an on-demand `POST /insights/generate` on a Wednesday — does **not** consume that week's Friday run.
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
   - Send stats + recent events + the previous report to `claude-sonnet-4-6` with a structured-output schema
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
+- `POST /insights/generate` ignores the weekly gate — an explicit user request always generates a fresh report
 
 ---
 
@@ -1195,7 +1240,8 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 6. Add due life events to the todo _(a linked date task under the "Events" header, once per year)_
 7. Reorder priorities per header
 8. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
-9. Generate the daily AI insight report _(when `ANTHROPIC_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
+9. Refresh the `InsightStats` snapshot — streaks, rates, on-time counts _(every night; no AI, no API key needed)_
+10. Generate the weekly AI insight report _(only on Fridays (UTC) and only once per Friday, when `ANTHROPIC_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
 
 **Response `200`**
 
@@ -1213,9 +1259,14 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
   "lifeEventTasksCreated": 1,
   "outcomesArchived": 4,
   "callsReset": 0,
+  "statsRefreshed": true,
   "insightGenerated": true
 }
 ```
+
+On a night the weekly report is not due (any day that is not Friday, or a
+Friday already reported on), the same response carries
+`"insightGenerated": false` plus `"insightSkipped": "not-due"`.
 
 ---
 
@@ -1315,6 +1366,23 @@ against the date the task was last scheduled for, not the one it was
 originally created with. A null `plannedFor` (recurring or no-ECD task) yields
 `slippageDays: null` and is left out of the average.
 
+**Finishing on or before the planned date counts as good.** Each completed
+task carries `onTime` (`true` when `slippageDays <= 0`, `false` when it is
+positive, `null` when there is no `plannedFor`), and `oneTimeTasks` rolls
+those up as `onTimeCount` / `lateCount`. `avgSlippageDays` measures **lateness
+only**: every early or on-the-day completion contributes `0`, so a task done
+three days early can no longer cancel out a task done three days late. The
+per-task `slippageDays` keeps its raw signed value (negative = finished
+early). The AI coach is told the same rule — a `slippageDays` of `0` or less
+is a win and is never reported as a slip.
+
+#### `GET /insights/stats/latest`
+
+The stats snapshot written by the nightly cron (step 9): the same body as
+`GET /insights/stats` plus `computedAt`, without recomputing it. Refreshed
+every night regardless of the weekly AI cadence, so streaks are never more
+than a day old. `404` if the cron has not run yet.
+
 #### `GET /insights/latest`
 
 Most recent stored AI report. `404` if none has been generated yet.
@@ -1325,8 +1393,10 @@ Recent AI reports, newest first.
 
 #### `POST /insights/generate`
 
-Generates a fresh AI report now. Optional body `{ "days": 28 }`. Returns
-`201` with the stored report, `404` if the archive is empty, `503` if
+Generates a fresh AI report now, on any day — the cron's Friday-only gate does
+not apply to this explicit request, and a report generated here does not
+consume that week's Friday run. Optional body `{ "days": 28 }`. Returns `201`
+with the stored report, `404` if the archive is empty, `503` if
 `ANTHROPIC_API_KEY` is not configured.
 
 ---

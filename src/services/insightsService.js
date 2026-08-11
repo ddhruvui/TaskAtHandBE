@@ -1,7 +1,15 @@
 const Archive = require("../models/Archive");
 const Insight = require("../models/Insight");
+const InsightStats = require("../models/InsightStats");
 
 const DEFAULT_PERIOD_DAYS = 28;
+
+/**
+ * The one weekday (UTC, 0 = Sunday) the cron spends an Anthropic call on a
+ * report. The analysis is a weekly review, not a daily one: a day of archive
+ * events rarely changes the picture, and every run costs an API call.
+ */
+const INSIGHT_DAY_OF_WEEK = 5; // Friday
 
 /**
  * Midnight-UTC epoch ms of the calendar day a timestamp falls on.
@@ -86,7 +94,8 @@ function computeStats(events) {
         // Slip is measured in whole calendar days between the date the task
         // was scheduled for (plannedFor — the postponed-to ECD when the user
         // rescheduled it) and the day it was actually done. Done on the
-        // scheduled day = 0, whatever time of day it was ticked off.
+        // scheduled day = 0, whatever time of day it was ticked off; done
+        // ahead of it is negative.
         let slippageDays = null;
         if (e.plannedFor && e.doneAt) {
           const planned = utcDayStart(`${e.plannedFor}T00:00:00Z`);
@@ -101,6 +110,9 @@ function computeStats(events) {
           plannedFor: e.plannedFor,
           doneAt: e.doneAt,
           slippageDays,
+          // Finishing early or on the day counts as a win, not as slip — only
+          // a task that outlived its planned date is late.
+          onTime: slippageDays === null ? null : slippageDays <= 0,
         });
         headerBucket(e.headerName).completed++;
         break;
@@ -231,9 +243,13 @@ function computeStats(events) {
     };
   });
 
+  // The average measures lateness only: an early finish scores 0 like an
+  // on-time one, so a task done three days early can no longer cancel out a
+  // task done three days late and report the pair as "no slip".
   const slippages = completedTasks
     .map((t) => t.slippageDays)
     .filter((s) => s !== null);
+  const lateness = slippages.map((s) => Math.max(0, s));
 
   return {
     habits: habitStats,
@@ -245,9 +261,11 @@ function computeStats(events) {
     })),
     oneTimeTasks: {
       completedCount: completedTasks.length,
-      avgSlippageDays: slippages.length
+      onTimeCount: completedTasks.filter((t) => t.onTime === true).length,
+      lateCount: completedTasks.filter((t) => t.onTime === false).length,
+      avgSlippageDays: lateness.length
         ? Math.round(
-            (slippages.reduce((a, b) => a + b, 0) / slippages.length) * 10,
+            (lateness.reduce((a, b) => a + b, 0) / lateness.length) * 10,
           ) / 10
         : null,
       recent: completedTasks.slice(-20),
@@ -290,7 +308,7 @@ const REPORT_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "Observations about one-time and recurring tasks: slippage, neglected headers, wins",
+        "Observations about one-time and recurring tasks: slippage, neglected headers, wins. Tasks finished on or before their planned date are wins, never slippage.",
     },
     procrastinationFlags: {
       type: "array",
@@ -335,6 +353,7 @@ const SYSTEM_PROMPT = `You are a personal productivity coach analyzing task-comp
 Definitions:
 - "Habits" are tasks scheduled on days of the week (day_of_week). They reset daily and their hit/miss history is the core signal.
 - Everything else (one-time dated tasks, day_of_month, day_of_year) are "tasks".
+- A one-time task finished **on or before** the date it was planned for is ON TIME — a success. precomputedStats.oneTimeTasks gives onTimeCount, lateCount and avgSlippageDays (days late, where early and on-the-day completions count as 0), and each entry in .recent carries slippageDays (negative = finished early) plus onTime. Only slippageDays > 0 is slippage: never describe a 0 or negative slippageDays as a slip, a delay or a problem, and don't ask the user to fix it. Credit early and on-the-day completions where the data shows them.
 - "Calls" are people the user must phone on a cadence: "biweekly" means twice a month (periods 1st–14th and 15th–month-end), "monthly" means once a month. The called checkmark resets at each period boundary; a call_result with completed=false means that person was NOT called that period. currentCalls shows the live status for the current period.
 - A reschedule that pushes a date later (a "postpone") is a procrastination signal, especially when repeated on the same task. When the user postpones they may attach a reason: for each rescheduled task, precomputedStats.reschedules gives pushedLater, pushedLaterNoReason, pushedLaterWithReason and the stated reasons[]. A pushed-later reschedule with NO reason is procrastination for sure. One WITH a reason must be judged: accept genuinely valid causes (blocked by a dependency, illness, a real higher-priority emergency, plans changed for a legitimate reason) as legitimate deferrals and do NOT flag them; treat weak excuses ("didn't feel like it", "too big", "ran out of time", "kept putting it off") as avoidance, same as an unexcused postpone.
 - A "deletion" (task_deleted event) is a task the user removed *while it was still not done*, each carrying the user's stated reason. It represents an abandoned intention, not a completed one — treat the reason as the primary signal for WHY it was dropped. precomputedStats.deletions has the counts; the reasons live on the raw task_deleted events and byHeader.deleted counts them per header.
@@ -345,13 +364,72 @@ Rules:
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
 - For deletions: read each reason and separate healthy pruning ("no longer needed", "duplicate", priorities genuinely changed) from avoidance ("too big", "ran out of time", "kept putting it off"). Name the task and quote/paraphrase its reason. Flag repeat abandonment of the same intention or a header where tasks are frequently dropped. If there were no deletions, return an empty deletionInsights array.
 - For postpones (pushed-later reschedules): call out tasks with pushedLaterNoReason > 0 as unexcused procrastination by name and count. For pushedLaterWithReason, quote/paraphrase the stated reason and say whether you accept it as valid (and therefore don't count it against the user) or read it as an excuse. Repeated no-reason postpones of the same task are a strong avoidance signal.
+- This report is generated weekly, so the previous report (when present) is about a week old and its suggestions have had a full week to land — judge them on that.
 - If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (repeatedly ignored advice is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
 - For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.
 - Keep every list item to one or two sentences.`;
 
 /**
- * Generate and persist a daily insight report from the archive.
+ * Recompute the exact archive stats (streaks, completion rates, on-time
+ * counts, reschedules, calls) and store them as the current snapshot.
+ *
+ * Pure arithmetic over `TaskArchive` — no Anthropic call, no API key — so the
+ * cron runs it every night and streaks stay current between the weekly AI
+ * reports. `GET /insights/stats` still computes live on request; this is the
+ * persisted "as of last night" copy.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.periodDays=28]  How far back to analyze
+ * @param {Date} [options.computedAt]  Override for testing (defaults to now)
+ * @returns {Promise<Object>} The stored snapshot
+ */
+async function refreshStatsSnapshot({
+  periodDays = DEFAULT_PERIOD_DAYS,
+  computedAt = new Date(),
+} = {}) {
+  const to = new Date(computedAt);
+  const from = new Date(to.getTime() - periodDays * 86400000);
+  const events = await Archive.findByRange(from, to);
+
+  // An empty archive is still a real answer (every streak is 0) — storing it
+  // keeps `computedAt` honest instead of leaving yesterday's numbers around.
+  return InsightStats.save({
+    computedAt: to,
+    periodDays,
+    eventCount: events.length,
+    stats: computeStats(events),
+  });
+}
+
+/**
+ * Whether the cron's weekly AI analysis is due: it runs on Fridays (UTC) and
+ * only once on any given Friday — a second cron run the same day (a manual
+ * `POST /cron/run`, a redeploy) must not spend a second API call.
+ *
+ * On-demand generation via `POST /insights/generate` deliberately ignores
+ * this — it is an explicit user action, not the scheduled spend.
+ *
+ * @param {Date} [today]  Override for testing (defaults to now)
+ * @returns {Promise<boolean>}
+ */
+async function isInsightDue(today = new Date()) {
+  const day = new Date(today);
+  if (Number.isNaN(day.getTime())) return false;
+  if (day.getUTCDay() !== INSIGHT_DAY_OF_WEEK) return false;
+
+  const previous = await Insight.latest();
+  if (!previous || !previous.generatedAt) return true;
+
+  const lastDay = utcDayStart(previous.generatedAt);
+  if (Number.isNaN(lastDay)) return true;
+
+  // Already reported today — this Friday's analysis is done
+  return lastDay !== utcDayStart(day);
+}
+
+/**
+ * Generate and persist an insight report from the archive.
  * @param {Object} [options]
  * @param {number} [options.periodDays=28]  How far back to analyze
  * @returns {Promise<Object|null>} The stored insight, or null if there is no data
@@ -427,4 +505,11 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   return stored;
 }
 
-module.exports = { computeStats, generateInsights, DEFAULT_PERIOD_DAYS };
+module.exports = {
+  computeStats,
+  generateInsights,
+  refreshStatsSnapshot,
+  isInsightDue,
+  DEFAULT_PERIOD_DAYS,
+  INSIGHT_DAY_OF_WEEK,
+};

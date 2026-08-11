@@ -226,8 +226,9 @@ db.Projects.find({ "tasks.todoTaskId": { $in: doneIds } });
 
 ## Insights Queries
 
-The `Insights` collection (`Insights-Test` in test mode) stores the daily AI
-reports: `{ generatedAt, periodDays, model, stats, report }`.
+The `Insights` collection (`Insights-Test` in test mode) stores the weekly AI
+reports — written by the cron on Fridays (UTC) and by
+`POST /insights/generate` on demand: `{ generatedAt, periodDays, model, stats, report }`.
 
 ### Latest report
 
@@ -239,6 +240,34 @@ db.Insights.find().sort({ generatedAt: -1 }).limit(1);
 
 ```javascript
 db.Insights.find({ generatedAt: { $gte: new Date(Date.now() - 7 * 86400000) } });
+```
+
+### Check the weekly cadence held (one report per Friday)
+
+```javascript
+db.Insights.find({}, { generatedAt: 1 })
+  .sort({ generatedAt: -1 })
+  .limit(10)
+  .toArray()
+  .map((i) => ({ at: i.generatedAt, dow: i.generatedAt.getUTCDay() })); // dow 5 = Friday
+```
+
+### Nightly stats snapshot (no AI)
+
+The `InsightStats` collection (`InsightStats-Test` in test mode) holds a single
+document, replaced by cron step 9 every night:
+`{ key: "latest", computedAt, periodDays, eventCount, stats }`.
+
+```javascript
+// Is the snapshot current? computedAt should be from the last cron run
+db.InsightStats.findOne({ key: "latest" }, { computedAt: 1, eventCount: 1 });
+
+// Current habit streaks without recomputing anything
+db.InsightStats.findOne({ key: "latest" }).stats.habits.map((h) => ({
+  name: h.taskName,
+  rate: h.completionRate,
+  streak: h.currentStreak,
+}));
 ```
 
 ---

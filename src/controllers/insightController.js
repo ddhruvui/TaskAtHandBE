@@ -1,5 +1,6 @@
 const Archive = require("../models/Archive");
 const Insight = require("../models/Insight");
+const InsightStats = require("../models/InsightStats");
 const {
   computeStats,
   generateInsights,
@@ -47,6 +48,35 @@ const getStats = async (req, res) => {
     res
       .status(500)
       .json({ error: "Failed to compute stats", message: error.message });
+  }
+};
+
+/**
+ * GET /insights/stats/latest
+ * The cron's nightly stats snapshot (no AI). Same shape as GET /insights/stats
+ * plus `computedAt` — use it when you want the numbers the last cron run saw
+ * rather than paying to recompute them.
+ */
+const getStatsSnapshot = async (req, res) => {
+  try {
+    const snapshot = await InsightStats.latest();
+    if (!snapshot) {
+      return res.status(404).json({
+        error:
+          "No stats snapshot yet — it is written by the nightly cron run",
+      });
+    }
+    res.json({
+      computedAt: snapshot.computedAt,
+      periodDays: snapshot.periodDays,
+      eventCount: snapshot.eventCount,
+      ...snapshot.stats,
+    });
+  } catch (error) {
+    console.error("Error fetching stats snapshot:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to fetch stats snapshot", message: error.message });
   }
 };
 
@@ -119,4 +149,11 @@ const generate = async (req, res) => {
   }
 };
 
-module.exports = { getArchive, getStats, getLatest, getHistory, generate };
+module.exports = {
+  getArchive,
+  getStats,
+  getStatsSnapshot,
+  getLatest,
+  getHistory,
+  generate,
+};

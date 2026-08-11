@@ -52,7 +52,6 @@ const getDatabase = async () => {
   }
 
   const dbName = "TaskAtHand";
-  console.log(`Using database: ${dbName}`);
   return client.db(dbName);
 };
 

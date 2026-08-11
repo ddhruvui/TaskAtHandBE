@@ -102,7 +102,7 @@ app.use("/insights", require("./routes/insightRoutes"));
  *                 example: "2026-01-01T00:00:00.000Z"
  *               skipInsights:
  *                 type: boolean
- *                 description: Skip the daily AI insight report for this run (used by e2e tests to avoid a real Anthropic API call)
+ *                 description: Skip the weekly AI insight report for this run (used by e2e tests to avoid a real Anthropic API call)
  *                 example: true
  *     responses:
  *       200:

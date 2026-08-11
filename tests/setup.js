@@ -45,6 +45,7 @@ beforeAll(async () => {
     "Calls-Test",
     "TaskArchive-Test",
     "Insights-Test",
+    "InsightStats-Test",
   ];
 
   await Promise.all(

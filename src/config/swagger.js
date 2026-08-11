@@ -315,6 +315,24 @@ const options = {
             lifeEventsCompleted: { type: "integer", example: 0 },
             lifeEventTasksCreated: { type: "integer", example: 1 },
             callsReset: { type: "integer", example: 0 },
+            statsRefreshed: {
+              type: "boolean",
+              example: true,
+              description:
+                "Whether cron step 9 refreshed the AI-free InsightStats snapshot (streaks, rates). Runs on every cron run, including without an API key or with skipInsights.",
+            },
+            insightGenerated: {
+              type: "boolean",
+              example: true,
+              description:
+                "Whether the weekly AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an ANTHROPIC_API_KEY.",
+            },
+            insightSkipped: {
+              type: "string",
+              example: "not-due",
+              description:
+                "Present as \"not-due\" when the run reached the insight step on a day it does not report: any day that is not Friday (UTC), or a Friday already reported on.",
+            },
           },
         },
         CronStatus: {

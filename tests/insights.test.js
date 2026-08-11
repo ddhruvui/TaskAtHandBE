@@ -6,6 +6,7 @@ async function clearCollections() {
   const db = await getDatabase();
   await db.collection("TaskArchive-Test").deleteMany({});
   await db.collection("Insights-Test").deleteMany({});
+  await db.collection("InsightStats-Test").deleteMany({});
 }
 
 async function seedArchive(events) {
@@ -119,14 +120,19 @@ describe("Insights", () => {
       const res = await request(app).get("/insights/stats").expect(200);
       expect(res.body.oneTimeTasks.completedCount).toBe(2);
       expect(res.body.oneTimeTasks.avgSlippageDays).toBe(2); // only t1 counts
+      expect(res.body.oneTimeTasks.lateCount).toBe(1);
+      expect(res.body.oneTimeTasks.onTimeCount).toBe(0);
       const shipped = res.body.oneTimeTasks.recent.find(
         (t) => t.taskName === "Ship report",
       );
       expect(shipped.slippageDays).toBe(2);
+      expect(shipped.onTime).toBe(false);
       const noPlan = res.body.oneTimeTasks.recent.find(
         (t) => t.taskName === "No plan",
       );
       expect(noPlan.slippageDays).toBeNull();
+      // No planned date to be early or late against — neither counted
+      expect(noPlan.onTime).toBeNull();
     });
 
     test("reports zero slippage for a task completed on its scheduled date, whatever the time of day", async () => {
@@ -144,11 +150,14 @@ describe("Insights", () => {
           (t) => t.taskName === name,
         );
         expect(task.slippageDays).toBe(0);
+        expect(task.onTime).toBe(true);
       }
       expect(res.body.oneTimeTasks.avgSlippageDays).toBe(0);
+      expect(res.body.oneTimeTasks.onTimeCount).toBe(3);
+      expect(res.body.oneTimeTasks.lateCount).toBe(0);
     });
 
-    test("counts slippage in whole days across a boundary and stays negative when done early", async () => {
+    test("counts slippage in whole days across a boundary and keeps an early finish out of the average", async () => {
       await seedArchive([
         // 07-07T00:30 is 1 calendar day past 07-06, not 0 as a raw-ms round would give
         { type: "task_completed", taskId: "t1", taskName: "Just past midnight", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-07T00:30:00Z" },
@@ -160,11 +169,18 @@ describe("Insights", () => {
         (t) => t.taskName === "Just past midnight",
       );
       expect(late.slippageDays).toBe(1);
+      expect(late.onTime).toBe(false);
       const early = res.body.oneTimeTasks.recent.find(
         (t) => t.taskName === "Done early",
       );
+      // The per-task figure keeps the "2 days early" detail...
       expect(early.slippageDays).toBe(-2);
-      expect(res.body.oneTimeTasks.avgSlippageDays).toBe(-0.5);
+      expect(early.onTime).toBe(true);
+      // ...but early counts as 0 slip in the average, so it can't cancel out
+      // the late task and report the pair as ahead of schedule.
+      expect(res.body.oneTimeTasks.avgSlippageDays).toBe(0.5);
+      expect(res.body.oneTimeTasks.onTimeCount).toBe(1);
+      expect(res.body.oneTimeTasks.lateCount).toBe(1);
     });
 
     test("counts reschedules and pushedLater per task, most-rescheduled first", async () => {
@@ -327,6 +343,159 @@ describe("Insights", () => {
       process.env.ANTHROPIC_API_KEY = "test-dummy-key";
       const res = await request(app).post("/insights/generate").expect(404);
       expect(res.body.error).toBeDefined();
+    });
+  });
+
+  describe("GET /insights/stats/latest — nightly snapshot (no AI)", () => {
+    const {
+      refreshStatsSnapshot,
+    } = require("../src/services/insightsService");
+
+    // 2026-07-06 is a Monday, so 07-07 = Tue, 07-08 = Wed
+    const streakEvents = [
+      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-06", completed: false },
+      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-07", completed: true },
+      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-08", completed: true },
+    ];
+
+    test("returns 404 before the cron has ever written one", async () => {
+      const res = await request(app).get("/insights/stats/latest").expect(404);
+      expect(res.body.error).toBeDefined();
+    });
+
+    test("stores streaks without any Anthropic key configured", async () => {
+      const savedKey = process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+      try {
+        await seedArchive(streakEvents);
+        await refreshStatsSnapshot();
+
+        const res = await request(app).get("/insights/stats/latest").expect(200);
+        expect(res.body.computedAt).toBeDefined();
+        expect(res.body.periodDays).toBe(28);
+        expect(res.body.eventCount).toBe(3);
+        expect(res.body.habits).toHaveLength(1);
+        expect(res.body.habits[0].currentStreak).toBe(2);
+        expect(res.body.habits[0].completionRate).toBe(67);
+      } finally {
+        if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = savedKey;
+      }
+    });
+
+    test("matches what the live stats endpoint computes", async () => {
+      await seedArchive(streakEvents);
+      await refreshStatsSnapshot();
+
+      const live = await request(app).get("/insights/stats").expect(200);
+      const snapshot = await request(app)
+        .get("/insights/stats/latest")
+        .expect(200);
+
+      const { computedAt, ...stored } = snapshot.body;
+      expect(computedAt).toBeDefined();
+      expect(stored).toEqual(live.body);
+    });
+
+    test("a later refresh overwrites the snapshot rather than stacking", async () => {
+      await seedArchive(streakEvents);
+      await refreshStatsSnapshot();
+
+      // The habit is missed the next day — the streak must drop, not persist
+      await seedArchive([
+        { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-13", completed: false },
+      ]);
+      await refreshStatsSnapshot();
+
+      const db = await getDatabase();
+      expect(await db.collection("InsightStats-Test").countDocuments()).toBe(1);
+
+      const res = await request(app).get("/insights/stats/latest").expect(200);
+      expect(res.body.eventCount).toBe(4);
+      expect(res.body.habits[0].currentStreak).toBe(0);
+    });
+
+    test("records an empty archive instead of leaving stale numbers behind", async () => {
+      await seedArchive(streakEvents);
+      await refreshStatsSnapshot();
+
+      const db = await getDatabase();
+      await db.collection("TaskArchive-Test").deleteMany({});
+      await refreshStatsSnapshot();
+
+      const res = await request(app).get("/insights/stats/latest").expect(200);
+      expect(res.body.eventCount).toBe(0);
+      expect(res.body.habits).toEqual([]);
+    });
+  });
+
+  describe("isInsightDue — weekly cadence (Fridays)", () => {
+    const {
+      isInsightDue,
+      INSIGHT_DAY_OF_WEEK,
+    } = require("../src/services/insightsService");
+    // 2026-07-24 is a Friday, so 07-23 = Thu and 07-25 = Sat
+    const FRIDAY = new Date("2026-07-24T00:00:00Z");
+
+    test("the report day is Friday", () => {
+      expect(INSIGHT_DAY_OF_WEEK).toBe(5);
+      expect(FRIDAY.getUTCDay()).toBe(5);
+    });
+
+    test("is due on a Friday with no report yet", async () => {
+      await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
+    });
+
+    test("is not due on any other day of the week", async () => {
+      for (let offset = 1; offset <= 6; offset++) {
+        const day = new Date(FRIDAY.getTime() + offset * 86400000);
+        await expect(isInsightDue(day)).resolves.toBe(false);
+      }
+    });
+
+    test("is not due on a Friday a report was already generated on", async () => {
+      // A second cron run the same Friday must not spend another API call
+      await seedInsight({
+        generatedAt: new Date("2026-07-24T00:05:00Z"),
+        report: {},
+      });
+      await expect(
+        isInsightDue(new Date("2026-07-24T23:30:00Z")),
+      ).resolves.toBe(false);
+    });
+
+    test("is due again on the next Friday", async () => {
+      await seedInsight({
+        generatedAt: new Date("2026-07-17T00:05:00Z"),
+        report: {},
+      });
+      await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
+    });
+
+    test("an off-day manual report does not consume the Friday run", async () => {
+      // POST /insights/generate on Wednesday — Friday's analysis still runs
+      await seedInsight({
+        generatedAt: new Date("2026-07-22T15:00:00Z"),
+        report: {},
+      });
+      await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
+    });
+
+    test("measures against the newest report, ignoring older ones", async () => {
+      await seedInsight({
+        generatedAt: new Date("2026-06-26T00:05:00Z"),
+        report: {},
+      });
+      await seedInsight({
+        generatedAt: new Date("2026-07-24T00:05:00Z"),
+        report: {},
+      });
+      await expect(isInsightDue(FRIDAY)).resolves.toBe(false);
+    });
+
+    test("is due when the stored report has no generatedAt", async () => {
+      await seedInsight({ report: {} });
+      await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
     });
   });
 

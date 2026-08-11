@@ -14,6 +14,7 @@ const testCollections = [
   "Calls-Test",
   "TaskArchive-Test",
   "Insights-Test",
+  "InsightStats-Test",
 ];
 
 (async () => {

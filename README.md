@@ -13,9 +13,10 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering, a done/undone barrier inside each project and dated steps ranked above undated ones; giving a task a date mirrors it into the todo under the project's own header (created via `POST /headers` with a `projectId`), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
 - **Server-owned header ordering** — headers linked to a project (`projectId`) are kept in the projects' priority order as one contiguous block, re-applied atomically on header create, project move/rename/delete and nightly by the cron; clients never reorder them
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
-- **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, and generates the daily AI report (all in UTC)
+- **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, refreshes the stats snapshot, and (once a week, on Friday) generates the AI report (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
-- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Anthropic API (`claude-sonnet-4-6`) and stored in the `Insights` collection
+- **Nightly stats snapshot** — cron step 9 recomputes habit streaks, completion rates, on-time counts, reschedules and call results from the archive **every night with no AI involved** (no API key required, not affected by `skipInsights`) and stores them in `InsightStats`, readable at `GET /insights/stats/latest`. Streaks stay current daily; only the coaching narrative is weekly
+- **AI insights** — weekly coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Anthropic API (`claude-sonnet-4-6`) and stored in the `Insights` collection. The cron only calls the API on **Fridays** (UTC), once per Friday; `POST /insights/generate` bypasses that gate. Tasks finished on or before their planned date count as on time, never as slippage
 - **Swagger UI** — interactive API docs served at `/api-docs`
 - **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
 - **CORS enabled** — accepts requests from any origin
@@ -40,7 +41,7 @@ TaskAtHandBE/
 │   │   ├── lifeEventController.js
 │   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (steps 0–8 + AI report)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–9 + weekly AI report)
 │   ├── models/
 │   │   ├── Header.js
 │   │   ├── Task.js             # ECD validation lives here
@@ -51,9 +52,10 @@ TaskAtHandBE/
 │   │   ├── Goal.js             # Habit backlogs built one step at a time
 │   │   ├── Project.js          # Long-term projects with ordered task lists
 │   │   ├── Archive.js          # TaskArchive event log
-│   │   └── Insight.js          # Stored AI reports
+│   │   ├── Insight.js          # Stored AI reports (weekly)
+│   │   └── InsightStats.js     # Nightly stats snapshot: streaks, rates (no AI)
 │   ├── services/
-│   │   └── insightsService.js  # Stats computation + Anthropic API call
+│   │   └── insightsService.js  # Stats computation + snapshot + Anthropic API call
 │   ├── middleware/
 │   └── routes/
 │       ├── headerRoutes.js
@@ -116,7 +118,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Goals, Projects, TaskArchive, Insights) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Goals, Projects, TaskArchive, Insights, InsightStats) |
 | `ANTHROPIC_API_KEY` | —       | Anthropic API key for AI insight generation (optional; insights are skipped without it) |
 
 ## API Endpoints
@@ -216,6 +218,7 @@ Server listens on **port 3002** by default.
 | ------ | -------------------- | ------------------------------------------------------------------ |
 | `GET`  | `/archive`           | Raw task-history events (`?days=28&type=habit_result` optional)    |
 | `GET`  | `/insights/stats`    | Exact computed stats: habit rates, streaks, slippage, reschedules  |
+| `GET`  | `/insights/stats/latest` | The nightly cron's stored stats snapshot (same shape + `computedAt`) |
 | `GET`  | `/insights/latest`   | Most recent AI insight report                                      |
 | `GET`  | `/insights/history`  | Recent AI reports, newest first (`?limit=14`)                      |
 | `POST` | `/insights/generate` | Generate a fresh AI report now (`{days}` optional, default 28)     |
@@ -269,12 +272,12 @@ npm run cleartest
 | `projects.test.js`       | Projects CRUD, task validation, dated-first/done-last task sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
-| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints |
+| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot and the Friday report gate) |
 | `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |
-| `insights.test.js`       | Stats computation (incl. deletions) and the four `/insights` endpoints |
+| `insights.test.js`       | Stats computation (incl. deletions, on-time vs late), the weekly Friday report gate, and the four `/insights` endpoints |
 | `done-at.test.js`        | `doneAt` lifecycle (set on done, cleared on undo/cron reset) |
 | `system.test.js`         | `GET /` and `GET /health` endpoints                        |
 
@@ -285,4 +288,4 @@ npm run cleartest
 - Priority values are 0-based and always kept contiguous by the model layer
 - Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
 - Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events — a postpone (one-time date pushed later) can carry an optional `reason`, and the AI treats a reason-less postpone as procrastination but a valid reason as a legitimate deferral. Manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
-- Insight generation runs at the end of each cron run when `ANTHROPIC_API_KEY` is set (skipped in tests); archive writes never throw, so they can't break task operations
+- Insight generation runs at the end of a cron run when `ANTHROPIC_API_KEY` is set (skipped in tests) — but only on **Fridays** (UTC) and only once per Friday; every other run reports `insightGenerated: false` with `insightSkipped: "not-due"`. Archive writes never throw, so they can't break task operations

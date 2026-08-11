@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getStats,
+  getStatsSnapshot,
   getLatest,
   getHistory,
   generate,
@@ -25,6 +26,23 @@ const {
  *         description: Habit rates, streaks, task slippage, reschedule counts
  */
 router.get("/stats", getStats);
+
+/**
+ * @openapi
+ * /insights/stats/latest:
+ *   get:
+ *     tags: [Insights]
+ *     summary: The cron's nightly stats snapshot (no AI)
+ *     description: >
+ *       Same shape as /insights/stats plus `computedAt`, refreshed by every
+ *       nightly cron run so streaks stay current between weekly AI reports.
+ *     responses:
+ *       200:
+ *         description: Stored habit rates, streaks, task slippage, reschedule counts
+ *       404:
+ *         description: The cron has not written a snapshot yet
+ */
+router.get("/stats/latest", getStatsSnapshot);
 
 /**
  * @openapi

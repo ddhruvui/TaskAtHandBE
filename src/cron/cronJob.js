@@ -663,6 +663,36 @@ async function step8ResetCalls(callsCol, today) {
   return result.modifiedCount;
 }
 
+/**
+ * Step 9 — Refresh the exact stats snapshot (streaks, completion rates,
+ * on-time counts, reschedules, calls) from the archive.
+ *
+ * Runs **every night and needs no AI**: it is arithmetic over `TaskArchive`,
+ * so it works without an `ANTHROPIC_API_KEY` and regardless of whether the
+ * weekly report fires. That is the point — the AI narrative is weekly, but a
+ * streak must be right the morning after the day it was earned.
+ *
+ * Runs after step 8 so the day's `call_result` events are already archived,
+ * and before the report so Friday's prompt and the snapshot agree.
+ *
+ * A failed snapshot never fails the cron run (same policy as the archive and
+ * the AI report).
+ * @returns {Promise<boolean>} Whether the snapshot was written
+ */
+async function step9RefreshStatsSnapshot() {
+  try {
+    const { refreshStatsSnapshot } = require("../services/insightsService");
+    // Deliberately not the run's `today` override: archive events are stamped
+    // with their real insertion time (including the ones step 0 just wrote
+    // moments ago), so the window has to end at the real now to include them.
+    await refreshStatsSnapshot();
+    return true;
+  } catch (error) {
+    console.error("[Cron] Stats snapshot refresh failed:", error.message);
+    return false;
+  }
+}
+
 // ─── Main runner ──────────────────────────────────────────────────────────────
 
 /** Persisted result of the most recent cron run (in-memory). */
@@ -672,7 +702,7 @@ let lastRun = null;
  * Run the full cron sequence.
  * @param {Date} [now]  Override for testing (defaults to current local midnight)
  * @param {Object} [options]
- * @param {boolean} [options.skipInsights]  Skip the AI insight report (used by e2e runs)
+ * @param {boolean} [options.skipInsights]  Skip the weekly AI insight report (used by e2e runs)
  * @returns {Promise<Object>} Stats about what the run did
  */
 async function runCron(now, { skipInsights = false } = {}) {
@@ -706,6 +736,7 @@ async function runCron(now, { skipInsights = false } = {}) {
   );
   const headersReordered = await step7ReorderPriorities(tasksCol, today);
   const callsReset = await step8ResetCalls(callsCol, today);
+  const statsRefreshed = await step9RefreshStatsSnapshot();
 
   const stats = {
     ranAt: today.toISOString(),
@@ -720,19 +751,31 @@ async function runCron(now, { skipInsights = false } = {}) {
     lifeEventTasksCreated,
     outcomesArchived,
     callsReset,
+    statsRefreshed,
   };
 
-  // Generate the daily AI insight report (skipped in tests / without an API key
-  // / when the caller opts out via skipInsights)
+  // Generate the weekly AI insight report (skipped in tests / without an API
+  // key / when the caller opts out via skipInsights). The cron itself runs
+  // nightly, but the analysis costs an Anthropic call, so it only fires on
+  // Fridays (UTC), once — `insightSkipped: "not-due"` says the run reached
+  // this step and deliberately passed on it.
   if (
     !skipInsights &&
     process.env.NODE_ENV !== "test" &&
     process.env.ANTHROPIC_API_KEY
   ) {
     try {
-      const { generateInsights } = require("../services/insightsService");
-      const insight = await generateInsights();
-      stats.insightGenerated = Boolean(insight);
+      const {
+        generateInsights,
+        isInsightDue,
+      } = require("../services/insightsService");
+      if (await isInsightDue(today)) {
+        const insight = await generateInsights();
+        stats.insightGenerated = Boolean(insight);
+      } else {
+        stats.insightGenerated = false;
+        stats.insightSkipped = "not-due";
+      }
     } catch (error) {
       console.error("[Cron] Insight generation failed:", error.message);
       stats.insightGenerated = false;

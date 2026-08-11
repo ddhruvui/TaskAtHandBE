@@ -528,8 +528,15 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
-| skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ skipInsights: true }` → `generateInsights` not called, no `insightGenerated` key |
-| without skipInsights the insight step still runs        | Same env, empty body → `generateInsights` called once, `insightGenerated: true`                 |
+| every run refreshes the snapshot and reports statsRefreshed | No `ANTHROPIC_API_KEY` set → `statsRefreshed: true` and `GET /insights/stats/latest` returns a snapshot with `computedAt` and `periodDays: 28` |
+| streaks are updated on a non-Friday run, with no report generated | Two archived habit hits + a Thursday run → no `insightGenerated` key, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
+| skipInsights does not suppress the snapshot             | `{ skipInsights: true }` → `statsRefreshed: true` and the snapshot endpoint still answers 200 (the flag only avoids the paid API call) |
+| skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ date: Fri 2026-07-24, skipInsights: true }` → `generateInsights` not called, no `insightGenerated`/`insightSkipped` keys |
+| without skipInsights the Friday insight step still runs | Same env, Friday run date, no stored report → `generateInsights` called once, `insightGenerated: true`, no `insightSkipped` |
+| skips the report on a non-Friday run                    | Thursday 2026-07-23 → `generateInsights` not called, `insightGenerated: false`, `insightSkipped: "not-due"` |
+| skips a second run on a Friday that already reported    | Report seeded on the Friday itself → `generateInsights` not called, `insightSkipped: "not-due"` (no second API call) |
+| runs the report on the Friday after the last one        | Report seeded 7 days before the Friday run date → `generateInsights` called once, `insightGenerated: true` |
+| the rest of the cron still runs on a day the report is skipped | Thursday run → `insightGenerated: false` but `ranAt` and the task/header counters are all present |
 
 ---
 
@@ -599,7 +606,7 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 
 ## tests/insights.test.js
 
-Tests the stats engine (via `GET /insights/stats` with seeded archive events) and the insight report endpoints.
+Tests the stats engine (via `GET /insights/stats` with seeded archive events), the nightly AI-free stats snapshot, the weekly Friday report gate, and the insight report endpoints.
 
 ### GET /insights/stats — computed stats
 
@@ -609,9 +616,9 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | aggregates recurring task_result events into scheduled/completed counts | 2 scheduled, 1 completed → completionRate 50                              |
 | aggregates call_result events into per-person rates and miss streaks | 3 periods (1 done, 2 recent misses) → rate 33, `currentMissStreak: 2`, sorted `recentResults`; calls excluded from `byHeader` |
 | returns an empty calls array when there are no call_result events | Habit-only archive → `calls: []`                                              |
-| computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`; null `plannedFor` → null slippage, excluded from avg |
-| reports zero slippage for a task completed on its scheduled date, whatever the time of day | Planned Jul 6, done Jul 6 at 07:15 / 12:30 / 23:59 → `slippageDays: 0` for all three and `avgSlippageDays: 0` (part-days never round up to a day of slip) |
-| counts slippage in whole days across a boundary and stays negative when done early | Planned Jul 6, done Jul 7 at 00:30 → `1`; done Jul 4 at 18:00 → `-2`; `avgSlippageDays: -0.5` |
+| computes one-time task slippage from plannedFor vs doneAt         | Planned Jul 6, done Jul 8 → `slippageDays: 2`, `onTime: false`, `lateCount: 1`; null `plannedFor` → null slippage and null `onTime`, excluded from the rollups |
+| reports zero slippage for a task completed on its scheduled date, whatever the time of day | Planned Jul 6, done Jul 6 at 07:15 / 12:30 / 23:59 → `slippageDays: 0` and `onTime: true` for all three, `avgSlippageDays: 0`, `onTimeCount: 3` (part-days never round up to a day of slip) |
+| counts slippage in whole days across a boundary and keeps an early finish out of the average | Planned Jul 6, done Jul 7 at 00:30 → `1` (`onTime: false`); done Jul 4 at 18:00 → `-2` (`onTime: true`); early counts as 0 slip, so `avgSlippageDays: 0.5` with `onTimeCount: 1`, `lateCount: 1` |
 | counts reschedules and pushedLater per task, most-rescheduled first | Two tasks (2 vs 1 reschedules) → sorted by total descending, pushedLater counted |
 | splits pushed-later postpones by reason and collects stated reasons | Per task: `pushedLaterWithReason`/`pushedLaterNoReason` split, `reasons[]` holds only the stated postpone reasons |
 | rolls up completed/missed/reschedules per header                  | `byHeader` bucket math across event types (incl. `deleted` field)                |
@@ -640,6 +647,32 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events) an
 | ------------------------------------------------------------ | ------------------------------------------------------ |
 | returns 503 when ANTHROPIC_API_KEY is not configured        | Key removed from env → 503 with explanatory error      |
 | returns 404 when the archive is empty (no API call is made) | Dummy key + empty archive → 404 before any API request |
+
+### GET /insights/stats/latest — nightly snapshot (no AI)
+
+| Test                                                        | What it checks                                                                 |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| returns 404 before the cron has ever written one            | Empty `InsightStats` collection → 404 `{ error }`                               |
+| stores streaks without any Anthropic key configured         | Key deleted from env + `refreshStatsSnapshot()` → 200 with `computedAt`, `eventCount: 3`, `currentStreak: 2`, `completionRate: 67` |
+| matches what the live stats endpoint computes               | Snapshot body minus `computedAt` deep-equals `GET /insights/stats`               |
+| a later refresh overwrites the snapshot rather than stacking | Second refresh after a missed day → still 1 document, `eventCount: 4`, `currentStreak: 0` |
+| records an empty archive instead of leaving stale numbers behind | Archive wiped then refreshed → `eventCount: 0`, `habits: []`                |
+
+### isInsightDue — weekly cadence (Fridays)
+
+Unit tests on the cron's report gate (`src/services/insightsService.js`), seeded
+straight into `Insights-Test`. 2026-07-24 is a Friday.
+
+| Test                                                        | What it checks                                                        |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| the report day is Friday                                    | `INSIGHT_DAY_OF_WEEK === 5` and the fixture date really is a Friday     |
+| is due on a Friday with no report yet                       | Empty Insights collection + Friday → `true`                             |
+| is not due on any other day of the week                     | Sat–Thu (the six days after the Friday) → `false` for each              |
+| is not due on a Friday a report was already generated on    | Report at 00:05 that Friday, checked at 23:30 → `false` (one call/Friday) |
+| is due again on the next Friday                             | Report from the previous Friday → `true`                                |
+| an off-day manual report does not consume the Friday run    | Report generated the Wednesday before → Friday still `true`             |
+| measures against the newest report, ignoring older ones     | Reports 4 weeks back **and** today → `false` (newest wins)              |
+| is due when the stored report has no generatedAt            | Malformed stored report → `true` rather than blocking forever           |
 
 ### Insight model
 
