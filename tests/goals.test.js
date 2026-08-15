@@ -2,6 +2,9 @@ const request = require("supertest");
 const app = require("../src/server");
 const { connectDB, getDatabase } = require("../src/config/db");
 
+/** The `days` every step defaults to when the client doesn't pick any. */
+const EVERY_DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 async function clearCollection() {
   const db = await getDatabase();
   await db.collection("Goals-Test").deleteMany({});
@@ -39,8 +42,8 @@ describe("Goals CRUD", () => {
       expect(res.body).toHaveProperty("_id");
       expect(res.body.name).toBe("Improve Health");
       expect(res.body.steps).toEqual([
-        { name: "Wake up at 6", status: "under_progress" },
-        { name: "Have 1 fruit a day", status: "pending" },
+        { name: "Wake up at 6", status: "under_progress", days: EVERY_DAY },
+        { name: "Have 1 fruit a day", status: "pending", days: EVERY_DAY },
       ]);
       expect(res.body).toHaveProperty("createdAt");
       expect(res.body).toHaveProperty("updatedAt");
@@ -116,8 +119,8 @@ describe("Goals CRUD", () => {
         })
         .expect(201);
       expect(res.body.steps).toEqual([
-        { name: "Wake up at 6", status: "under_progress" },
-        { name: "Have 1 fruit a day", status: "under_progress" },
+        { name: "Wake up at 6", status: "under_progress", days: EVERY_DAY },
+        { name: "Have 1 fruit a day", status: "under_progress", days: EVERY_DAY },
       ]);
       await request(app).delete(`/goals/${res.body._id}`).expect(200);
     });
@@ -128,7 +131,60 @@ describe("Goals CRUD", () => {
         .send({ name: "  Trimmed  ", steps: [{ name: "  Step A  " }] })
         .expect(201);
       expect(res.body.name).toBe("Trimmed");
-      expect(res.body.steps).toEqual([{ name: "Step A", status: "pending" }]);
+      expect(res.body.steps).toEqual([
+        { name: "Step A", status: "pending", days: EVERY_DAY },
+      ]);
+    });
+
+    test("keeps the days a step was created with", async () => {
+      const res = await request(app)
+        .post("/goals")
+        .send({
+          name: "Weekday Habits",
+          steps: [
+            {
+              name: "Gym",
+              status: "under_progress",
+              days: ["Mon", "Wed", "Fri"],
+            },
+          ],
+        })
+        .expect(201);
+      expect(res.body.steps[0].days).toEqual(["Mon", "Wed", "Fri"]);
+      await request(app).delete(`/goals/${res.body._id}`).expect(200);
+    });
+
+    test("sorts days into week order and drops duplicates", async () => {
+      const res = await request(app)
+        .post("/goals")
+        .send({
+          name: "Messy Days",
+          steps: [{ name: "Gym", days: ["Fri", "Mon", "Fri", "Sun"] }],
+        })
+        .expect(201);
+      expect(res.body.steps[0].days).toEqual(["Sun", "Mon", "Fri"]);
+      await request(app).delete(`/goals/${res.body._id}`).expect(200);
+    });
+
+    test("rejects an empty days array", async () => {
+      await request(app)
+        .post("/goals")
+        .send({ name: "No days", steps: [{ name: "Gym", days: [] }] })
+        .expect(400);
+    });
+
+    test("rejects days that are not weekday abbreviations", async () => {
+      await request(app)
+        .post("/goals")
+        .send({ name: "Bad days", steps: [{ name: "Gym", days: ["Monday"] }] })
+        .expect(400);
+    });
+
+    test("rejects days that are not an array", async () => {
+      await request(app)
+        .post("/goals")
+        .send({ name: "Bad days", steps: [{ name: "Gym", days: "Mon" }] })
+        .expect(400);
     });
   });
 
@@ -156,8 +212,8 @@ describe("Goals CRUD", () => {
         .expect(200);
       expect(res.body.name).toBe("Get Healthy");
       expect(res.body.steps).toEqual([
-        { name: "Wake up at 6", status: "under_progress" },
-        { name: "Have 1 fruit a day", status: "pending" },
+        { name: "Wake up at 6", status: "under_progress", days: EVERY_DAY },
+        { name: "Have 1 fruit a day", status: "pending", days: EVERY_DAY },
       ]);
     });
 
@@ -174,10 +230,69 @@ describe("Goals CRUD", () => {
         .expect(200);
       expect(res.body.name).toBe("Get Healthy");
       expect(res.body.steps).toEqual([
-        { name: "Wake up at 6", status: "pending" },
-        { name: "Have 1 fruit a day", status: "under_progress" },
-        { name: "Exercise 10 min", status: "pending" },
+        { name: "Wake up at 6", status: "pending", days: EVERY_DAY },
+        {
+          name: "Have 1 fruit a day",
+          status: "under_progress",
+          days: EVERY_DAY,
+        },
+        { name: "Exercise 10 min", status: "pending", days: EVERY_DAY },
       ]);
+    });
+
+    test("changes the days of a started step", async () => {
+      const res = await request(app)
+        .put(`/goals/${goalId}`)
+        .send({
+          steps: [
+            {
+              name: "Have 1 fruit a day",
+              status: "under_progress",
+              days: ["Sat", "Sun"],
+            },
+          ],
+        })
+        .expect(200);
+      expect(res.body.steps).toEqual([
+        {
+          name: "Have 1 fruit a day",
+          status: "under_progress",
+          days: ["Sun", "Sat"],
+        },
+      ]);
+    });
+
+    test("backfills the whole week for steps stored before days existed", async () => {
+      // Simulates a goal written by an older client: steps with no `days` at
+      // all. The next write normalizes them to their previous seven-day
+      // meaning rather than rejecting them.
+      const db = await getDatabase();
+      const { ObjectId } = require("mongodb");
+      await db
+        .collection("Goals-Test")
+        .updateOne(
+          { _id: new ObjectId(goalId) },
+          { $set: { steps: [{ name: "Legacy step", status: "pending" }] } },
+        );
+
+      const before = await request(app).get("/goals").expect(200);
+      const stored = before.body.find((g) => g._id === goalId);
+      expect(stored.steps[0].days).toBeUndefined();
+
+      const res = await request(app)
+        .put(`/goals/${goalId}`)
+        .send({ steps: stored.steps })
+        .expect(200);
+      expect(res.body.steps).toEqual([
+        { name: "Legacy step", status: "pending", days: EVERY_DAY },
+      ]);
+    });
+
+    test("rejects an empty days array", async () => {
+      await request(app)
+        .put(`/goals/${goalId}`)
+        .send({ steps: [{ name: "Wake up at 6", days: [] }] })
+        .expect(400);
     });
 
     test("allows clearing steps with an empty array", async () => {

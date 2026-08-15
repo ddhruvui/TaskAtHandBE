@@ -139,6 +139,17 @@ const options = {
                 'pending = backlog/paused, under_progress = started — its daily task lives in the "One Step At A Time" todo header and is kept for life. Legacy values "active" and "achieved" are normalized to "under_progress".',
               example: "pending",
             },
+            days: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+              },
+              description:
+                'Weekdays the habit is expected on. Mirrored onto the linked task\'s day_of_week ECD when the step is started, so the nightly archive only records a result — and the streak only counts — on these days. Deduped and sorted into week order (Sun → Sat); omitted means the whole week.',
+              default: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+              example: ["Mon", "Wed", "Fri"],
+            },
           },
         },
         Goal: {
@@ -150,8 +161,16 @@ const options = {
               type: "array",
               items: { $ref: "#/components/schemas/GoalStep" },
               example: [
-                { name: "Wake up at 6", status: "under_progress" },
-                { name: "Have 1 fruit a day", status: "pending" },
+                {
+                  name: "Wake up at 6",
+                  status: "under_progress",
+                  days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+                },
+                {
+                  name: "Have 1 fruit a day",
+                  status: "pending",
+                  days: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+                },
               ],
             },
             priority: {

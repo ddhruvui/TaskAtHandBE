@@ -32,7 +32,7 @@ router.get("/", getAllGoals);
  *   post:
  *     tags: [Goals]
  *     summary: Create a new goal
- *     description: A goal is a long-term aim (e.g. "Improve Health") with an ordered list of small steps/habits to build one at a time. A step is either pending (backlog/paused) or under_progress (started — its daily task lives in the "One Step At A Time" todo header and is kept for life). Steps default to an empty list. Priority is auto-assigned (appended at end).
+ *     description: A goal is a long-term aim (e.g. "Improve Health") with an ordered list of small steps/habits to build one at a time. A step is either pending (backlog/paused) or under_progress (started — its daily task lives in the "One Step At A Time" todo header and is kept for life) and carries the weekdays it is expected on (`days`, defaulting to the whole week). Steps default to an empty list. Priority is auto-assigned (appended at end).
  *     requestBody:
  *       required: true
  *       content:
@@ -48,7 +48,7 @@ router.get("/", getAllGoals);
  *                 type: array
  *                 items:
  *                   $ref: '#/components/schemas/GoalStep'
- *                 example: [{ "name": "Wake up at 6", "status": "under_progress" }, { "name": "Have 1 fruit a day", "status": "pending" }]
+ *                 example: [{ "name": "Wake up at 6", "status": "under_progress", "days": ["Mon", "Tue", "Wed", "Thu", "Fri"] }, { "name": "Have 1 fruit a day", "status": "pending" }]
  *     responses:
  *       201:
  *         description: Created goal
@@ -67,7 +67,7 @@ router.post("/", createGoal);
  *   put:
  *     tags: [Goals]
  *     summary: Update a goal
- *     description: Steps are replaced wholesale — send the full list to add, rename, reorder, remove or change the status of steps. Changing priority moves the goal and shifts the others to keep 0..n-1 contiguous.
+ *     description: Steps are replaced wholesale — send the full list to add, rename, reorder, remove or change the status or days of steps. Changing priority moves the goal and shifts the others to keep 0..n-1 contiguous.
  *     parameters:
  *       - in: path
  *         name: id

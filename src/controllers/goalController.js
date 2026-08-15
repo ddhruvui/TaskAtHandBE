@@ -5,16 +5,52 @@ const STEP_STATUSES = ["pending", "under_progress"];
 // Pre-rename statuses; normalized so goals saved earlier stay editable
 const LEGACY_STATUS_ALIASES = { achieved: "under_progress", active: "under_progress" };
 
+// Canonical week order — stored `days` are always sorted into it, so the
+// client never has to re-sort and the value can be compared verbatim against
+// the linked task's `day_of_week` ECD.
+const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Validate and normalize a step's `days` — the weekdays its daily habit is
+ * expected on, mirrored onto the linked task's `day_of_week` ECD when the
+ * step is started. Because the nightly archive only records a `habit_result`
+ * on days the ECD covers, this list is exactly what the streak is measured
+ * over: a habit set to Mon/Wed/Fri keeps its streak across an untouched
+ * Tuesday.
+ *
+ * Absent (`undefined`) means every day, which is what every step stored
+ * before this field existed meant — so legacy goals keep their current
+ * seven-day behaviour on their next write.
+ */
+function validateDays(days) {
+  if (days === undefined) return [...DOW_NAMES];
+  if (!Array.isArray(days) || days.length === 0) {
+    throw new Error(
+      `Step days must be a non-empty array of: ${DOW_NAMES.join(", ")}`,
+    );
+  }
+  for (const day of days) {
+    if (!DOW_NAMES.includes(day)) {
+      throw new Error(
+        `Step days must be a non-empty array of: ${DOW_NAMES.join(", ")}`,
+      );
+    }
+  }
+  // Dedupe and sort into week order (Sun → Sat)
+  return DOW_NAMES.filter((day) => days.includes(day));
+}
+
 /**
  * Validate and normalize a goal step list.
- * Steps are { name, status } objects; status defaults to "pending".
- * A step is either pending (backlog/paused) or under_progress (its daily
- * task lives in the "One Step At A Time" todo header, kept for life).
+ * Steps are { name, status, days } objects; status defaults to "pending" and
+ * days to the whole week. A step is either pending (backlog/paused) or
+ * under_progress (its daily task lives in the "One Step At A Time" todo
+ * header, kept for life, scheduled on `days`).
  * Returns the normalized steps or throws a validation Error.
  */
 function validateSteps(steps) {
   if (!Array.isArray(steps)) {
-    throw new Error("steps must be an array of { name, status } objects");
+    throw new Error("steps must be an array of { name, status, days } objects");
   }
   return steps.map((step) => {
     if (typeof step !== "object" || step === null || Array.isArray(step)) {
@@ -30,7 +66,7 @@ function validateSteps(steps) {
         `Step status must be one of: ${STEP_STATUSES.join(", ")}`,
       );
     }
-    return { name: step.name.trim(), status };
+    return { name: step.name.trim(), status, days: validateDays(step.days) };
   });
 }
 

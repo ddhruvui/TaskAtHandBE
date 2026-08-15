@@ -160,12 +160,12 @@ Calls CRUD — people the user must call biweekly or monthly (completely indepen
 
 ## tests/goals.test.js
 
-Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side).
+Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side). Each step also carries the weekdays it runs on (`days`), which clients mirror onto its task's `day_of_week` ECD and which the streak is therefore measured over.
 
 | Test                                                  | What it checks                                                                |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
 | returns empty array when no goals exist               | `GET /goals` returns `[]` on a clean DB                                        |
-| creates a goal with a step list                       | `POST /goals` returns 201 with `_id`, `name`, `steps`, timestamps; omitted step status defaults to `pending`; first goal gets `priority: 0` |
+| creates a goal with a step list                       | `POST /goals` returns 201 with `_id`, `name`, `steps`, timestamps; omitted step status defaults to `pending` and `days` to all seven; first goal gets `priority: 0` |
 | creates a goal without steps (defaults to empty list) | `POST /goals { name }` → 201 with `steps: []` and the next `priority` (appended at end) |
 | rejects missing name                                  | `POST /goals { steps }` → 400                                                  |
 | rejects empty name                                    | `{ name: "  " }` → 400                                                         |
@@ -175,9 +175,17 @@ Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/
 | rejects steps with an invalid status                  | `{ status: "done" }` → 400 (must be `pending`/`under_progress`)                |
 | normalizes legacy statuses (achieved, active) to under_progress | `{ status: "achieved" }` and `{ status: "active" }` → 201 with `status: "under_progress"` (pre-rename data stays editable) |
 | trims whitespace from name and step names             | `"  Trimmed  "` → `"Trimmed"`; step names trimmed too                          |
+| keeps the days a step was created with                | `{ days: ["Mon", "Wed", "Fri"] }` survives the round trip untouched            |
+| sorts days into week order and drops duplicates       | `["Fri", "Mon", "Fri", "Sun"]` → `["Sun", "Mon", "Fri"]`                       |
+| rejects an empty days array                           | `{ days: [] }` → 400 (a habit must run on at least one day)                    |
+| rejects days that are not weekday abbreviations       | `{ days: ["Monday"] }` → 400                                                   |
+| rejects days that are not an array                    | `{ days: "Mon" }` → 400                                                        |
 | returns all goals sorted by priority ascending (creation order) | `GET /goals` is ordered by `priority`; names and priorities match creation order, with a deleted goal's gap closed |
 | updates goal name                                     | `PUT /goals/:id { name }` → 200, steps untouched                               |
 | updates goal steps (replace wholesale)                | `PUT /goals/:id { steps }` → 200, name untouched; status changes persist       |
+| changes the days of a started step                    | `PUT` with `days: ["Sat", "Sun"]` on an `under_progress` step → 200, stored in week order `["Sun", "Sat"]` |
+| backfills the whole week for steps stored before days existed | A step written straight to Mongo without `days` reads back without it; the next `PUT` normalizes it to all seven days |
+| rejects an empty days array (PUT)                     | `{ days: [] }` → 400                                                           |
 | allows clearing steps with an empty array             | `{ steps: [] }` → 200 with `steps: []` (unlike events)                         |
 | rejects steps with an invalid status (PUT)            | `{ status: "started" }` → 400                                                  |
 | rejects empty name (PUT)                              | `{ name: "" }` → 400                                                           |

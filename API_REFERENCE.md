@@ -163,10 +163,12 @@ once; cron step 8 clears the `done` checkmark at each period boundary (the
 
 ```typescript
 type GoalStepStatus = "pending" | "under_progress";
+type DayOfWeek = "Sun" | "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat";
 
 interface GoalStep {
   name: string; // Step/habit name (required), e.g. "Wake up at 6"
   status: GoalStepStatus; // Defaults to "pending"
+  days: DayOfWeek[]; // Weekdays the habit is expected on; defaults to all seven
 }
 
 interface Goal {
@@ -181,15 +183,23 @@ interface Goal {
 
 Goals are long-term aims broken into small steps/habits to build **one at a
 time**. A step is either `pending` (backlog/paused) or `under_progress`
-(started — a lifelong daily habit). The backend only stores the roadmap; the
+(started — a lifelong habit). The backend only stores the roadmap; the
 connection to the todo is maintained client-side: starting a step creates a
-daily recurring Task (`day_of_week`, all seven days) under a header named
-**"One Step At A Time"** (reused when one already exists, created otherwise,
-mirroring how events are scheduled), pausing a step removes that task, and
-deleting the task (or that header) from the todo flips the matching steps
-back to `pending`. Legacy status values `active` and `achieved` are accepted
-on write and normalized to `under_progress`. Deleting a goal never touches
-created headers or tasks.
+recurring Task (`day_of_week`, valued with the step's `days`) under a header
+named **"One Step At A Time"** (reused when one already exists, created
+otherwise, mirroring how events are scheduled), pausing a step removes that
+task, and deleting the task (or that header) from the todo flips the matching
+steps back to `pending`. Legacy status values `active` and `achieved` are
+accepted on write and normalized to `under_progress`. Deleting a goal never
+touches created headers or tasks.
+
+`days` is non-empty, deduped and sorted into week order (Sun → Sat) on write,
+and defaults to all seven days when omitted — the meaning of every step stored
+before the field existed. Because it becomes the task's `day_of_week` ECD, and
+cron step 0 only archives a `habit_result` on days that ECD covers, it is
+also what the habit's **streak is measured over**: a Mon/Wed/Fri habit keeps
+its streak across an untouched Tuesday. Changing a started step's `days`
+rewrites its task's ECD client-side in the same action.
 
 ---
 
@@ -964,8 +974,16 @@ existing list keeps the order it had under the old name-ascending sort.
     "_id": "...",
     "name": "Improve Health",
     "steps": [
-      { "name": "Wake up at 6", "status": "under_progress" },
-      { "name": "Have 1 fruit a day", "status": "pending" }
+      {
+        "name": "Wake up at 6",
+        "status": "under_progress",
+        "days": ["Mon", "Tue", "Wed", "Thu", "Fri"]
+      },
+      {
+        "name": "Have 1 fruit a day",
+        "status": "pending",
+        "days": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+      }
     ],
     "createdAt": "2026-07-11T00:00:00.000Z",
     "updatedAt": "2026-07-11T00:00:00.000Z"
@@ -985,7 +1003,11 @@ Creates a new goal.
 {
   "name": "Improve Health",
   "steps": [
-    { "name": "Wake up at 6", "status": "under_progress" },
+    {
+      "name": "Wake up at 6",
+      "status": "under_progress",
+      "days": ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    },
     { "name": "Have 1 fruit a day" }
   ]
 }
@@ -994,7 +1016,7 @@ Creates a new goal.
 | Field   | Required | Type       | Notes                                                                             |
 | ------- | -------- | ---------- | --------------------------------------------------------------------------------- |
 | `name`  | Yes      | string     | Non-empty; trimmed                                                                 |
-| `steps` | No       | GoalStep[] | Defaults to `[]`. Each step needs a non-empty `name` (trimmed); `status` optional (`pending`/`under_progress`, defaults to `pending`; legacy `active`/`achieved` normalized to `under_progress`) |
+| `steps` | No       | GoalStep[] | Defaults to `[]`. Each step needs a non-empty `name` (trimmed); `status` optional (`pending`/`under_progress`, defaults to `pending`; legacy `active`/`achieved` normalized to `under_progress`); `days` optional (non-empty array of `"Sun".."Sat"`, deduped and sorted into week order, defaults to all seven) |
 
 **Response `201`:** the created goal.
 
@@ -1004,6 +1026,10 @@ Creates a new goal.
 { "error": "Step status must be one of: pending, under_progress" }
 ```
 
+```json
+{ "error": "Step days must be a non-empty array of: Sun, Mon, Tue, Wed, Thu, Fri, Sat" }
+```
+
 ---
 
 ### `PUT /goals/:id`
@@ -1011,9 +1037,9 @@ Creates a new goal.
 Updates a goal's `name`, `steps` and/or `priority`. All fields are optional
 but must pass the same validation as `POST /goals` when present. `steps` is
 replaced wholesale — send the full list to add, rename, reorder, remove or
-change the status of steps (an empty array clears them). Changing `priority`
-moves the goal and shifts the others so priorities stay contiguous `0..n-1`,
-the same scheme headers and projects use.
+change the status or days of steps (an empty array clears them). Changing
+`priority` moves the goal and shifts the others so priorities stay contiguous
+`0..n-1`, the same scheme headers and projects use.
 
 **Response `200`:** the updated goal.
 **Error `400`:** priority is not a non-negative integer, or is outside

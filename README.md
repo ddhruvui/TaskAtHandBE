@@ -9,7 +9,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Life Events** — annually recurring dates (e.g. "Wife's birthday" on 7/3); every year on the day, the nightly cron adds a linked one-time task to the todo under an "Events" header (reused case-insensitively, created otherwise), and when the done task is cleaned up the event is marked done — never deleted — so it fires again next year
 - **Affirmations** — single short lines the user reads daily (e.g. "Thank you blessing"); completely independent of tasks and headers
 - **Calls** — people the user must call biweekly or monthly (e.g. "Grandma"); completely independent of tasks and headers, with the "called" checkmark auto-reset by the cron at each period boundary (the 15th and the last day of the month)
-- **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong daily habit); clients start one step at a time as a daily task under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side
+- **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong habit) with the weekdays it runs on (`days`, default all seven); clients start one step at a time as a recurring task on those days under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side. Because the nightly archive only records a result on scheduled days, the habit's streak counts only the days the step is set to
 - **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering, a done/undone barrier inside each project and dated steps ranked above undated ones; giving a task a date mirrors it into the todo under the project's own header (created via `POST /headers` with a `projectId`), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
 - **Server-owned header ordering** — headers linked to a project (`projectId`) are kept in the projects' priority order as one contiguous block, re-applied atomically on header create, project move/rename/delete and nightly by the cron; clients never reorder them
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
@@ -190,7 +190,7 @@ Server listens on **port 3002** by default.
 | Method   | Path         | Description                                                     |
 | -------- | ------------ | --------------------------------------------------------------- |
 | `GET`    | `/goals`     | List all goals (sorted by priority)                             |
-| `POST`   | `/goals`     | Create a goal (`{ name, steps?: [{ name, status? }] }`)         |
+| `POST`   | `/goals`     | Create a goal (`{ name, steps?: [{ name, status?, days? }] }`)  |
 | `PUT`    | `/goals/:id` | Update goal name, steps and/or priority (steps replaced wholesale) |
 | `DELETE` | `/goals/:id` | Delete a goal (created tasks remain)                            |
 
@@ -268,7 +268,7 @@ npm run cleartest
 | `lifeevents.test.js`     | Life Events CRUD, date validation, lastAddedYear baselining, priority moves |
 | `affirmations.test.js`   | Affirmations CRUD, validation, trimming, and sorting       |
 | `calls.test.js`          | Calls CRUD, validation, doneAt lifecycle, and sorting      |
-| `goals.test.js`          | Goals CRUD, step/status validation, trimming, and priority ordering |
+| `goals.test.js`          | Goals CRUD, step status/days validation, trimming, and priority ordering |
 | `projects.test.js`       | Projects CRUD, task validation, dated-first/done-last task sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |

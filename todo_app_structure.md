@@ -262,7 +262,13 @@ a project is backfilled, and a header pointing at a deleted project has its
 {
   "_id": "uuid",
   "name": "string",
-  "steps": [{ "name": "string", "status": "pending | under_progress" }],
+  "steps": [
+    {
+      "name": "string",
+      "status": "pending | under_progress",
+      "days": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    }
+  ],
   "createdAt": "ISO 8601 datetime",
   "updatedAt": "ISO 8601 datetime"
 }
@@ -273,24 +279,34 @@ a project is backfilled, and a header pointing at a deleted project has its
 - `name` must be a non-empty string (trimmed)
 - `steps` is an ordered array (may be empty; defaults to `[]` on create) of
   objects with a non-empty `name` (trimmed) and a `status` of `pending`
-  (backlog/paused) or `under_progress` (started — a lifelong daily habit);
+  (backlog/paused) or `under_progress` (started — a lifelong habit);
   defaults to `pending`. Legacy values `active` and `achieved` are accepted
   and normalized to `under_progress`
+- each step also carries `days`, a non-empty array of `"Sun".."Sat"` naming
+  the weekdays the habit is expected on. It is deduped and sorted into week
+  order (Sun → Sat) on write, and defaults to all seven days when omitted —
+  which is what every step stored before the field existed meant, so legacy
+  steps keep their previous behaviour on their next write. Clients mirror it
+  onto the started step's task as the `day_of_week` ECD, which is what makes
+  the **streak day-aware**: cron step 0 only archives a `habit_result` on days
+  the ECD covers, so a Mon/Wed/Fri habit keeps its streak across an untouched
+  Tuesday
 - `steps` is replaced wholesale on update — clients send the full list to
-  add, rename, reorder, remove or change the status of steps
+  add, rename, reorder, remove or change the status or days of steps
 - `priority` orders the goals themselves and is always contiguous `0..n-1`,
   the same scheme as headers and projects: new goals append at the end,
   changing one goal's priority shifts the others, and deleting a goal closes
   the gap. Goals stored before the field existed are backfilled in name order
   on first read, so existing lists keep their previous order
 - Goals are **roadmaps only** — the backend never turns steps into tasks.
-  Clients start a step by posting a daily recurring Task (`day_of_week`, all
-  seven days) under a Header named **"One Step At A Time"** — an existing
-  header with that name is reused; a new one is created only when none exists
-  (same find-or-create pattern as event scheduling). The task stays for life;
-  pausing a step deletes it client-side, and clients also flip steps back to
-  `pending` when the task (or the whole header) is deleted from the todo,
-  keeping both views in sync
+  Clients start a step by posting a recurring Task (`day_of_week`, valued with
+  the step's `days`) under a Header named **"One Step At A Time"** — an
+  existing header with that name is reused; a new one is created only when
+  none exists (same find-or-create pattern as event scheduling). The task
+  stays for life; pausing a step deletes it client-side, and clients also flip
+  steps back to `pending` when the task (or the whole header) is deleted from
+  the todo, keeping both views in sync. Changing a started step's `days`
+  rewrites that task's ECD in the same write
 - Deleting a goal never touches headers or tasks created from its steps
 - The cron job ignores the Goals collection entirely
 
@@ -1094,8 +1110,16 @@ Returns all goals sorted by `name` ascending.
     "_id": "uuid",
     "name": "Improve Health",
     "steps": [
-      { "name": "Wake up at 6", "status": "under_progress" },
-      { "name": "Have 1 fruit a day", "status": "pending" }
+      {
+        "name": "Wake up at 6",
+        "status": "under_progress",
+        "days": ["Mon", "Tue", "Wed", "Thu", "Fri"]
+      },
+      {
+        "name": "Have 1 fruit a day",
+        "status": "pending",
+        "days": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+      }
     ],
     "createdAt": "2026-07-11T00:00:00Z",
     "updatedAt": "2026-07-11T00:00:00Z"
@@ -1108,14 +1132,20 @@ Returns all goals sorted by `name` ascending.
 #### `POST /goals`
 
 Creates a new goal. `steps` is optional (defaults to `[]`); each step's
-`status` defaults to `pending`.
+`status` defaults to `pending` and its `days` to all seven weekdays.
 
 **Request body**
 
 ```json
 {
   "name": "string",
-  "steps": [{ "name": "string", "status": "pending | under_progress" }]
+  "steps": [
+    {
+      "name": "string",
+      "status": "pending | under_progress",
+      "days": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    }
+  ]
 }
 ```
 
@@ -1127,7 +1157,7 @@ Creates a new goal. `steps` is optional (defaults to `[]`); each step's
 
 Updates a goal's name and/or step list. Fields are optional but validated
 the same as on create when present. `steps` is replaced wholesale (an empty
-array clears it).
+array clears it), which is also how a started step's `days` are changed.
 
 **Response `200`** — returns updated goal
 
