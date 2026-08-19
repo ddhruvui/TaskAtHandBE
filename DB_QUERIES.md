@@ -26,7 +26,7 @@ db.Headers.find({ name: { $regex: "Mauli", $options: "i" } });
 db.Tasks.find({ name: { $regex: "Mauli", $options: "i" } });
 ```
 
-> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `Affirmations`, `Calls`, `TaskArchive`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
+> Collection names are capitalized (`Headers`, `Tasks`, `Events`, `Affirmations`, `Calls`, `TaskArchive`, `ArchiveSummary`, `Insights`) and get a `-Test` suffix when `USE_TEST_DB=true`.
 
 ---
 
@@ -121,6 +121,40 @@ db.TaskArchive.find(
 ```
 
 ---
+
+
+### Archive retention
+
+Raw events only exist inside the retention window (`ARCHIVE_RETENTION_DAYS`,
+default 30 days); older history lives in `ArchiveSummary` as monthly totals.
+
+```js
+// How much raw history is actually left, and how old the oldest event is
+db.TaskArchive.countDocuments();
+db.TaskArchive.find({}, { at: 1, type: 1 }).sort({ at: 1 }).limit(1);
+
+// What step 10 would prune on the next run (30-day window)
+db.TaskArchive.countDocuments({
+  at: { $lt: new Date(Date.now() - 30 * 86400000) },
+});
+
+// The permanent monthly roll-ups, oldest first
+db.ArchiveSummary.find({}, { month: 1, eventCount: 1, oneTimeTasks: 1 }).sort({
+  month: 1,
+});
+
+// One habit's history across every summarised month
+db.ArchiveSummary.find(
+  { "habits.taskName": "Meditate" },
+  { month: 1, "habits.$": 1 },
+).sort({ month: 1 });
+
+// Which source days are already folded into a month (the idempotency guard)
+db.ArchiveSummary.findOne({ month: "2026-07" }, { days: 1 });
+
+// The index every archive read filters on — created at server startup
+db.TaskArchive.getIndexes();
+```
 
 ## Events Queries
 

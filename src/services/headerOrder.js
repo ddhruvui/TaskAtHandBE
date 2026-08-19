@@ -18,6 +18,7 @@
 const { ObjectId } = require("mongodb");
 const Header = require("../models/Header");
 const { Project } = require("../models/Project");
+const { priorityBulkOps } = require("../utils/ordering");
 
 /**
  * Recompute and persist the header order.
@@ -119,17 +120,8 @@ async function applyProjectHeaderOrder() {
         ? [nonProjectHeaders[0], ...projectHeaders, ...nonProjectHeaders.slice(1)]
         : projectHeaders;
 
-  const priorityOps = [];
-  for (let i = 0; i < desired.length; i++) {
-    if (desired[i].priority !== i) {
-      priorityOps.push({
-        updateOne: {
-          filter: { _id: desired[i]._id },
-          update: { $set: { priority: i } },
-        },
-      });
-    }
-  }
+  // Only the headers that actually moved are written.
+  const priorityOps = priorityBulkOps(desired);
 
   const ops = [...linkOps, ...priorityOps];
   if (ops.length > 0) await headersCol.bulkWrite(ops);

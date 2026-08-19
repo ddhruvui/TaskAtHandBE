@@ -4,6 +4,21 @@ const {
   baselineLastAddedYear,
   MAX_DAYS_BY_MONTH,
 } = require("../models/LifeEvent");
+const { utcToday } = require("../utils/dates");
+const {
+  route,
+  requireFound,
+  isPriorityRangeError,
+} = require("../utils/http");
+const {
+  ValidationError,
+  requiredString,
+  optionalString,
+  optionalBoolean,
+  optionalPriority,
+  optionalStringOrNull,
+  definedFields,
+} = require("../utils/validate");
 
 /**
  * Validate a life-event date string ("D/M", no zero-padding, no year — the
@@ -13,43 +28,33 @@ const {
  */
 function validateDate(date) {
   if (typeof date !== "string" || !/^\d{1,2}\/\d{1,2}$/.test(date.trim())) {
-    throw new Error('Life event date must be a "D/M" string, e.g. "7/3"');
+    throw new ValidationError(
+      'Life event date must be a "D/M" string, e.g. "7/3"',
+    );
   }
   const trimmed = date.trim();
   const { day, month } = parseLifeEventDate(trimmed);
   if (month < 1 || month > 12) {
-    throw new Error("Life event month must be between 1 and 12");
+    throw new ValidationError("Life event month must be between 1 and 12");
   }
   if (day < 1 || day > MAX_DAYS_BY_MONTH[month - 1]) {
-    throw new Error(
+    throw new ValidationError(
       `Life event day must be between 1 and ${MAX_DAYS_BY_MONTH[month - 1]} for month ${month}`,
     );
   }
   return trimmed;
 }
 
-/** Today as a UTC-midnight Date, for lastAddedYear baselines. */
-function utcToday() {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  return today;
-}
-
 /**
  * GET /lifeevents
  * Returns all life events sorted by priority ascending
  */
-const getAllLifeEvents = async (req, res) => {
-  try {
-    const lifeEvents = await LifeEvent.findAll();
-    res.json(lifeEvents);
-  } catch (error) {
-    console.error("Error fetching life events:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch life events", message: error.message });
-  }
-};
+const getAllLifeEvents = route(
+  { action: "fetching life events", failure: "Failed to fetch life events" },
+  async (req, res) => {
+    res.json(await LifeEvent.findAll());
+  },
+);
 
 /**
  * POST /lifeevents
@@ -59,36 +64,20 @@ const getAllLifeEvents = async (req, res) => {
  * occurrence already consumed, so a still-upcoming date fires this year and
  * an already-passed one waits for the next anniversary.
  */
-const createLifeEvent = async (req, res) => {
-  try {
-    const { name, date } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Life event name must be a non-empty string" });
-    }
-
-    let validDate;
-    try {
-      validDate = validateDate(date);
-    } catch (validationError) {
-      return res.status(400).json({ error: validationError.message });
-    }
+const createLifeEvent = route(
+  { action: "creating life event", failure: "Failed to create life event" },
+  async (req, res) => {
+    const name = requiredString(req.body.name, "Life event name");
+    const date = validateDate(req.body.date);
 
     const lifeEvent = await LifeEvent.create({
-      name: name.trim(),
-      date: validDate,
-      lastAddedYear: baselineLastAddedYear(validDate, utcToday()),
+      name,
+      date,
+      lastAddedYear: baselineLastAddedYear(date, utcToday()),
     });
     res.status(201).json(lifeEvent);
-  } catch (error) {
-    console.error("Error creating life event:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to create life event", message: error.message });
-  }
-};
+  },
+);
 
 /**
  * PUT /lifeevents/:id
@@ -97,109 +86,55 @@ const createLifeEvent = async (req, res) => {
  * next occurrence. Priority changes shift the other life events to keep
  * contiguous 0..n-1 order, same as projects.
  */
-const updateLifeEvent = async (req, res) => {
-  try {
+const updateLifeEvent = route(
+  {
+    action: "updating life event",
+    failure: "Failed to update life event",
+    badRequest: [isPriorityRangeError],
+  },
+  async (req, res) => {
     const { id } = req.params;
-    const { name, date, done, todoTaskId, priority } = req.body;
+    const { date } = req.body;
 
-    if (
-      name !== undefined &&
-      (typeof name !== "string" || name.trim() === "")
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Life event name must be a non-empty string" });
-    }
+    const updates = definedFields({
+      name: optionalString(req.body.name, "Life event name"),
+      done: optionalBoolean(req.body.done, "done"),
+      todoTaskId: optionalStringOrNull(req.body.todoTaskId, "todoTaskId"),
+      priority: optionalPriority(req.body.priority),
+    });
 
-    if (done !== undefined && typeof done !== "boolean") {
-      return res.status(400).json({ error: "done must be a boolean" });
-    }
-
-    if (
-      todoTaskId !== undefined &&
-      todoTaskId !== null &&
-      typeof todoTaskId !== "string"
-    ) {
-      return res
-        .status(400)
-        .json({ error: "todoTaskId must be a string or null" });
-    }
-
-    if (
-      priority !== undefined &&
-      (!Number.isInteger(priority) || priority < 0)
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Priority must be a non-negative integer" });
-    }
-
-    const updates = {};
-    if (name !== undefined) updates.name = name.trim();
-    if (done !== undefined) updates.done = done;
-    if (todoTaskId !== undefined) updates.todoTaskId = todoTaskId;
-    if (priority !== undefined) updates.priority = priority;
     if (date !== undefined) {
-      try {
-        updates.date = validateDate(date);
-      } catch (validationError) {
-        return res.status(400).json({ error: validationError.message });
-      }
+      updates.date = validateDate(date);
+
       // Re-baseline only on a real change — a no-op date write must not make
       // an occurrence the cron already consumed look upcoming again.
-      const current = await LifeEvent.findById(id);
-      if (!current) {
-        return res.status(404).json({ error: "Life event not found" });
-      }
+      const current = requireFound(
+        await LifeEvent.findById(id),
+        "Life event not found",
+      );
       if (current.date !== updates.date) {
-        updates.lastAddedYear = baselineLastAddedYear(
-          updates.date,
-          utcToday(),
-        );
+        updates.lastAddedYear = baselineLastAddedYear(updates.date, utcToday());
       }
     }
 
     const updated = await LifeEvent.update(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({ error: "Life event not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating life event:", error);
-    if (error.message.startsWith("Priority must be")) {
-      return res.status(400).json({ error: error.message });
-    }
-    res
-      .status(500)
-      .json({ error: "Failed to update life event", message: error.message });
-  }
-};
+    res.json(requireFound(updated, "Life event not found"));
+  },
+);
 
 /**
  * DELETE /lifeevents/:id
  * Deletes a life event (and shifts remaining life event priorities). The
  * todo task created from it this year (if any) is kept.
  */
-const deleteLifeEvent = async (req, res) => {
-  try {
+const deleteLifeEvent = route(
+  { action: "deleting life event", failure: "Failed to delete life event" },
+  async (req, res) => {
     const { id } = req.params;
-
-    const deleted = await LifeEvent.delete(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Life event not found" });
-    }
-
+    requireFound(await LifeEvent.delete(id), "Life event not found");
     res.json({ deleted: id });
-  } catch (error) {
-    console.error("Error deleting life event:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete life event", message: error.message });
-  }
-};
+  },
+);
 
 module.exports = {
   getAllLifeEvents,

@@ -412,6 +412,52 @@ them.
 
 ---
 
+### ArchiveSummary (permanent monthly roll-ups)
+
+One document per calendar month (`ArchiveSummary`, or `ArchiveSummary-Test` in
+test mode), written by cron step 10 as raw events age out of the retention
+window. This is the only place history older than `ARCHIVE_RETENTION_DAYS`
+still exists — and it holds **monthly totals only**, never per-day detail.
+
+Counters live in arrays keyed by name rather than objects, because task and
+call names are free text and may contain `.`, which Mongo rejects in a field
+name.
+
+```json
+{
+  "month": "2026-07",
+  "days": ["2026-07-01", "2026-07-02"],
+  "eventCount": 412,
+  "habits": [
+    { "taskName": "Meditate", "headerName": "Health", "scheduled": 22, "completed": 19 }
+  ],
+  "recurring": [
+    { "taskName": "Pay rent", "headerName": "Admin", "ecdType": "day_of_month", "scheduled": 1, "completed": 1 }
+  ],
+  "calls": [
+    { "callName": "Grandma", "frequency": "biweekly", "scheduled": 2, "completed": 1 }
+  ],
+  "oneTimeTasks": { "completed": 14, "onTime": 11, "late": 3 },
+  "reschedules": { "total": 5, "pushedLater": 4, "pushedLaterNoReason": 2 },
+  "deletions": { "count": 2, "withReason": 1 },
+  "byHeader": [
+    { "headerName": "Health", "completed": 19, "missed": 3, "reschedules": 1, "deleted": 0 }
+  ],
+  "firstAt": "2026-07-01T00:00:03Z",
+  "lastAt": "2026-07-31T23:59:00Z",
+  "updatedAt": "2026-08-30T00:00:04Z"
+}
+```
+
+- `days` is the **idempotency guard**: a source day already listed is never
+  counted again, which is what makes a repeated cron run safe
+- `oneTimeTasks.onTime` uses the same rule as the live stats — finished on or
+  before the planned day is a win, only a later completion is late
+- Calls are deliberately absent from `byHeader`; they have no header
+- Read it at `GET /archive/summary`, oldest month first
+
+---
+
 ### Insight (AI reports)
 
 The `Insights` collection stores one AI coaching report per generation:
@@ -420,7 +466,7 @@ The `Insights` collection stores one AI coaching report per generation:
 {
   "generatedAt": "ISO 8601 datetime",
   "periodDays": 28,
-  "model": "claude-sonnet-4-6",
+  "model": "gemini-3.7-flash",
   "stats": "exact computed stats the report was based on",
   "report": {
     "summary": "string",
@@ -436,7 +482,7 @@ The `Insights` collection stores one AI coaching report per generation:
 ```
 
 Reports are generated **once a week, on Friday (UTC)**, at the end of that
-night's cron run (when `ANTHROPIC_API_KEY` is set), and on demand via
+night's cron run (when `GEMINI_API_KEY` is set), and on demand via
 `POST /insights/generate`, which ignores the weekly gate. The previous report is
 fed into the next generation so suggestions build on each other. Tasks
 scheduled by `day_of_week` are treated as **habits**; everything else is a
@@ -476,7 +522,7 @@ of the last cron run:
 
 This is the AI-free half of insights. Cron **step 9** recomputes it every
 night from `TaskArchive` — pure arithmetic, no Anthropic call, no
-`ANTHROPIC_API_KEY` needed — so habit streaks and completion rates are current
+`GEMINI_API_KEY` needed — so habit streaks and completion rates are current
 the morning after the day they were earned, even though the coaching narrative
 in `Insights` is only written on Fridays. The document is replaced in place
 (never appended to): the history it is derived from lives in `TaskArchive`, so
@@ -625,7 +671,7 @@ each period boundary:
   completion rates and streaks, missed-by-weekday, on-time vs late one-time
   tasks, reschedules, deletions, per-header rollups, per-person call results —
   and replace the single document in `InsightStats` (`computedAt` = now)
-- **Runs on every cron run, needs no `ANTHROPIC_API_KEY`, and is not affected
+- **Runs on every cron run, needs no `GEMINI_API_KEY`, and is not affected
   by `skipInsights`** (that flag exists to avoid the paid API call; this step
   is arithmetic). Streak counts therefore stay current nightly while the AI
   narrative is weekly
@@ -635,13 +681,36 @@ each period boundary:
   because archive events are stamped with their real insertion time
 - A failure never fails the cron run (logged, `statsRefreshed: false` in stats)
 
+#### Step 10 — Summarise, then prune the archive _(every night)_
+
+- `TaskArchive` is append-only and used to grow without bound, while only the
+  last 28 days were ever read. Events older than `ARCHIVE_RETENTION_DAYS`
+  (default **30**) are folded into `ArchiveSummary` — one document per calendar
+  month, kept forever — and then deleted
+- **The cutoff is a UTC day boundary**, so only whole days are ever pruned. A
+  day split across two runs would be counted by one and dropped by the other
+- **The fold is idempotent per source day**: each month's summary records the
+  days already folded in, so a run that summarised a batch but died before
+  deleting it counts nothing twice on the next pass
+- Like step 9, the window is measured from the **real current time**, not the
+  run's `date` override — archive events carry real insertion times, so a run
+  pretending to be next year must not treat this week's events as ancient
+- Retention is **clamped up to the insights window** (28 days): a smaller
+  `ARCHIVE_RETENTION_DAYS` is logged and ignored, because pruning inside the
+  window would starve the nightly snapshot of the events it reads
+- Reports `archiveEventsPruned`, `archiveEventsFolded`,
+  `archiveMonthsSummarised` and `archiveCutoff` (the UTC day events had to
+  predate, or `null` when nothing was old enough)
+- **Per-day detail is not recoverable once pruned** — only the monthly totals
+  survive, readable at `GET /archive/summary`
+
 #### Final step — Generate the weekly AI insight report
 
-- After step 8, when `ANTHROPIC_API_KEY` is set (and not in test mode):
+- After step 8, when `GEMINI_API_KEY` is set (and not in test mode):
   - **Once per week, on Friday — not nightly.** The cron runs every night, but the analysis costs an Anthropic call, so it only fires when today is **Friday (UTC)** and no report has been generated yet on that Friday (so a second cron run the same day, e.g. a manual `POST /cron/run`, doesn't pay for a second call). On any other day, or on a Friday already reported on, the run records `insightGenerated: false` and `insightSkipped: "not-due"` and moves on. A report generated on some other day — e.g. an on-demand `POST /insights/generate` on a Wednesday — does **not** consume that week's Friday run.
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
-  - Send stats + recent events + the previous report to `claude-sonnet-4-6` with a structured-output schema
+  - Send stats + recent events + the previous report to `gemini-3.7-flash` with a structured-output schema
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
 - `POST /insights/generate` ignores the weekly gate — an explicit user request always generates a fresh report
@@ -1271,7 +1340,7 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 7. Reorder priorities per header
 8. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
 9. Refresh the `InsightStats` snapshot — streaks, rates, on-time counts _(every night; no AI, no API key needed)_
-10. Generate the weekly AI insight report _(only on Fridays (UTC) and only once per Friday, when `ANTHROPIC_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
+10. Generate the weekly AI insight report _(only on Fridays (UTC) and only once per Friday, when `GEMINI_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
 
 **Response `200`**
 
@@ -1427,7 +1496,7 @@ Generates a fresh AI report now, on any day — the cron's Friday-only gate does
 not apply to this explicit request, and a report generated here does not
 consume that week's Friday run. Optional body `{ "days": 28 }`. Returns `201`
 with the stored report, `404` if the archive is empty, `503` if
-`ANTHROPIC_API_KEY` is not configured.
+`GEMINI_API_KEY` is not configured.
 
 ---
 

@@ -1,97 +1,56 @@
 const Affirmation = require("../models/Affirmation");
+const { route, requireFound } = require("../utils/http");
+const { requiredString } = require("../utils/validate");
 
 /**
  * GET /affirmations
  * Returns all affirmations sorted by createdAt ascending (order added)
  */
-const getAllAffirmations = async (req, res) => {
-  try {
-    const affirmations = await Affirmation.findAll();
-    res.json(affirmations);
-  } catch (error) {
-    console.error("Error fetching affirmations:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch affirmations", message: error.message });
-  }
-};
+const getAllAffirmations = route(
+  { action: "fetching affirmations", failure: "Failed to fetch affirmations" },
+  async (req, res) => {
+    res.json(await Affirmation.findAll());
+  },
+);
 
 /**
  * POST /affirmations
  * Creates a new affirmation with a name
  */
-const createAffirmation = async (req, res) => {
-  try {
-    const { name } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Affirmation name must be a non-empty string" });
-    }
-
-    const affirmation = await Affirmation.create({ name: name.trim() });
-    res.status(201).json(affirmation);
-  } catch (error) {
-    console.error("Error creating affirmation:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to create affirmation", message: error.message });
-  }
-};
+const createAffirmation = route(
+  { action: "creating affirmation", failure: "Failed to create affirmation" },
+  async (req, res) => {
+    const name = requiredString(req.body.name, "Affirmation name");
+    res.status(201).json(await Affirmation.create({ name }));
+  },
+);
 
 /**
  * PUT /affirmations/:id
  * Updates an affirmation's name
  */
-const updateAffirmation = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Affirmation name must be a non-empty string" });
-    }
-
-    const updated = await Affirmation.update(id, { name: name.trim() });
-
-    if (!updated) {
-      return res.status(404).json({ error: "Affirmation not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating affirmation:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to update affirmation", message: error.message });
-  }
-};
+const updateAffirmation = route(
+  { action: "updating affirmation", failure: "Failed to update affirmation" },
+  async (req, res) => {
+    // Name is the only field an affirmation has, so it is required here too.
+    const name = requiredString(req.body.name, "Affirmation name");
+    const updated = await Affirmation.update(req.params.id, { name });
+    res.json(requireFound(updated, "Affirmation not found"));
+  },
+);
 
 /**
  * DELETE /affirmations/:id
  * Deletes an affirmation
  */
-const deleteAffirmation = async (req, res) => {
-  try {
+const deleteAffirmation = route(
+  { action: "deleting affirmation", failure: "Failed to delete affirmation" },
+  async (req, res) => {
     const { id } = req.params;
-
-    const deleted = await Affirmation.delete(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Affirmation not found" });
-    }
-
+    requireFound(await Affirmation.delete(id), "Affirmation not found");
     res.json({ deleted: id });
-  } catch (error) {
-    console.error("Error deleting affirmation:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete affirmation", message: error.message });
-  }
-};
+  },
+);
 
 module.exports = {
   getAllAffirmations,

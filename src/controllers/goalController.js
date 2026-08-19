@@ -1,14 +1,29 @@
 const Goal = require("../models/Goal");
+const { DOW_NAMES } = require("../utils/dates");
+const {
+  route,
+  requireFound,
+  isPriorityRangeError,
+} = require("../utils/http");
+const {
+  requiredString,
+  optionalString,
+  optionalPriority,
+  oneOf,
+  requireObject,
+  requireArray,
+  definedFields,
+} = require("../utils/validate");
 
 const STEP_STATUSES = ["pending", "under_progress"];
 
 // Pre-rename statuses; normalized so goals saved earlier stay editable
-const LEGACY_STATUS_ALIASES = { achieved: "under_progress", active: "under_progress" };
+const LEGACY_STATUS_ALIASES = {
+  achieved: "under_progress",
+  active: "under_progress",
+};
 
-// Canonical week order — stored `days` are always sorted into it, so the
-// client never has to re-sort and the value can be compared verbatim against
-// the linked task's `day_of_week` ECD.
-const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAYS_MESSAGE = `Step days must be a non-empty array of: ${DOW_NAMES.join(", ")}`;
 
 /**
  * Validate and normalize a step's `days` — the weekdays its daily habit is
@@ -24,18 +39,8 @@ const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  */
 function validateDays(days) {
   if (days === undefined) return [...DOW_NAMES];
-  if (!Array.isArray(days) || days.length === 0) {
-    throw new Error(
-      `Step days must be a non-empty array of: ${DOW_NAMES.join(", ")}`,
-    );
-  }
-  for (const day of days) {
-    if (!DOW_NAMES.includes(day)) {
-      throw new Error(
-        `Step days must be a non-empty array of: ${DOW_NAMES.join(", ")}`,
-      );
-    }
-  }
+  requireArray(days, DAYS_MESSAGE, { nonEmpty: true });
+  for (const day of days) oneOf(day, DOW_NAMES, DAYS_MESSAGE);
   // Dedupe and sort into week order (Sun → Sat)
   return DOW_NAMES.filter((day) => days.includes(day));
 }
@@ -49,24 +54,19 @@ function validateDays(days) {
  * Returns the normalized steps or throws a validation Error.
  */
 function validateSteps(steps) {
-  if (!Array.isArray(steps)) {
-    throw new Error("steps must be an array of { name, status, days } objects");
-  }
-  return steps.map((step) => {
-    if (typeof step !== "object" || step === null || Array.isArray(step)) {
-      throw new Error("Each step must be an object with a name");
-    }
-    if (typeof step.name !== "string" || step.name.trim() === "") {
-      throw new Error("Each step name must be a non-empty string");
-    }
-    let status = step.status === undefined ? "pending" : step.status;
-    status = LEGACY_STATUS_ALIASES[status] || status;
-    if (!STEP_STATUSES.includes(status)) {
-      throw new Error(
-        `Step status must be one of: ${STEP_STATUSES.join(", ")}`,
-      );
-    }
-    return { name: step.name.trim(), status, days: validateDays(step.days) };
+  return requireArray(
+    steps,
+    "steps must be an array of { name, status, days } objects",
+  ).map((step) => {
+    requireObject(step, "Each step must be an object with a name");
+    const name = requiredString(step.name, "Each step name");
+    const requested = step.status === undefined ? "pending" : step.status;
+    const status = oneOf(
+      LEGACY_STATUS_ALIASES[requested] || requested,
+      STEP_STATUSES,
+      `Step status must be one of: ${STEP_STATUSES.join(", ")}`,
+    );
+    return { name, status, days: validateDays(step.days) };
   });
 }
 
@@ -74,132 +74,67 @@ function validateSteps(steps) {
  * GET /goals
  * Returns all goals sorted by name ascending
  */
-const getAllGoals = async (req, res) => {
-  try {
-    const goals = await Goal.findAll();
-    res.json(goals);
-  } catch (error) {
-    console.error("Error fetching goals:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch goals", message: error.message });
-  }
-};
+const getAllGoals = route(
+  { action: "fetching goals", failure: "Failed to fetch goals" },
+  async (req, res) => {
+    res.json(await Goal.findAll());
+  },
+);
 
 /**
  * POST /goals
  * Creates a new goal with a name and a list of steps (habits to build one at
  * a time). Steps are optional and default to an empty list.
  */
-const createGoal = async (req, res) => {
-  try {
-    const { name, steps } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Goal name must be a non-empty string" });
-    }
-
-    let normalizedSteps;
-    try {
-      normalizedSteps = steps === undefined ? [] : validateSteps(steps);
-    } catch (validationError) {
-      return res.status(400).json({ error: validationError.message });
-    }
-
+const createGoal = route(
+  { action: "creating goal", failure: "Failed to create goal" },
+  async (req, res) => {
+    const { steps } = req.body;
+    const name = requiredString(req.body.name, "Goal name");
     const goal = await Goal.create({
-      name: name.trim(),
-      steps: normalizedSteps,
+      name,
+      steps: steps === undefined ? [] : validateSteps(steps),
     });
     res.status(201).json(goal);
-  } catch (error) {
-    console.error("Error creating goal:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to create goal", message: error.message });
-  }
-};
+  },
+);
 
 /**
  * PUT /goals/:id
  * Updates a goal's name and/or step list. Steps are replaced wholesale, which
  * covers adding, renaming, reordering, removing and status changes.
  */
-const updateGoal = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, steps, priority } = req.body;
+const updateGoal = route(
+  {
+    action: "updating goal",
+    failure: "Failed to update goal",
+    badRequest: [isPriorityRangeError],
+  },
+  async (req, res) => {
+    const { steps } = req.body;
+    const updates = definedFields({
+      name: optionalString(req.body.name, "Goal name"),
+      priority: optionalPriority(req.body.priority),
+      steps: steps === undefined ? undefined : validateSteps(steps),
+    });
 
-    if (
-      name !== undefined &&
-      (typeof name !== "string" || name.trim() === "")
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Goal name must be a non-empty string" });
-    }
-
-    if (
-      priority !== undefined &&
-      (!Number.isInteger(priority) || priority < 0)
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Priority must be a non-negative integer" });
-    }
-
-    const updates = {};
-    if (name !== undefined) updates.name = name.trim();
-    if (priority !== undefined) updates.priority = priority;
-    if (steps !== undefined) {
-      try {
-        updates.steps = validateSteps(steps);
-      } catch (validationError) {
-        return res.status(400).json({ error: validationError.message });
-      }
-    }
-
-    const updated = await Goal.update(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({ error: "Goal not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating goal:", error);
-    if (error.message.startsWith("Priority must be")) {
-      return res.status(400).json({ error: error.message });
-    }
-    res
-      .status(500)
-      .json({ error: "Failed to update goal", message: error.message });
-  }
-};
+    const updated = await Goal.update(req.params.id, updates);
+    res.json(requireFound(updated, "Goal not found"));
+  },
+);
 
 /**
  * DELETE /goals/:id
  * Deletes a goal. Tasks already added to the todo from its steps are
  * untouched.
  */
-const deleteGoal = async (req, res) => {
-  try {
+const deleteGoal = route(
+  { action: "deleting goal", failure: "Failed to delete goal" },
+  async (req, res) => {
     const { id } = req.params;
-
-    const deleted = await Goal.delete(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Goal not found" });
-    }
-
+    requireFound(await Goal.delete(id), "Goal not found");
     res.json({ deleted: id });
-  } catch (error) {
-    console.error("Error deleting goal:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete goal", message: error.message });
-  }
-};
+  },
+);
 
 module.exports = { getAllGoals, createGoal, updateGoal, deleteGoal };

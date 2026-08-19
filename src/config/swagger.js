@@ -344,7 +344,7 @@ const options = {
               type: "boolean",
               example: true,
               description:
-                "Whether the weekly AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an ANTHROPIC_API_KEY.",
+                "Whether the weekly AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an GEMINI_API_KEY.",
             },
             insightSkipped: {
               type: "string",
@@ -352,6 +352,122 @@ const options = {
               description:
                 "Present as \"not-due\" when the run reached the insight step on a day it does not report: any day that is not Friday (UTC), or a Friday already reported on.",
             },
+            archiveEventsPruned: {
+              type: "integer",
+              example: 8,
+              description:
+                "Raw TaskArchive events deleted by step 10 after being folded into ArchiveSummary.",
+            },
+            archiveEventsFolded: {
+              type: "integer",
+              example: 8,
+              description:
+                "Events actually counted into a monthly summary. Lower than archiveEventsPruned only when a previous run had already folded them.",
+            },
+            archiveMonthsSummarised: {
+              type: "integer",
+              example: 1,
+              description: "Monthly ArchiveSummary documents written by step 10.",
+            },
+            archiveCutoff: {
+              type: "string",
+              nullable: true,
+              example: "2026-07-20",
+              description:
+                "The UTC day events had to predate to be pruned. Null when nothing was old enough.",
+            },
+          },
+        },
+        ArchiveSummary: {
+          type: "object",
+          description:
+            "One calendar month of task history, kept permanently after the raw events are pruned. Written by cron step 10.",
+          properties: {
+            month: { type: "string", example: "2026-07" },
+            days: {
+              type: "array",
+              items: { type: "string" },
+              example: ["2026-07-01", "2026-07-02"],
+              description:
+                "Source days already folded in — the guard that stops a re-run counting a day twice.",
+            },
+            eventCount: { type: "integer", example: 412 },
+            habits: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  taskName: { type: "string", example: "Meditate" },
+                  headerName: { type: "string", nullable: true, example: "Health" },
+                  scheduled: { type: "integer", example: 22 },
+                  completed: { type: "integer", example: 19 },
+                },
+              },
+            },
+            recurring: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  taskName: { type: "string", example: "Pay rent" },
+                  headerName: { type: "string", nullable: true, example: "Admin" },
+                  ecdType: { type: "string", nullable: true, example: "day_of_month" },
+                  scheduled: { type: "integer", example: 1 },
+                  completed: { type: "integer", example: 1 },
+                },
+              },
+            },
+            calls: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  callName: { type: "string", example: "Grandma" },
+                  frequency: { type: "string", nullable: true, example: "biweekly" },
+                  scheduled: { type: "integer", example: 2 },
+                  completed: { type: "integer", example: 1 },
+                },
+              },
+            },
+            oneTimeTasks: {
+              type: "object",
+              properties: {
+                completed: { type: "integer", example: 14 },
+                onTime: { type: "integer", example: 11 },
+                late: { type: "integer", example: 3 },
+              },
+            },
+            reschedules: {
+              type: "object",
+              properties: {
+                total: { type: "integer", example: 5 },
+                pushedLater: { type: "integer", example: 4 },
+                pushedLaterNoReason: { type: "integer", example: 2 },
+              },
+            },
+            deletions: {
+              type: "object",
+              properties: {
+                count: { type: "integer", example: 2 },
+                withReason: { type: "integer", example: 1 },
+              },
+            },
+            byHeader: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  headerName: { type: "string", example: "Health" },
+                  completed: { type: "integer", example: 19 },
+                  missed: { type: "integer", example: 3 },
+                  reschedules: { type: "integer", example: 1 },
+                  deleted: { type: "integer", example: 0 },
+                },
+              },
+            },
+            firstAt: { type: "string", format: "date-time", nullable: true },
+            lastAt: { type: "string", format: "date-time", nullable: true },
+            updatedAt: { type: "string", format: "date-time" },
           },
         },
         CronStatus: {

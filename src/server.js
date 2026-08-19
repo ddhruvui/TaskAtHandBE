@@ -102,7 +102,7 @@ app.use("/insights", require("./routes/insightRoutes"));
  *                 example: "2026-01-01T00:00:00.000Z"
  *               skipInsights:
  *                 type: boolean
- *                 description: Skip the weekly AI insight report for this run (used by e2e tests to avoid a real Anthropic API call)
+ *                 description: Skip the weekly AI insight report for this run (used by e2e tests to avoid a real Gemini API call)
  *                 example: true
  *     responses:
  *       200:
@@ -127,31 +127,32 @@ app.use("/insights", require("./routes/insightRoutes"));
  *         description: Internal error
  */
 
-// Manual cron trigger (POST with optional date body)
-app.post("/cron/run", async (req, res) => {
+/**
+ * The manual cron trigger exists in two shapes — POST with an optional
+ * `{ date, skipInsights }` body and GET with neither — which differ only in
+ * where the options come from.
+ */
+const runCronHandler = (readOptions) => async (req, res) => {
   try {
-    const overrideDate =
-      req.body && req.body.date ? new Date(req.body.date) : undefined;
-    const stats = await runCron(overrideDate, {
-      skipInsights: Boolean(req.body && req.body.skipInsights),
-    });
-    res.json(stats);
+    const { date, skipInsights } = readOptions(req);
+    res.json(await runCron(date, { skipInsights }));
   } catch (error) {
     console.error("Error running cron:", error);
     res.status(500).json({ error: error.message });
   }
-});
+};
+
+// Manual cron trigger (POST with optional date body)
+app.post(
+  "/cron/run",
+  runCronHandler((req) => ({
+    date: req.body && req.body.date ? new Date(req.body.date) : undefined,
+    skipInsights: Boolean(req.body && req.body.skipInsights),
+  })),
+);
 
 // Manual cron trigger (GET)
-app.get("/cron/run", async (req, res) => {
-  try {
-    const stats = await runCron();
-    res.json(stats);
-  } catch (error) {
-    console.error("Error running cron:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get("/cron/run", runCronHandler(() => ({})));
 
 /**
  * @openapi
@@ -169,15 +170,18 @@ app.get("/cron/run", async (req, res) => {
  *       404:
  *         description: Cron has never run
  */
-// Cron status
-app.get("/cron/status", (req, res) => {
+/** `/cron/status` and its `/cron/details` alias return the same thing. */
+const lastRunHandler = (req, res) => {
   const last = getLastRun();
   if (!last) {
     return res.status(404).json({ error: "Cron has not run yet" });
   }
   const { ranAt, ...rest } = last;
   res.json({ lastRanAt: ranAt, ...rest });
-});
+};
+
+// Cron status
+app.get("/cron/status", lastRunHandler);
 
 /**
  * @openapi
@@ -196,14 +200,7 @@ app.get("/cron/status", (req, res) => {
  *         description: Cron has never run
  */
 // Cron details (alias for /cron/status)
-app.get("/cron/details", (req, res) => {
-  const last = getLastRun();
-  if (!last) {
-    return res.status(404).json({ error: "Cron has not run yet" });
-  }
-  const { ranAt, ...rest } = last;
-  res.json({ lastRanAt: ranAt, ...rest });
-});
+app.get("/cron/details", lastRunHandler);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -225,6 +222,9 @@ const PORT = process.env.PORT || 3002;
 const startServer = async () => {
   try {
     await connectDB();
+    // Idempotent; the archive reads and the retention prune both need them.
+    await require("./models/Archive").ensureIndexes();
+    await require("./models/ArchiveSummary").ArchiveSummary.ensureIndexes();
     scheduleCron();
     app.listen(PORT, () => {
       console.log(

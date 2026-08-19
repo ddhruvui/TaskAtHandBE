@@ -1,16 +1,16 @@
-const { getDatabase } = require("../config/db");
-const { ObjectId } = require("mongodb");
-
-/** Returns number of days in a given month (1-indexed), leap-friendly (Feb = 29). */
-const MAX_DAYS_BY_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const OrderedModel = require("./OrderedModel");
+const {
+  MAX_DAYS_BY_MONTH,
+  daysInMonth,
+  parseSlashDate,
+} = require("../utils/dates");
 
 /**
  * Parse a "D/M" life-event date into { day, month } numbers.
  * e.g. "7/3" → { day: 7, month: 3 }
  */
 function parseLifeEventDate(str) {
-  const [d, m] = str.split("/").map(Number);
-  return { day: d, month: m };
+  return parseSlashDate(str);
 }
 
 /**
@@ -27,42 +27,19 @@ function parseLifeEventDate(str) {
 function baselineLastAddedYear(date, today) {
   const { day, month } = parseLifeEventDate(date);
   const year = today.getUTCFullYear();
-  const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const maxDay = daysInMonth(year, month);
   const occurrence = Date.UTC(year, month - 1, Math.min(day, maxDay));
   const todayTs = Date.UTC(year, today.getUTCMonth(), today.getUTCDate());
   return occurrence < todayTs ? year : year - 1;
 }
 
-class LifeEvent {
-  /**
-   * Get the LifeEvents collection for the current environment
-   * @returns {Promise<Collection>} MongoDB collection
-   */
-  static async getCollection() {
-    const db = await getDatabase();
-    const useTestDB = process.env.USE_TEST_DB === "true";
-    const collectionName = useTestDB ? "LifeEvents-Test" : "LifeEvents";
-    return db.collection(collectionName);
-  }
-
-  /**
-   * Return all life events sorted by priority ascending
-   * @returns {Promise<Array>}
-   */
-  static async findAll() {
-    const collection = await this.getCollection();
-    return collection.find({}).sort({ priority: 1 }).toArray();
-  }
-
-  /**
-   * Find a life event by its _id
-   * @param {string} id
-   * @returns {Promise<Object|null>}
-   */
-  static async findById(id) {
-    const collection = await this.getCollection();
-    return collection.findOne({ _id: new ObjectId(id) });
-  }
+/**
+ * A recurring personal date (a birthday, an anniversary). Cron step 6 turns a
+ * due one into a dated todo task once a year and links it via `todoTaskId`;
+ * the event itself is never deleted.
+ */
+class LifeEvent extends OrderedModel {
+  static collectionName = "LifeEvents";
 
   /**
    * Create a new life event. Priority is assigned as total existing life
@@ -71,23 +48,15 @@ class LifeEvent {
    * @returns {Promise<Object>} Created life event
    */
   static async create(data) {
-    const collection = await this.getCollection();
-    const count = await collection.countDocuments();
-    const now = new Date().toISOString();
-
-    const lifeEvent = {
+    return this.insert({
       name: data.name,
       date: data.date,
       lastAddedYear: data.lastAddedYear,
       done: false,
       todoTaskId: null,
-      priority: count,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const result = await collection.insertOne(lifeEvent);
-    return { _id: result.insertedId, ...lifeEvent };
+      priority: await this.nextPriority(),
+      ...this.timestamps(),
+    });
   }
 
   /**
@@ -99,82 +68,18 @@ class LifeEvent {
    * @returns {Promise<Object|null>} Updated life event or null if not found
    */
   static async update(id, data) {
-    const collection = await this.getCollection();
     const current = await this.findById(id);
     if (!current) return null;
 
     const updates = {};
-    if (data.name !== undefined) updates.name = data.name;
-    if (data.date !== undefined) updates.date = data.date;
-    if (data.lastAddedYear !== undefined)
-      updates.lastAddedYear = data.lastAddedYear;
-    if (data.done !== undefined) updates.done = data.done;
-    if (data.todoTaskId !== undefined) updates.todoTaskId = data.todoTaskId;
-
-    if (data.priority !== undefined && data.priority !== current.priority) {
-      const oldPriority = current.priority;
-      const newPriority = data.priority;
-      const count = await collection.countDocuments();
-
-      if (newPriority < 0 || newPriority >= count) {
-        throw new Error(`Priority must be between 0 and ${count - 1}`);
-      }
-
-      if (newPriority < oldPriority) {
-        // Moving up: shift life events in [newPriority, oldPriority) down by 1
-        await collection.updateMany(
-          {
-            priority: { $gte: newPriority, $lt: oldPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: 1 } },
-        );
-      } else {
-        // Moving down: shift life events in (oldPriority, newPriority] up by -1
-        await collection.updateMany(
-          {
-            priority: { $gt: oldPriority, $lte: newPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: -1 } },
-        );
-      }
-
-      updates.priority = newPriority;
+    for (const field of ["name", "date", "lastAddedYear", "done", "todoTaskId"]) {
+      if (data[field] !== undefined) updates[field] = data[field];
     }
 
-    if (Object.keys(updates).length === 0) return current;
+    const priority = await this.resolvePriorityChange(id, current, data.priority);
+    if (priority !== undefined) updates.priority = priority;
 
-    updates.updatedAt = new Date().toISOString();
-
-    const result = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updates },
-      { returnDocument: "after" },
-    );
-    return result;
-  }
-
-  /**
-   * Delete a life event (and shift remaining life event priorities).
-   * The todo task created from it (if any) is untouched — caller decides.
-   * @param {string} id
-   * @returns {Promise<Object|null>} Deleted life event or null
-   */
-  static async delete(id) {
-    const collection = await this.getCollection();
-    const lifeEvent = await this.findById(id);
-    if (!lifeEvent) return null;
-
-    await collection.deleteOne({ _id: new ObjectId(id) });
-
-    // Shift all life events with higher priority down by 1
-    await collection.updateMany(
-      { priority: { $gt: lifeEvent.priority } },
-      { $inc: { priority: -1 } },
-    );
-
-    return lifeEvent;
+    return this.saveUpdates(id, updates, current);
   }
 
   /**
@@ -195,7 +100,7 @@ class LifeEvent {
         $set: {
           done: true,
           todoTaskId: null,
-          updatedAt: new Date().toISOString(),
+          updatedAt: this.stamp(),
         },
       },
     );
@@ -203,4 +108,9 @@ class LifeEvent {
   }
 }
 
-module.exports = { LifeEvent, parseLifeEventDate, baselineLastAddedYear, MAX_DAYS_BY_MONTH };
+module.exports = {
+  LifeEvent,
+  parseLifeEventDate,
+  baselineLastAddedYear,
+  MAX_DAYS_BY_MONTH,
+};

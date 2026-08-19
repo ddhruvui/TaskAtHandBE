@@ -1,6 +1,14 @@
-const { getDatabase } = require("../config/db");
-const { ObjectId } = require("mongodb");
+const BaseModel = require("./BaseModel");
 const Archive = require("./Archive");
+const { isDateString } = require("../utils/validate");
+const {
+  nextPriority,
+  scopeSize,
+  shiftForMove,
+  movePriority,
+  closeGap,
+  openSlot,
+} = require("../utils/priority");
 
 const VALID_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -25,7 +33,7 @@ function validateEcd(ecd) {
 
   switch (type) {
     case "date": {
-      if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      if (!isDateString(value)) {
         throw new Error(
           'ecd.value for type "date" must be a YYYY-MM-DD string',
         );
@@ -88,7 +96,29 @@ function isPushedLater(fromEcd, toEcd) {
   return toEcd.value > fromEcd.value; // YYYY-MM-DD compares lexicographically
 }
 
-class Task {
+/**
+ * A todo item. Tasks are the one collection whose priorities are contiguous
+ * **per header** rather than collection-wide, so they use `utils/priority`
+ * directly with a `{ headerId }` scope instead of extending `OrderedModel`.
+ *
+ * They are also the one collection that stamps `updatedAt` on the neighbours a
+ * move shifts (`stamp: true` below): a task's timestamp is user-facing, and the
+ * clients use it to decide what changed.
+ */
+class Task extends BaseModel {
+  static collectionName = "Tasks";
+  static sortBy = { priority: 1 };
+
+  /** Tasks store real Dates, not the ISO strings the other collections use. */
+  static stamp() {
+    return new Date();
+  }
+
+  /** The priority scope a task belongs to: its header. */
+  static scopeOf(headerId) {
+    return { headerId };
+  }
+
   /**
    * Look up the header for a task, tolerating missing/invalid ids.
    * @param {string} headerId
@@ -102,16 +132,6 @@ class Task {
       return null;
     }
   }
-  /**
-   * Get the Tasks collection for the current environment
-   * @returns {Promise<Collection>}
-   */
-  static async getCollection() {
-    const db = await getDatabase();
-    const useTestDB = process.env.USE_TEST_DB === "true";
-    const collectionName = useTestDB ? "Tasks-Test" : "Tasks";
-    return db.collection(collectionName);
-  }
 
   /**
    * Return all tasks for a header, sorted by priority ascending
@@ -120,17 +140,7 @@ class Task {
    */
   static async findByHeader(headerId) {
     const collection = await this.getCollection();
-    return collection.find({ headerId }).sort({ priority: 1 }).toArray();
-  }
-
-  /**
-   * Find a task by its _id
-   * @param {string} id
-   * @returns {Promise<Object|null>}
-   */
-  static async findById(id) {
-    const collection = await this.getCollection();
-    return collection.findOne({ _id: new ObjectId(id) });
+    return collection.find(this.scopeOf(headerId)).sort(this.sortBy).toArray();
   }
 
   /**
@@ -141,23 +151,15 @@ class Task {
    */
   static async create(data) {
     const collection = await this.getCollection();
-
     const ecd = validateEcd(data.ecd);
+    const scope = this.scopeOf(data.headerId);
 
-    // Count undone tasks in this header to find insertion point
-    const undoneCount = await collection.countDocuments({
-      headerId: data.headerId,
-      done: false,
-    });
+    // The insertion point is "after every undone task", i.e. where the first
+    // done task currently sits — so the done block makes room for it.
+    const undoneCount = await nextPriority(collection, { ...scope, done: false });
+    await openSlot(collection, { ...scope, done: true }, { stamp: true });
 
-    // Shift all done tasks in this header down by 1
-    await collection.updateMany(
-      { headerId: data.headerId, done: true },
-      { $inc: { priority: 1 }, $set: { updatedAt: new Date() } },
-    );
-
-    const now = new Date();
-    const task = {
+    return this.insert({
       name: data.name,
       notes: data.notes || "",
       headerId: data.headerId,
@@ -165,12 +167,8 @@ class Task {
       ecd: ecd || null,
       done: false,
       doneAt: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const result = await collection.insertOne(task);
-    return { _id: result.insertedId, ...task };
+      ...this.timestamps(),
+    });
   }
 
   /**
@@ -187,7 +185,8 @@ class Task {
     const current = await this.findById(id);
     if (!current) return null;
 
-    const updates = { updatedAt: new Date() };
+    const scope = this.scopeOf(current.headerId);
+    const updates = { updatedAt: this.stamp() };
 
     // Field updates
     if (data.name !== undefined) updates.name = data.name;
@@ -217,98 +216,42 @@ class Task {
 
     // Handle done toggle
     if (data.done !== undefined && data.done !== current.done) {
-      if (data.done === true) {
-        // Marking done: move to last position in header
-        const totalInHeader = await collection.countDocuments({
-          headerId: current.headerId,
-        });
-        const oldPriority = current.priority;
-        const newPriority = totalInHeader - 1;
+      // Marking done sends the task to the end of its header; un-doing it
+      // brings it back to just before the first done task. Both are the same
+      // move, only the target differs — and neither is range-checked, because
+      // the target is computed from the header, not sent by the client.
+      const to =
+        data.done === true
+          ? (await scopeSize(collection, scope)) - 1
+          : await nextPriority(collection, { ...scope, done: false });
 
-        // Shift all tasks in header with priority in (oldPriority, newPriority] up by -1
-        await collection.updateMany(
-          {
-            headerId: current.headerId,
-            priority: { $gt: oldPriority, $lte: newPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: -1 }, $set: { updatedAt: new Date() } },
-        );
+      await shiftForMove(collection, {
+        id,
+        from: current.priority,
+        to,
+        scope,
+        stamp: true,
+      });
 
-        updates.priority = newPriority;
-        updates.done = true;
-        updates.doneAt = new Date();
-      } else {
-        // Marking not done: move to just before first done task in header
-        const undoneCount = await collection.countDocuments({
-          headerId: current.headerId,
-          done: false,
-        });
-        const insertPos = undoneCount; // first done task sits here
-        const oldPriority = current.priority;
-
-        // Shift tasks in header with priority in [insertPos, oldPriority) down by 1
-        if (insertPos < oldPriority) {
-          await collection.updateMany(
-            {
-              headerId: current.headerId,
-              priority: { $gte: insertPos, $lt: oldPriority },
-              _id: { $ne: new ObjectId(id) },
-            },
-            { $inc: { priority: 1 }, $set: { updatedAt: new Date() } },
-          );
-        }
-
-        updates.priority = insertPos;
-        updates.done = false;
-        updates.doneAt = null;
-      }
+      updates.priority = to;
+      updates.done = data.done;
+      updates.doneAt = data.done === true ? this.stamp() : null;
     } else if (
       data.priority !== undefined &&
       data.priority !== current.priority
     ) {
-      // Manual priority reorder (no done toggle)
-      const oldPriority = current.priority;
-      const newPriority = data.priority;
-      const totalInHeader = await collection.countDocuments({
-        headerId: current.headerId,
+      // Manual priority reorder (no done toggle) — this one *is* range-checked,
+      // the target came from the client.
+      updates.priority = await movePriority(collection, {
+        id,
+        from: current.priority,
+        to: data.priority,
+        scope,
+        stamp: true,
       });
-
-      if (newPriority < 0 || newPriority >= totalInHeader) {
-        throw new Error(`Priority must be between 0 and ${totalInHeader - 1}`);
-      }
-
-      if (newPriority < oldPriority) {
-        // Moving up: shift tasks in [newPriority, oldPriority) down by 1
-        await collection.updateMany(
-          {
-            headerId: current.headerId,
-            priority: { $gte: newPriority, $lt: oldPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: 1 }, $set: { updatedAt: new Date() } },
-        );
-      } else {
-        // Moving down: shift tasks in (oldPriority, newPriority] up by -1
-        await collection.updateMany(
-          {
-            headerId: current.headerId,
-            priority: { $gt: oldPriority, $lte: newPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: -1 }, $set: { updatedAt: new Date() } },
-        );
-      }
-
-      updates.priority = newPriority;
     }
 
-    const result = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updates },
-      { returnDocument: "after" },
-    );
-    return result;
+    return this.applyUpdate(id, updates);
   }
 
   /**
@@ -344,13 +287,11 @@ class Task {
       });
     }
 
-    await collection.deleteOne({ _id: new ObjectId(id) });
-
-    // Shift tasks in same header with higher priority up by -1
-    await collection.updateMany(
-      { headerId: task.headerId, priority: { $gt: task.priority } },
-      { $inc: { priority: -1 }, $set: { updatedAt: new Date() } },
-    );
+    await this.removeById(id);
+    await closeGap(collection, task.priority, {
+      scope: this.scopeOf(task.headerId),
+      stamp: true,
+    });
 
     return task;
   }
@@ -366,30 +307,20 @@ class Task {
    */
   static async deleteByHeader(headerId) {
     const collection = await this.getCollection();
+    const scope = this.scopeOf(headerId);
 
     const doneTasks = await collection
-      .find({ headerId, done: true })
+      .find({ ...scope, done: true })
       .toArray();
     if (doneTasks.length > 0) {
       const header = await this.getHeaderForTask(headerId);
       const headerName = header ? header.name : null;
       await Archive.logMany(
-        doneTasks.map((task) => ({
-          type: "task_completed",
-          taskId: task._id.toString(),
-          taskName: task.name,
-          headerId: task.headerId,
-          headerName,
-          ecdType: task.ecd ? task.ecd.type : null,
-          plannedFor:
-            task.ecd && task.ecd.type === "date" ? task.ecd.value : null,
-          taskCreatedAt: task.createdAt || null,
-          doneAt: task.doneAt || null,
-        })),
+        doneTasks.map((task) => Archive.completionEvent(task, headerName)),
       );
     }
 
-    const result = await collection.deleteMany({ headerId });
+    const result = await collection.deleteMany(scope);
     return result.deletedCount;
   }
 }

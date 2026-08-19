@@ -1,4 +1,4 @@
-const { getDatabase } = require("../config/db");
+const BaseModel = require("./BaseModel");
 
 /**
  * The nightly snapshot of exact archive stats — habit streaks and completion
@@ -12,26 +12,30 @@ const { getDatabase } = require("../config/db");
  *
  * Shape: { key: "latest", computedAt, periodDays, eventCount, stats }
  */
-class InsightStats {
-  static async getCollection() {
-    const db = await getDatabase();
-    const useTestDB = process.env.USE_TEST_DB === "true";
-    const collectionName = useTestDB ? "InsightStats-Test" : "InsightStats";
-    return db.collection(collectionName);
-  }
+class InsightStats extends BaseModel {
+  static collectionName = "InsightStats";
+
+  /** The one document this collection ever holds. */
+  static KEY = "latest";
 
   /** Overwrite the snapshot and return it */
   static async save({ computedAt, periodDays, eventCount, stats }) {
     const collection = await this.getCollection();
-    const doc = { key: "latest", computedAt, periodDays, eventCount, stats };
-    await collection.replaceOne({ key: "latest" }, doc, { upsert: true });
+    const doc = {
+      key: this.KEY,
+      computedAt,
+      periodDays,
+      eventCount,
+      stats,
+    };
+    await collection.replaceOne({ key: this.KEY }, doc, { upsert: true });
     return doc;
   }
 
   /** The stored snapshot, or null if the cron has never refreshed it */
   static async latest() {
     const collection = await this.getCollection();
-    return collection.findOne({ key: "latest" });
+    return collection.findOne({ key: this.KEY });
   }
 }
 

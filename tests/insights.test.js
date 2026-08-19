@@ -326,21 +326,44 @@ describe("Insights", () => {
   });
 
   describe("POST /insights/generate", () => {
-    const savedKey = process.env.ANTHROPIC_API_KEY;
+    const savedKey = process.env.GEMINI_API_KEY;
 
     afterEach(() => {
-      if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = savedKey;
+      if (savedKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = savedKey;
     });
 
-    test("returns 503 when ANTHROPIC_API_KEY is not configured", async () => {
-      delete process.env.ANTHROPIC_API_KEY;
+    test("defaults to a Flash model and honours the GEMINI_MODEL override", () => {
+      const {
+        insightModel,
+        DEFAULT_INSIGHT_MODEL,
+      } = require("../src/services/insightsService");
+      const original = process.env.GEMINI_MODEL;
+      delete process.env.GEMINI_MODEL;
+
+      try {
+        // Pro carries no free-tier quota (2.5-pro 404s for new users,
+        // 3.1-pro-preview 429s on the first call), so the default must be Flash.
+        expect(insightModel()).toBe(DEFAULT_INSIGHT_MODEL);
+        expect(DEFAULT_INSIGHT_MODEL).toContain("flash");
+
+        // Read per call, so a restart is enough to move to Pro once billed.
+        process.env.GEMINI_MODEL = "gemini-3.1-pro-preview";
+        expect(insightModel()).toBe("gemini-3.1-pro-preview");
+      } finally {
+        if (original === undefined) delete process.env.GEMINI_MODEL;
+        else process.env.GEMINI_MODEL = original;
+      }
+    });
+
+    test("returns 503 when GEMINI_API_KEY is not configured", async () => {
+      delete process.env.GEMINI_API_KEY;
       const res = await request(app).post("/insights/generate").expect(503);
-      expect(res.body.error).toContain("ANTHROPIC_API_KEY");
+      expect(res.body.error).toContain("GEMINI_API_KEY");
     });
 
     test("returns 404 when the archive is empty (no API call is made)", async () => {
-      process.env.ANTHROPIC_API_KEY = "test-dummy-key";
+      process.env.GEMINI_API_KEY = "test-dummy-key";
       const res = await request(app).post("/insights/generate").expect(404);
       expect(res.body.error).toBeDefined();
     });
@@ -363,9 +386,9 @@ describe("Insights", () => {
       expect(res.body.error).toBeDefined();
     });
 
-    test("stores streaks without any Anthropic key configured", async () => {
-      const savedKey = process.env.ANTHROPIC_API_KEY;
-      delete process.env.ANTHROPIC_API_KEY;
+    test("stores streaks without any Gemini key configured", async () => {
+      const savedKey = process.env.GEMINI_API_KEY;
+      delete process.env.GEMINI_API_KEY;
       try {
         await seedArchive(streakEvents);
         await refreshStatsSnapshot();
@@ -378,8 +401,8 @@ describe("Insights", () => {
         expect(res.body.habits[0].currentStreak).toBe(2);
         expect(res.body.habits[0].completionRate).toBe(67);
       } finally {
-        if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-        else process.env.ANTHROPIC_API_KEY = savedKey;
+        if (savedKey === undefined) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = savedKey;
       }
     });
 

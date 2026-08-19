@@ -203,6 +203,36 @@ describe("Projects CRUD", () => {
         .send({ name: "Bad tasks", tasks: [{ name: "A", notes: 42 }] })
         .expect(400);
     });
+
+    test("rejects tasks with a non-string todoTaskId", async () => {
+      await request(app)
+        .post("/projects")
+        .send({ name: "Bad tasks", tasks: [{ name: "A", todoTaskId: 7 }] })
+        .expect(400);
+    });
+
+    test("normalizes a blank todoTaskId to null", async () => {
+      const res = await request(app)
+        .post("/projects")
+        .send({
+          name: "Blank links",
+          tasks: [
+            { name: "A", todoTaskId: "" },
+            { name: "B", todoTaskId: "   " },
+            { name: "C", todoTaskId: null },
+          ],
+        })
+        .expect(201);
+
+      expect(res.body.tasks.map((t) => t.todoTaskId)).toEqual([
+        null,
+        null,
+        null,
+      ]);
+
+      // Later tests in this suite count the projects created above.
+      await request(app).delete(`/projects/${res.body._id}`).expect(200);
+    });
   });
 
   describe("GET /projects", () => {
@@ -340,6 +370,23 @@ describe("Projects CRUD", () => {
         .put(`/projects/${projectId}`)
         .send({ priority: -1 })
         .expect(400);
+    });
+
+    test("normalizes a blank todoTaskId to null on update", async () => {
+      const created = await request(app)
+        .post("/projects")
+        .send({ name: "Relink", tasks: [{ name: "A", todoTaskId: "abc123" }] })
+        .expect(201);
+
+      const res = await request(app)
+        .put(`/projects/${created.body._id}`)
+        .send({ tasks: [{ name: "A", todoTaskId: "  " }] })
+        .expect(200);
+
+      expect(res.body.tasks[0].todoTaskId).toBeNull();
+
+      // Later tests in this suite count the projects created earlier.
+      await request(app).delete(`/projects/${created.body._id}`).expect(200);
     });
 
     test("rejects tasks with an invalid date", async () => {

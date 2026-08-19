@@ -1,130 +1,79 @@
 const Call = require("../models/Call");
+const { route, requireFound } = require("../utils/http");
+const {
+  requiredString,
+  optionalString,
+  optionalBoolean,
+  oneOf,
+  definedFields,
+} = require("../utils/validate");
 
 const VALID_FREQUENCIES = ["biweekly", "monthly"];
+const FREQUENCY_MESSAGE = 'Call frequency must be "biweekly" or "monthly"';
+
+/** A call cadence, when the field is present. */
+function optionalFrequency(value) {
+  if (value === undefined) return undefined;
+  return oneOf(value, VALID_FREQUENCIES, FREQUENCY_MESSAGE);
+}
 
 /**
  * GET /calls
  * Returns all calls sorted by createdAt ascending (order added)
  */
-const getAllCalls = async (req, res) => {
-  try {
-    const calls = await Call.findAll();
-    res.json(calls);
-  } catch (error) {
-    console.error("Error fetching calls:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch calls", message: error.message });
-  }
-};
+const getAllCalls = route(
+  { action: "fetching calls", failure: "Failed to fetch calls" },
+  async (req, res) => {
+    res.json(await Call.findAll());
+  },
+);
 
 /**
  * POST /calls
  * Creates a new call with a name and frequency ("biweekly" | "monthly")
  */
-const createCall = async (req, res) => {
-  try {
-    const { name, frequency } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Call name must be a non-empty string" });
-    }
-
-    if (!VALID_FREQUENCIES.includes(frequency)) {
-      return res
-        .status(400)
-        .json({ error: 'Call frequency must be "biweekly" or "monthly"' });
-    }
-
-    const call = await Call.create({ name: name.trim(), frequency });
-    res.status(201).json(call);
-  } catch (error) {
-    console.error("Error creating call:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to create call", message: error.message });
-  }
-};
+const createCall = route(
+  { action: "creating call", failure: "Failed to create call" },
+  async (req, res) => {
+    const name = requiredString(req.body.name, "Call name");
+    const frequency = oneOf(
+      req.body.frequency,
+      VALID_FREQUENCIES,
+      FREQUENCY_MESSAGE,
+    );
+    res.status(201).json(await Call.create({ name, frequency }));
+  },
+);
 
 /**
  * PUT /calls/:id
  * Updates a call's name, frequency, and/or done state
  */
-const updateCall = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, frequency, done } = req.body;
+const updateCall = route(
+  { action: "updating call", failure: "Failed to update call" },
+  async (req, res) => {
+    const updates = definedFields({
+      name: optionalString(req.body.name, "Call name"),
+      frequency: optionalFrequency(req.body.frequency),
+      done: optionalBoolean(req.body.done, "Call done"),
+    });
 
-    const updates = {};
-
-    if (name !== undefined) {
-      if (typeof name !== "string" || name.trim() === "") {
-        return res
-          .status(400)
-          .json({ error: "Call name must be a non-empty string" });
-      }
-      updates.name = name.trim();
-    }
-
-    if (frequency !== undefined) {
-      if (!VALID_FREQUENCIES.includes(frequency)) {
-        return res
-          .status(400)
-          .json({ error: 'Call frequency must be "biweekly" or "monthly"' });
-      }
-      updates.frequency = frequency;
-    }
-
-    if (done !== undefined) {
-      if (typeof done !== "boolean") {
-        return res.status(400).json({ error: "Call done must be a boolean" });
-      }
-      updates.done = done;
-    }
-
-    const updated = await Call.update(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({ error: "Call not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating call:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to update call", message: error.message });
-  }
-};
+    const updated = await Call.update(req.params.id, updates);
+    res.json(requireFound(updated, "Call not found"));
+  },
+);
 
 /**
  * DELETE /calls/:id
  * Deletes a call
  */
-const deleteCall = async (req, res) => {
-  try {
+const deleteCall = route(
+  { action: "deleting call", failure: "Failed to delete call" },
+  async (req, res) => {
     const { id } = req.params;
-
-    const deleted = await Call.delete(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Call not found" });
-    }
-
+    requireFound(await Call.delete(id), "Call not found");
     res.json({ deleted: id });
-  } catch (error) {
-    console.error("Error deleting call:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete call", message: error.message });
-  }
-};
+  },
+);
 
-module.exports = {
-  getAllCalls,
-  createCall,
-  updateCall,
-  deleteCall,
-};
+module.exports = { getAllCalls, createCall, updateCall, deleteCall };

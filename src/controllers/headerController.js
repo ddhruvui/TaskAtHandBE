@@ -4,49 +4,50 @@ const {
   applyProjectHeaderOrder,
   isValidObjectId,
 } = require("../services/headerOrder");
+const {
+  route,
+  requireFound,
+  isPriorityRangeError,
+} = require("../utils/http");
+const {
+  ValidationError,
+  requiredString,
+  optionalString,
+  optionalPriority,
+  definedFields,
+} = require("../utils/validate");
 
 /**
  * GET /headers
  * Returns all headers sorted by priority ascending
  */
-const getAllHeaders = async (req, res) => {
-  try {
-    const headers = await Header.findAll();
-    res.json(headers);
-  } catch (error) {
-    console.error("Error fetching headers:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch headers", message: error.message });
-  }
-};
+const getAllHeaders = route(
+  { action: "fetching headers", failure: "Failed to fetch headers" },
+  async (req, res) => {
+    res.json(await Header.findAll());
+  },
+);
 
 /**
  * POST /headers
  * Creates a new header (priority auto-assigned as total headers count)
  */
-const createHeader = async (req, res) => {
-  try {
-    const { name, projectId } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Header name must be a non-empty string" });
-    }
+const createHeader = route(
+  { action: "creating header", failure: "Failed to create header" },
+  async (req, res) => {
+    const name = requiredString(req.body.name, "Header name");
+    const { projectId } = req.body;
 
     if (
       projectId !== undefined &&
       projectId !== null &&
       !isValidObjectId(projectId)
     ) {
-      return res
-        .status(400)
-        .json({ error: "projectId must be a valid id string or null" });
+      throw new ValidationError("projectId must be a valid id string or null");
     }
 
     const { header, created } = await Header.create({
-      name: name.trim(),
+      name,
       projectId: projectId || null,
     });
 
@@ -59,87 +60,45 @@ const createHeader = async (req, res) => {
     }
 
     res.status(201).json(header);
-  } catch (error) {
-    console.error("Error creating header:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to create header", message: error.message });
-  }
-};
+  },
+);
 
 /**
  * PUT /headers/:id
  * Updates a header's name and/or priority
  */
-const updateHeader = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, priority } = req.body;
+const updateHeader = route(
+  {
+    action: "updating header",
+    failure: "Failed to update header",
+    badRequest: [isPriorityRangeError],
+  },
+  async (req, res) => {
+    const updates = definedFields({
+      name: optionalString(req.body.name, "Header name"),
+      priority: optionalPriority(req.body.priority),
+    });
 
-    if (
-      name !== undefined &&
-      (typeof name !== "string" || name.trim() === "")
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Header name must be a non-empty string" });
-    }
-
-    if (
-      priority !== undefined &&
-      (!Number.isInteger(priority) || priority < 0)
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Priority must be a non-negative integer" });
-    }
-
-    const updates = {};
-    if (name !== undefined) updates.name = name.trim();
-    if (priority !== undefined) updates.priority = priority;
-
-    const updated = await Header.update(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({ error: "Header not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating header:", error);
-    if (error.message.startsWith("Priority must be")) {
-      return res.status(400).json({ error: error.message });
-    }
-    res
-      .status(500)
-      .json({ error: "Failed to update header", message: error.message });
-  }
-};
+    const updated = await Header.update(req.params.id, updates);
+    res.json(requireFound(updated, "Header not found"));
+  },
+);
 
 /**
  * DELETE /headers/:id
  * Deletes a header and all its tasks. Shifts remaining header priorities.
  */
-const deleteHeader = async (req, res) => {
-  try {
+const deleteHeader = route(
+  { action: "deleting header", failure: "Failed to delete header" },
+  async (req, res) => {
     const { id } = req.params;
 
     // Delete all tasks for this header first
     const tasksDeleted = await Task.deleteByHeader(id);
-
-    const deleted = await Header.delete(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Header not found" });
-    }
+    requireFound(await Header.delete(id), "Header not found");
 
     res.json({ deleted: id, tasksDeleted });
-  } catch (error) {
-    console.error("Error deleting header:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete header", message: error.message });
-  }
-};
+  },
+);
 
 module.exports = { getAllHeaders, createHeader, updateHeader, deleteHeader };

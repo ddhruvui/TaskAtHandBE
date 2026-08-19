@@ -1,174 +1,128 @@
 const { Task } = require("../models/Task");
 const Header = require("../models/Header");
+const {
+  route,
+  requireFound,
+  isPriorityRangeError,
+  isEcdError,
+} = require("../utils/http");
+const {
+  ValidationError,
+  requiredString,
+  optionalString,
+  optionalText,
+  optionalBoolean,
+  optionalPriority,
+  definedFields,
+} = require("../utils/validate");
+
+/** The header a task is being filed under must exist (and its id be readable). */
+async function requireHeader(headerId) {
+  return requireFound(
+    await Header.findById(headerId).catch(() => null),
+    "Header not found",
+  );
+}
 
 /**
  * GET /tasks?headerId=:headerId
  * Returns all tasks for a given header sorted by priority ascending
  */
-const getTasksByHeader = async (req, res) => {
-  try {
+const getTasksByHeader = route(
+  { action: "fetching tasks", failure: "Failed to fetch tasks" },
+  async (req, res) => {
     const { headerId } = req.query;
-
     if (!headerId) {
-      return res
-        .status(400)
-        .json({ error: "headerId query parameter is required" });
+      throw new ValidationError("headerId query parameter is required");
     }
 
-    // Verify header exists
-    const header = await Header.findById(headerId).catch(() => null);
-    if (!header) {
-      return res.status(404).json({ error: "Header not found" });
-    }
-
-    const tasks = await Task.findByHeader(headerId);
-    res.json(tasks);
-  } catch (error) {
-    console.error("Error fetching tasks:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch tasks", message: error.message });
-  }
-};
+    await requireHeader(headerId);
+    res.json(await Task.findByHeader(headerId));
+  },
+);
 
 /**
  * POST /tasks
  * Creates a new task. Priority is assigned just before the first done task.
  */
-const createTask = async (req, res) => {
-  try {
-    const { name, notes, headerId, ecd } = req.body;
-
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res
-        .status(400)
-        .json({ error: "Task name must be a non-empty string" });
-    }
+const createTask = route(
+  {
+    action: "creating task",
+    failure: "Failed to create task",
+    badRequest: [isEcdError],
+  },
+  async (req, res) => {
+    const { headerId, notes, ecd } = req.body;
+    const name = requiredString(req.body.name, "Task name");
 
     if (!headerId || typeof headerId !== "string") {
-      return res.status(400).json({ error: "headerId is required" });
+      throw new ValidationError("headerId is required");
     }
 
-    // Verify header exists
-    const header = await Header.findById(headerId).catch(() => null);
-    if (!header) {
-      return res.status(404).json({ error: "Header not found" });
-    }
+    await requireHeader(headerId);
 
     const task = await Task.create({
-      name: name.trim(),
+      name,
       notes: notes || "",
       headerId,
       ecd: ecd !== undefined ? ecd : null,
     });
 
     res.status(201).json(task);
-  } catch (error) {
-    console.error("Error creating task:", error);
-    if (error.message.startsWith("ecd") || error.message.includes("ecd.")) {
-      return res.status(400).json({ error: error.message });
-    }
-    res
-      .status(500)
-      .json({ error: "Failed to create task", message: error.message });
-  }
-};
+  },
+);
 
 /**
  * PUT /tasks/:id
  * Updates a task (fields, done toggle, or manual priority change)
  */
-const updateTask = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, notes, ecd, done, priority, reason } = req.body;
+const updateTask = route(
+  {
+    action: "updating task",
+    failure: "Failed to update task",
+    badRequest: [isPriorityRangeError, isEcdError],
+  },
+  async (req, res) => {
+    const { notes, ecd } = req.body;
 
-    if (
-      name !== undefined &&
-      (typeof name !== "string" || name.trim() === "")
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Task name must be a non-empty string" });
-    }
+    const updates = definedFields({
+      name: optionalString(req.body.name, "Task name"),
+      done: optionalBoolean(req.body.done, "done"),
+      priority: optionalPriority(req.body.priority),
+      reason: optionalText(req.body.reason, "reason"),
+      notes,
+      ecd,
+    });
 
-    if (done !== undefined && typeof done !== "boolean") {
-      return res.status(400).json({ error: "done must be a boolean" });
-    }
-
-    if (
-      priority !== undefined &&
-      (!Number.isInteger(priority) || priority < 0)
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Priority must be a non-negative integer" });
-    }
-
-    if (reason !== undefined && typeof reason !== "string") {
-      return res.status(400).json({ error: "reason must be a string" });
-    }
-
-    const updates = {};
-    if (name !== undefined) updates.name = name.trim();
-    if (notes !== undefined) updates.notes = notes;
-    if (ecd !== undefined) updates.ecd = ecd;
-    if (done !== undefined) updates.done = done;
-    if (priority !== undefined) updates.priority = priority;
     // reason is not a task field: it rides along only to annotate the
     // task_rescheduled archive event when an ECD change is a postpone.
-    if (reason !== undefined && reason.trim() !== "") {
-      updates.reason = reason.trim();
+    if (updates.reason !== undefined) {
+      const trimmed = updates.reason.trim();
+      if (trimmed === "") delete updates.reason;
+      else updates.reason = trimmed;
     }
 
-    const updated = await Task.update(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({ error: "Task not found" });
-    }
-
-    res.json(updated);
-  } catch (error) {
-    console.error("Error updating task:", error);
-    if (
-      error.message.startsWith("Priority must be") ||
-      error.message.startsWith("ecd") ||
-      error.message.includes("ecd.")
-    ) {
-      return res.status(400).json({ error: error.message });
-    }
-    res
-      .status(500)
-      .json({ error: "Failed to update task", message: error.message });
-  }
-};
+    const updated = await Task.update(req.params.id, updates);
+    res.json(requireFound(updated, "Task not found"));
+  },
+);
 
 /**
  * DELETE /tasks/:id
  * Deletes a task and reorders remaining tasks in the same header
  */
-const deleteTask = async (req, res) => {
-  try {
+const deleteTask = route(
+  { action: "deleting task", failure: "Failed to delete task" },
+  async (req, res) => {
     const { id } = req.params;
-    const { reason } = req.body || {};
+    const reason = optionalText((req.body || {}).reason, "reason");
 
-    if (reason !== undefined && typeof reason !== "string") {
-      return res.status(400).json({ error: "reason must be a string" });
-    }
-
-    const deleted = await Task.delete(id, reason ? reason.trim() : undefined);
-
-    if (!deleted) {
-      return res.status(404).json({ error: "Task not found" });
-    }
-
+    requireFound(
+      await Task.delete(id, reason ? reason.trim() : undefined),
+      "Task not found",
+    );
     res.json({ deleted: id });
-  } catch (error) {
-    console.error("Error deleting task:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to delete task", message: error.message });
-  }
-};
+  },
+);
 
 module.exports = { getTasksByHeader, createTask, updateTask, deleteTask };

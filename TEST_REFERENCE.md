@@ -233,6 +233,8 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | rejects tasks with an invalid date format                 | `{ date: "1/8/2026" }` → 400 (must be `YYYY-MM-DD` or null)                    |
 | rejects tasks with a non-boolean done                     | `{ done: "yes" }` → 400                                                        |
 | rejects tasks with non-string notes                       | `{ notes: 42 }` → 400 (notes must be a string)                                 |
+| rejects tasks with a non-string todoTaskId                 | `{ todoTaskId: 7 }` → 400 (must be a string or null)                           |
+| normalizes a blank todoTaskId to null                      | `""`, `"   "` and `null` all store as `null` — a blank link is no link         |
 | returns all projects sorted by priority ascending         | `GET /projects` array is ascending by `priority` (0, 1, 2)                     |
 | updates project name                                      | `PUT /projects/:id { name }` → 200, tasks untouched                            |
 | replaces tasks wholesale (dated first, links, done → bottom) | `PUT` with a full list persists dates/`todoTaskId`, lifts the dated undone task above the undated one and re-sorts done tasks to the bottom |
@@ -243,6 +245,7 @@ Projects CRUD — long-term projects with ordered task lists, header-style prior
 | moves a project down and shifts others                    | Moving priority 0→2 shifts the others to 0, 1                                  |
 | rejects an out-of-range priority                          | `{ priority: 99 }` → 400                                                       |
 | rejects a negative priority                               | `{ priority: -1 }` → 400                                                       |
+| normalizes a blank todoTaskId to null on update            | `PUT` with `todoTaskId: "  "` clears an existing link to `null`                |
 | rejects tasks with an invalid date (PUT)                  | `{ date: "2026/08/01" }` → 400                                                 |
 | rejects empty name (PUT)                                  | `{ name: "" }` → 400                                                           |
 | returns 404 for unknown id (PUT)                          | Fake ObjectId → 404                                                            |
@@ -536,7 +539,7 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details response matches /cron/status exactly | Both endpoints return identical JSON for the same run                                           |
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
-| every run refreshes the snapshot and reports statsRefreshed | No `ANTHROPIC_API_KEY` set → `statsRefreshed: true` and `GET /insights/stats/latest` returns a snapshot with `computedAt` and `periodDays: 28` |
+| every run refreshes the snapshot and reports statsRefreshed | No `GEMINI_API_KEY` set → `statsRefreshed: true` and `GET /insights/stats/latest` returns a snapshot with `computedAt` and `periodDays: 28` |
 | streaks are updated on a non-Friday run, with no report generated | Two archived habit hits + a Thursday run → no `insightGenerated` key, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
 | skipInsights does not suppress the snapshot             | `{ skipInsights: true }` → `statsRefreshed: true` and the snapshot endpoint still answers 200 (the flag only avoids the paid API call) |
 | skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ date: Fri 2026-07-24, skipInsights: true }` → `generateInsights` not called, no `insightGenerated`/`insightSkipped` keys |
@@ -545,6 +548,14 @@ Tests the four cron HTTP endpoints.
 | skips a second run on a Friday that already reported    | Report seeded on the Friday itself → `generateInsights` not called, `insightSkipped: "not-due"` (no second API call) |
 | runs the report on the Friday after the last one        | Report seeded 7 days before the Friday run date → `generateInsights` called once, `insightGenerated: true` |
 | the rest of the cron still runs on a day the report is skipped | Thursday run → `insightGenerated: false` but `ranAt` and the task/header counters are all present |
+
+### Archive retention counters (step 10)
+
+| Test                                                  | What it checks                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------- |
+| reports the retention counters on every run           | `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised` are always numbers |
+| archiveCutoff is null when nothing was old enough to prune | A fresh event leaves `archiveCutoff: null`                     |
+| archiveCutoff is the UTC day events had to predate    | A 60-day-old event is pruned and the cutoff is a `YYYY-MM-DD` string |
 
 ---
 
@@ -610,6 +621,22 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | excludes events older than the requested window       | `?days=28` drops a 40-day-old event                 |
 | falls back to the default period for an invalid days param | `?days=0` behaves like the default 28            |
 
+### Archive retention (cron step 10)
+
+| Test                                                    | What it checks                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| keeps events inside the retention window                | A 5-day-old event survives; `archiveEventsPruned: 0`, `archiveCutoff: null` |
+| folds an expired event into its month and deletes the raw row | A 45-day-old event becomes an `ArchiveSummary` month and leaves `TaskArchive` |
+| counts habit hits and misses, and rolls them up per header | `scheduled`/`completed` per habit, `reschedules`, and the `byHeader` rollup |
+| applies the on-time rule to completed one-off tasks     | Done on the planned day is on time; done after it is late            |
+| a second run neither double-counts nor resurrects anything | Re-running the cron prunes 0 and leaves the month's counts unchanged |
+| re-folding a day already summarised counts it once      | `foldEvents` on the same events returns `folded: 0` — the crash-between-fold-and-delete case |
+| splits a batch across the months it belongs to          | Events either side of a month boundary land in their own summaries    |
+| GET /archive/summary returns the months oldest first    | `["2026-06", "2026-07"]`                                              |
+| GET /archive/summary is an empty array before anything is pruned | `[]`, not a 404                                              |
+| retention can never be set inside the insights window   | `ARCHIVE_RETENTION_DAYS=1` is clamped to 28, warns, and prunes nothing inside the window |
+| a shorter-than-default but still safe window is honoured | `ARCHIVE_RETENTION_DAYS=29` prunes the 40-day-old event, keeps the 20-day-old one |
+
 ---
 
 ## tests/insights.test.js
@@ -653,7 +680,8 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events), t
 
 | Test                                                        | What it checks                                       |
 | ------------------------------------------------------------ | ------------------------------------------------------ |
-| returns 503 when ANTHROPIC_API_KEY is not configured        | Key removed from env → 503 with explanatory error      |
+| returns 503 when GEMINI_API_KEY is not configured           | Key removed from env → 503 with explanatory error      |
+| defaults to a Flash model and honours the GEMINI_MODEL override | `insightModel()` returns the Flash default; `GEMINI_MODEL` is re-read per call, so a restart moves to Pro without a deploy |
 | returns 404 when the archive is empty (no API call is made) | Dummy key + empty archive → 404 before any API request |
 
 ### GET /insights/stats/latest — nightly snapshot (no AI)
@@ -661,7 +689,7 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events), t
 | Test                                                        | What it checks                                                                 |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | returns 404 before the cron has ever written one            | Empty `InsightStats` collection → 404 `{ error }`                               |
-| stores streaks without any Anthropic key configured         | Key deleted from env + `refreshStatsSnapshot()` → 200 with `computedAt`, `eventCount: 3`, `currentStreak: 2`, `completionRate: 67` |
+| stores streaks without any Gemini key configured         | Key deleted from env + `refreshStatsSnapshot()` → 200 with `computedAt`, `eventCount: 3`, `currentStreak: 2`, `completionRate: 67` |
 | matches what the live stats endpoint computes               | Snapshot body minus `computedAt` deep-equals `GET /insights/stats`               |
 | a later refresh overwrites the snapshot rather than stacking | Second refresh after a missed day → still 1 document, `eventCount: 4`, `currentStreak: 0` |
 | records an empty archive instead of leaving stale numbers behind | Archive wiped then refreshed → `eventCount: 0`, `habits: []`                |
@@ -714,3 +742,118 @@ Tests the `doneAt` timestamp lifecycle across user toggles and cron resets.
 | GET /cron/details returns 404 when cron has not run in this process | The never-ran branch of `/cron/details` (cron never runs in this file) |
 | unknown routes return 404 Route not found               | The catch-all 404 handler                               |
 | malformed JSON bodies hit the error middleware          | Invalid JSON → 500 `"Something went wrong!"`            |
+
+---
+
+## tests/utils.test.js
+
+The shared utility layer (`src/utils/`) tested directly, without going through
+an endpoint. Everything here is a rule the rest of the backend used to repeat
+by hand — see [`wiki/Home.md`](wiki/Home.md).
+
+### utils/collections
+
+| Test                                              | What it checks                                                        |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| appends -Test only when USE_TEST_DB is on         | `collectionName("Tasks")` → `"Tasks-Test"` / `"Tasks"`                  |
+| reads the env var per call, not at require time   | Flipping `USE_TEST_DB` after load changes the result (the test setup relies on this) |
+| getCollection resolves the environment's collection | The live handle's name is `Tasks-Test` under the test env             |
+
+### utils/documents
+
+| Test                                                    | What it checks                                                  |
+| --------------------------------------------------------- | ----------------------------------------------------------------- |
+| toObjectId accepts a valid id string and throws on a bad one | Round-trips a real id; a malformed one throws                |
+| findById reads by string id and returns null for a miss | The models' "never throw for a miss" contract                     |
+| findAllSorted applies the given sort                    | `{ name: 1 }` → `a, b, c`                                         |
+| updateById returns the document after the write         | `returnDocument: "after"` semantics                               |
+| deleteById removes exactly one document                 | 3 rows → 2                                                        |
+
+### utils/ordering
+
+| Test                                                   | What it checks                                                     |
+| -------------------------------------------------------- | -------------------------------------------------------------------- |
+| orderDoneLast puts undone first and done last          | The rule, with no comparator                                         |
+| orderDoneLast sorts the undone half by the comparator only | Done items are never re-sorted                                    |
+| orderDoneLast does not mutate its input                | The input array is untouched                                         |
+| ascendingBy sorts Infinity keys last and keeps their order | No-ECD tasks sink; `Infinity - Infinity = NaN` preserves ties      |
+| matchingFirst is stable within each group              | Dated undone above undated undone, both in input order               |
+| groupBy preserves input order inside each group        | Cron step 7's per-header bucketing                                   |
+| priorityBulkOps wraps only the moved documents as updateOne ops | Ready-to-send `bulkWrite` shape                              |
+| an already contiguous list produces no writes          | An idempotent re-run writes nothing                                  |
+
+### utils/priority
+
+Runs against a real collection seeded with four rows in `H1` and two in `H2`.
+
+| Test                                                  | What it checks                                                        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| nextPriority is the size of the scope                 | Per-scope and collection-wide append positions                          |
+| scopeSize counts only the scope                       | `{ headerId }` isolation                                                |
+| shiftForMove moving up slides the block down by one   | `t3` 3→1 → `t0, t3, t1, t2`                                             |
+| shiftForMove moving down slides the block up by one   | `t0` 0→2 → `t1, t2, t0, t3`                                             |
+| shiftForMove is a no-op when the target equals the source | 0 writes, layout unchanged                                           |
+| shiftForMove never touches another scope              | `H2` is untouched by an `H1` move                                       |
+| movePriority accepts both ends of the range           | `0` and `n-1` are valid targets                                         |
+| movePriority rejects a negative target with the shared message | `Priority must be between 0 and n-1` wording                  |
+| movePriority range-checks before shifting anything    | An out-of-range target throws **and** leaves the list untouched         |
+| movePriority returns the new priority                 | The value the caller stores on the document                             |
+| closeGap pulls everything after the hole up by one    | Deleting priority 1 → remaining are 0, 1, 2                             |
+| openSlot pushes the selected rows down by one         | Making room mid-list (`Task.create`)                                    |
+| stamp writes updatedAt onto the shifted neighbours only when asked | Tasks stamp shifted neighbours; ordered collections deliberately do not |
+
+### utils/validate
+
+| Test                                                     | What it checks                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| requiredString trims and rejects every empty shape       | `undefined`, `null`, `""`, whitespace, numbers, objects all → 400 message |
+| optionalString lets undefined through but not a blank value | The create/update asymmetry                                      |
+| optionalText allows an empty string but not a non-string | Notes and reasons may be `""`                                       |
+| optionalBoolean accepts false and rejects truthy non-booleans | `false` is a value, `"true"` is not                            |
+| optionalPriority requires a non-negative integer         | `-1`, `1.5`, `"2"`, `null` → 400                                    |
+| optionalStringOrNull keeps null as a real value          | `null` unlinks; `undefined` means "not sent"                        |
+| dateStringOrNull defaults absent to null and validates the format | `YYYY-MM-DD` only                                           |
+| isDateString matches only YYYY-MM-DD strings             | Used by `Task.validateEcd`                                          |
+| oneOf reports the caller's own message                   | Wordings differ too much to generate                                |
+| requireObject rejects null and arrays                    | Goal steps / project tasks list-entry guard                         |
+| requireArray can demand a non-empty array                | `{ nonEmpty: true }`                                                |
+| definedFields drops absent fields and keeps falsy ones   | `0`, `false`, `null`, `""` survive; only `undefined` is dropped     |
+| definedFields reports the first invalid field in source order | The object literal's order is the validation order             |
+
+### utils/http
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| requireFound passes a value through and throws on a miss | `null`/`undefined` → a 404-mapped error carrying the given message   |
+| isPriorityRangeError and isEcdError match the model wordings | The two `badRequest` predicates                                 |
+| route passes a successful handler straight through      | No interference on the happy path                                    |
+| route answers a ValidationError with 400 and does not log | A bad request is not a server error                                |
+| route answers a NotFoundError with 404 and does not log | Same for a miss                                                      |
+| route logs then answers 400 for a matched model error   | `Error updating header:` is logged **first**, then 400               |
+| route logs then answers 500 for anything unmatched      | `{ error: failure, message }` plus the log                           |
+
+### utils/dates
+
+| Test                                                | What it checks                                                       |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| the weekday and month tables are the shared constants | The three former copies of `DOW_NAMES` and the leap-agnostic month table |
+| daysInMonth handles leap years                      | Feb 2026 = 28, Feb 2024 = 29                                           |
+| parseSlashDate reads both the D/M and D/M/YYYY forms | Life events and `day_of_year` ECDs                                     |
+| dayOfWeekName reads the UTC weekday                 | 2026-03-08 is a Sunday                                                 |
+| utcDayString formats a calendar day                 | `"2026-03-08"` from an afternoon instant                               |
+| utcDayStart snaps to midnight and reports NaN for junk | Unparseable input is detectable, not silently 0                     |
+| daysBetween counts calendar days, not elapsed hours | The slippage bug: an afternoon completion on the planned day is 0, not 1 |
+| daysAgo walks back a whole number of days           | The insights look-back window                                          |
+| utcToday is midnight UTC                            | The life-event baseline clock                                          |
+
+### utils/stats
+
+| Test                                              | What it checks                                                     |
+| --------------------------------------------------- | -------------------------------------------------------------------- |
+| bucket creates once and returns the same object after | The accumulator upsert used by five rollups                       |
+| byDueDate sorts oldest first                      | `"YYYY-MM-DD"` string ordering                                       |
+| completionRate rounds and reports the empty case as 0 | No `NaN` reaches the API                                          |
+| trailingStreak counts only the run at the end     | Habit streaks (completions) and call miss streaks (the inverse)      |
+| longestRun finds the longest run anywhere         | `longestStreak`                                                      |
+| average rounds to one decimal and returns null when empty | "No data" is `null`, not 0                                    |
+| countWhere counts matches                         | On-time / late / with-reason counts                                  |

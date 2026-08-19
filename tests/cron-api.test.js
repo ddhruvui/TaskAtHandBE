@@ -2,7 +2,7 @@ const request = require("supertest");
 
 // The insight step never runs under NODE_ENV=test; the skipInsights tests
 // below flip the env to reach it, so generateInsights must be a mock (a real
-// call would hit the Anthropic API).
+// call would hit the Gemini API).
 jest.mock("../src/services/insightsService", () => ({
   ...jest.requireActual("../src/services/insightsService"),
   generateInsights: jest.fn().mockResolvedValue({ report: "mock" }),
@@ -295,20 +295,62 @@ describe("Cron API Endpoints", () => {
     });
   });
 
+  describe("POST /cron/run — archive retention (step 10)", () => {
+    beforeEach(async () => {
+      const db = await getDatabase();
+      await db.collection("TaskArchive-Test").deleteMany({});
+      await db.collection("ArchiveSummary-Test").deleteMany({});
+    });
+
+    test("reports the retention counters on every run", async () => {
+      const res = await request(app).post("/cron/run").expect(200);
+      expect(res.body).toMatchObject({
+        archiveEventsPruned: expect.any(Number),
+        archiveEventsFolded: expect.any(Number),
+        archiveMonthsSummarised: expect.any(Number),
+      });
+    });
+
+    test("archiveCutoff is null when nothing was old enough to prune", async () => {
+      const db = await getDatabase();
+      await db
+        .collection("TaskArchive-Test")
+        .insertOne({ type: "habit_result", taskName: "Recent", at: new Date() });
+
+      const res = await request(app).post("/cron/run").expect(200);
+      expect(res.body.archiveEventsPruned).toBe(0);
+      expect(res.body.archiveCutoff).toBeNull();
+    });
+
+    test("archiveCutoff is the UTC day events had to predate", async () => {
+      const db = await getDatabase();
+      await db.collection("TaskArchive-Test").insertOne({
+        type: "habit_result",
+        taskName: "Ancient",
+        completed: true,
+        at: new Date(Date.now() - 60 * 86400000),
+      });
+
+      const res = await request(app).post("/cron/run").expect(200);
+      expect(res.body.archiveEventsPruned).toBe(1);
+      expect(res.body.archiveCutoff).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+  });
+
   describe("POST /cron/run — nightly stats snapshot (step 9, no AI)", () => {
-    const origApiKey = process.env.ANTHROPIC_API_KEY;
+    const origApiKey = process.env.GEMINI_API_KEY;
 
     beforeEach(async () => {
       // The snapshot is pure arithmetic — it must not depend on the AI key
-      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.GEMINI_API_KEY;
       const db = await getDatabase();
       await db.collection("InsightStats-Test").deleteMany({});
       await db.collection("TaskArchive-Test").deleteMany({});
     });
 
     afterEach(async () => {
-      if (origApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = origApiKey;
+      if (origApiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = origApiKey;
       const db = await getDatabase();
       await db.collection("InsightStats-Test").deleteMany({});
       await db.collection("TaskArchive-Test").deleteMany({});
@@ -365,7 +407,7 @@ describe("Cron API Endpoints", () => {
     // both for these tests only (generateInsights is mocked at the top of
     // this file, so no real API call happens).
     const origNodeEnv = process.env.NODE_ENV;
-    const origApiKey = process.env.ANTHROPIC_API_KEY;
+    const origApiKey = process.env.GEMINI_API_KEY;
     // The report runs on Fridays: 2026-07-24 is a Friday, 2026-07-23 a Thursday
     const FRIDAY = "2026-07-24T00:00:00.000Z";
     const THURSDAY = "2026-07-23T00:00:00.000Z";
@@ -382,7 +424,7 @@ describe("Cron API Endpoints", () => {
 
     beforeEach(async () => {
       process.env.NODE_ENV = "development";
-      process.env.ANTHROPIC_API_KEY = "test-key";
+      process.env.GEMINI_API_KEY = "test-key";
       generateInsights.mockClear();
       // The cadence gate reads the stored reports, so start each test with none
       const db = await getDatabase();
@@ -391,8 +433,8 @@ describe("Cron API Endpoints", () => {
 
     afterEach(async () => {
       process.env.NODE_ENV = origNodeEnv;
-      if (origApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = origApiKey;
+      if (origApiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = origApiKey;
       const db = await getDatabase();
       await db.collection("Insights-Test").deleteMany({});
     });

@@ -1,17 +1,13 @@
-const { getDatabase } = require("../config/db");
-const { ObjectId } = require("mongodb");
+const OrderedModel = require("./OrderedModel");
 
-class Goal {
-  /**
-   * Get the Goals collection for the current environment
-   * @returns {Promise<Collection>} MongoDB collection
-   */
-  static async getCollection() {
-    const db = await getDatabase();
-    const useTestDB = process.env.USE_TEST_DB === "true";
-    const collectionName = useTestDB ? "Goals-Test" : "Goals";
-    return db.collection(collectionName);
-  }
+/**
+ * A long-term goal and the habits ("steps") that get the user there, one at a
+ * time. Ordered like headers and projects, with one wrinkle: goals predate the
+ * priority field, so `backfillPriorities()` gives legacy rows one before any
+ * ordering decision is made.
+ */
+class Goal extends OrderedModel {
+  static collectionName = "Goals";
 
   /**
    * Return all goals sorted by priority ascending.
@@ -22,9 +18,8 @@ class Goal {
    * @returns {Promise<Array>}
    */
   static async findAll() {
-    const collection = await this.getCollection();
     await this.backfillPriorities();
-    return collection.find({}).sort({ priority: 1 }).toArray();
+    return super.findAll();
   }
 
   /**
@@ -57,37 +52,19 @@ class Goal {
   }
 
   /**
-   * Find a goal by its _id
-   * @param {string} id
-   * @returns {Promise<Object|null>}
-   */
-  static async findById(id) {
-    const collection = await this.getCollection();
-    return collection.findOne({ _id: new ObjectId(id) });
-  }
-
-  /**
    * Create a new goal. Priority is assigned as the total existing goals
    * (appended at end), same scheme as headers and projects.
    * @param {Object} data  { name, steps }
    * @returns {Promise<Object>} Created goal
    */
   static async create(data) {
-    const collection = await this.getCollection();
     await this.backfillPriorities();
-    const count = await collection.countDocuments();
-    const now = new Date().toISOString();
-
-    const goal = {
+    return this.insert({
       name: data.name,
       steps: data.steps,
-      priority: count,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const result = await collection.insertOne(goal);
-    return { _id: result.insertedId, ...goal };
+      priority: await this.nextPriority(),
+      ...this.timestamps(),
+    });
   }
 
   /**
@@ -100,8 +77,9 @@ class Goal {
    * @returns {Promise<Object|null>} Updated goal or null if not found
    */
   static async update(id, data) {
-    const collection = await this.getCollection();
+    // A move is only meaningful once every goal has a priority to move past.
     if (data.priority !== undefined) await this.backfillPriorities();
+
     const current = await this.findById(id);
     if (!current) return null;
 
@@ -109,72 +87,10 @@ class Goal {
     if (data.name !== undefined) updates.name = data.name;
     if (data.steps !== undefined) updates.steps = data.steps;
 
-    if (data.priority !== undefined && data.priority !== current.priority) {
-      const oldPriority = current.priority;
-      const newPriority = data.priority;
-      const count = await collection.countDocuments();
+    const priority = await this.resolvePriorityChange(id, current, data.priority);
+    if (priority !== undefined) updates.priority = priority;
 
-      if (newPriority < 0 || newPriority >= count) {
-        throw new Error(`Priority must be between 0 and ${count - 1}`);
-      }
-
-      if (newPriority < oldPriority) {
-        // Moving up: shift goals in [newPriority, oldPriority) down by 1
-        await collection.updateMany(
-          {
-            priority: { $gte: newPriority, $lt: oldPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: 1 } },
-        );
-      } else {
-        // Moving down: shift goals in (oldPriority, newPriority] up by -1
-        await collection.updateMany(
-          {
-            priority: { $gt: oldPriority, $lte: newPriority },
-            _id: { $ne: new ObjectId(id) },
-          },
-          { $inc: { priority: -1 } },
-        );
-      }
-
-      updates.priority = newPriority;
-    }
-
-    if (Object.keys(updates).length === 0) return current;
-
-    updates.updatedAt = new Date().toISOString();
-
-    const result = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updates },
-      { returnDocument: "after" },
-    );
-    return result;
-  }
-
-  /**
-   * Delete a goal (and shift remaining goal priorities to stay contiguous).
-   * Todo tasks created from its steps are untouched — caller decides.
-   * @param {string} id
-   * @returns {Promise<Object|null>} Deleted goal or null
-   */
-  static async delete(id) {
-    const collection = await this.getCollection();
-    const goal = await this.findById(id);
-    if (!goal) return null;
-
-    await collection.deleteOne({ _id: new ObjectId(id) });
-
-    // Shift all goals with higher priority down by 1
-    if (typeof goal.priority === "number") {
-      await collection.updateMany(
-        { priority: { $gt: goal.priority } },
-        { $inc: { priority: -1 } },
-      );
-    }
-
-    return goal;
+    return this.saveUpdates(id, updates, current);
   }
 }
 

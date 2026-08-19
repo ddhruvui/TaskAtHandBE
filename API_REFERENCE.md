@@ -1176,8 +1176,9 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 6    | Every day          | Add **due life events** to the todo: for every life event whose `"D/M"` resolves to today (Feb 29 → Feb 28 in non-leap years) and whose `lastAddedYear` is behind the current year, create a linked one-time `date` task named after it under an **"Events"** header (matched case-insensitively, created otherwise), reset `done` and advance `lastAddedYear` (what makes same-day reruns idempotent). Skipped while a linked task still exists, so occurrences never stack |
 | 7    | Every day          | Re-sort each header: undone tasks by next upcoming ECD ascending, done tasks last. Same-day ties keep their existing relative order (stable sort); only `priority` is written — `updatedAt` is untouched |
 | 8    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
-| 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `ANTHROPIC_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
-| —    | Fridays            | Generate the AI insight report — only when today is **Friday (UTC)** and no report was already generated that Friday; on any other day (or a repeat run the same Friday) the response carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `ANTHROPIC_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
+| 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `GEMINI_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
+| 10   | Every day          | **Summarise, then prune the archive**: fold `TaskArchive` events older than `ARCHIVE_RETENTION_DAYS` (default 30) into `ArchiveSummary` — one document per calendar month, kept forever — then delete the raw events. The cutoff is a **UTC day boundary** (only whole days are pruned) measured from the **real** clock, not the run's `date` override; the fold is idempotent per source day. Retention is clamped up to the 28-day insights window. Reports `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised`, `archiveCutoff` |
+| —    | Fridays            | Generate the AI insight report — only when today is **Friday (UTC)** and no report was already generated that Friday; on any other day (or a repeat run the same Friday) the response carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
 
 #### Resolving "next upcoming ECD" for step 7
 
@@ -1256,12 +1257,16 @@ Manually triggers the cron job with an optional date override in the request bod
   "outcomesArchived": 5,
   "callsReset": 0,
   "statsRefreshed": true,
+  "archiveEventsPruned": 8,
+  "archiveEventsFolded": 8,
+  "archiveMonthsSummarised": 1,
+  "archiveCutoff": "2026-07-20",
   "insightGenerated": true
 }
 ```
 
 `insightGenerated` is only present when the run reached the insight step
-(`skipInsights` unset, not test mode, `ANTHROPIC_API_KEY` configured). The
+(`skipInsights` unset, not test mode, `GEMINI_API_KEY` configured). The
 report is weekly: on any day that is not Friday (UTC) — or on a Friday it
 already ran for — it is `false` and the response also carries
 `"insightSkipped": "not-due"`.
@@ -1295,6 +1300,10 @@ Manually triggers the cron job. No request body needed.
   "outcomesArchived": 5,
   "callsReset": 0,
   "statsRefreshed": true,
+  "archiveEventsPruned": 8,
+  "archiveEventsFolded": 8,
+  "archiveMonthsSummarised": 1,
+  "archiveCutoff": "2026-07-20",
   "insightGenerated": true
 }
 ```
@@ -1349,7 +1358,7 @@ Returns raw TaskArchive events for the period, oldest first.
 
 | Parameter | Required | Description                                                                  |
 | --------- | -------- | ---------------------------------------------------------------------------- |
-| `days`    | No       | How many days back to fetch (default 28, max 365)                            |
+| `days`    | No       | How many days back to fetch (default 28, max 365). **Raw events only exist inside the retention window** (`ARCHIVE_RETENTION_DAYS`, default 30), so a larger `days` returns whatever survives — use `GET /archive/summary` for older history |
 | `type`    | No       | Filter: `habit_result`, `task_result`, `task_completed`, `task_rescheduled`, `task_deleted`, `call_result` |
 
 **Response `200`:**
@@ -1405,6 +1414,51 @@ Returns raw TaskArchive events for the period, oldest first.
   "at": "2026-07-18T11:20:00.000Z"
 }
 ```
+
+### `GET /archive/summary`
+
+Returns the permanent monthly roll-ups, **oldest month first**. Cron step 10
+writes these as raw events age out of the retention window, so this is the only
+place history older than `ARCHIVE_RETENTION_DAYS` still exists.
+
+Monthly totals only — per-day detail is **not** recoverable from it.
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "month": "2026-07",
+    "days": ["2026-07-01", "2026-07-02"],
+    "eventCount": 412,
+    "habits": [
+      { "taskName": "Meditate", "headerName": "Health", "scheduled": 22, "completed": 19 }
+    ],
+    "recurring": [
+      { "taskName": "Pay rent", "headerName": "Admin", "ecdType": "day_of_month", "scheduled": 1, "completed": 1 }
+    ],
+    "calls": [
+      { "callName": "Grandma", "frequency": "biweekly", "scheduled": 2, "completed": 1 }
+    ],
+    "oneTimeTasks": { "completed": 14, "onTime": 11, "late": 3 },
+    "reschedules": { "total": 5, "pushedLater": 4, "pushedLaterNoReason": 2 },
+    "deletions": { "count": 2, "withReason": 1 },
+    "byHeader": [
+      { "headerName": "Health", "completed": 19, "missed": 3, "reschedules": 1, "deleted": 0 }
+    ],
+    "firstAt": "2026-07-01T00:00:03.000Z",
+    "lastAt": "2026-07-31T23:59:00.000Z",
+    "updatedAt": "2026-08-30T00:00:04.000Z"
+  }
+]
+```
+
+`days` lists the source days already folded into the month — the guard that
+stops a repeated cron run counting a day twice. Calls are deliberately absent
+from `byHeader`; they have no header.
+
+Returns `[]` before anything has been pruned.
 
 ---
 
@@ -1535,7 +1589,7 @@ Most recent stored AI report.
   "_id": "...",
   "generatedAt": "2026-07-04T00:00:46.000Z",
   "periodDays": 28,
-  "model": "claude-sonnet-4-6",
+  "model": "gemini-3.7-flash",
   "stats": { "...": "stats the report was based on" },
   "report": {
     "summary": "string",
@@ -1594,7 +1648,7 @@ week's Friday run.
 **Error `503`** — no API key configured:
 
 ```json
-{ "error": "ANTHROPIC_API_KEY is not configured on the server" }
+{ "error": "GEMINI_API_KEY is not configured on the server" }
 ```
 
 ---

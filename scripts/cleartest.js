@@ -15,6 +15,7 @@ const testCollections = [
   "TaskArchive-Test",
   "Insights-Test",
   "InsightStats-Test",
+  "ArchiveSummary-Test",
 ];
 
 (async () => {

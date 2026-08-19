@@ -1,29 +1,48 @@
 const Archive = require("../models/Archive");
 const Insight = require("../models/Insight");
 const InsightStats = require("../models/InsightStats");
+const {
+  DOW_NAMES,
+  utcDayStart,
+  daysBetween,
+  daysAgo,
+} = require("../utils/dates");
+const {
+  bucket,
+  byDueDate,
+  completionRate,
+  trailingStreak,
+  longestRun,
+  average,
+  countWhere,
+} = require("../utils/stats");
 
 const DEFAULT_PERIOD_DAYS = 28;
 
 /**
- * The one weekday (UTC, 0 = Sunday) the cron spends an Anthropic call on a
- * report. The analysis is a weekly review, not a daily one: a day of archive
- * events rarely changes the picture, and every run costs an API call.
+ * The one weekday (UTC, 0 = Sunday) the cron spends a model call on a report.
+ * The analysis is a weekly review, not a daily one: a day of archive events
+ * rarely changes the picture, and every run costs an API call.
  */
 const INSIGHT_DAY_OF_WEEK = 5; // Friday
 
 /**
- * Midnight-UTC epoch ms of the calendar day a timestamp falls on.
- * Slippage is a whole-day count, so both sides of the subtraction must be
- * snapped to day boundaries — comparing a `doneAt` instant against a midnight
- * `plannedFor` made any completion after 12:00 UTC round up to a full day of
- * slip on the very day the task was scheduled.
- * @param {Date|string} value
- * @returns {number} epoch ms, or NaN if unparseable
+ * The Gemini model the weekly report is written by.
+ *
+ * **Flash, not Pro, and that is not a preference.** Verified against a live
+ * free-tier key on 2026-08-19: `gemini-2.5-pro` 404s ("no longer available to
+ * new users") and `gemini-3.1-pro-preview` 429s on the first request — Pro
+ * carries no free-tier quota. Flash answers, and honours the JSON schema.
+ *
+ * A weekly call is a rounding error against any tier's limits, so the moment
+ * billing is enabled this becomes a one-line switch:
+ * `GEMINI_MODEL=gemini-3.1-pro-preview`. Read per call, not at require time,
+ * so a restart is enough — no deploy.
  */
-function utcDayStart(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return NaN;
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+const DEFAULT_INSIGHT_MODEL = "gemini-3.7-flash";
+
+function insightModel() {
+  return process.env.GEMINI_MODEL || DEFAULT_INSIGHT_MODEL;
 }
 
 // ─── Stats (exact math, computed in JS — the model interprets, never counts) ──
@@ -42,52 +61,43 @@ function computeStats(events) {
   const byHeader = {};
   const callsByPerson = {};
 
-  const headerBucket = (name) => {
-    const key = name || "(no header)";
-    if (!byHeader[key]) {
-      byHeader[key] = { completed: 0, missed: 0, reschedules: 0, deleted: 0 };
-    }
-    return byHeader[key];
-  };
+  const headerBucket = (name) =>
+    bucket(byHeader, name || "(no header)", () => ({
+      completed: 0,
+      missed: 0,
+      reschedules: 0,
+      deleted: 0,
+    }));
 
   for (const e of events) {
     switch (e.type) {
       case "habit_result": {
-        const key = e.taskId || e.taskName;
-        if (!habits[key]) {
-          habits[key] = {
-            taskName: e.taskName,
-            headerName: e.headerName,
-            scheduledDays: e.scheduledDays,
-            results: [], // { dueDate, completed } oldest first
-          };
-        }
-        habits[key].taskName = e.taskName;
-        habits[key].results.push({
-          dueDate: e.dueDate,
-          completed: e.completed,
-        });
-        const bucket = headerBucket(e.headerName);
-        if (e.completed) bucket.completed++;
-        else bucket.missed++;
+        const habit = bucket(habits, e.taskId || e.taskName, () => ({
+          taskName: e.taskName,
+          headerName: e.headerName,
+          scheduledDays: e.scheduledDays,
+          results: [], // { dueDate, completed } oldest first
+        }));
+        habit.taskName = e.taskName;
+        habit.results.push({ dueDate: e.dueDate, completed: e.completed });
+        const header = headerBucket(e.headerName);
+        if (e.completed) header.completed++;
+        else header.missed++;
         break;
       }
       case "task_result": {
-        const key = e.taskId || e.taskName;
-        if (!recurringTasks[key]) {
-          recurringTasks[key] = {
-            taskName: e.taskName,
-            headerName: e.headerName,
-            ecdType: e.ecdType,
-            scheduled: 0,
-            completed: 0,
-          };
-        }
-        recurringTasks[key].scheduled++;
-        if (e.completed) recurringTasks[key].completed++;
-        const bucket = headerBucket(e.headerName);
-        if (e.completed) bucket.completed++;
-        else bucket.missed++;
+        const recurring = bucket(recurringTasks, e.taskId || e.taskName, () => ({
+          taskName: e.taskName,
+          headerName: e.headerName,
+          ecdType: e.ecdType,
+          scheduled: 0,
+          completed: 0,
+        }));
+        recurring.scheduled++;
+        if (e.completed) recurring.completed++;
+        const header = headerBucket(e.headerName);
+        if (e.completed) header.completed++;
+        else header.missed++;
         break;
       }
       case "task_completed": {
@@ -96,14 +106,10 @@ function computeStats(events) {
         // rescheduled it) and the day it was actually done. Done on the
         // scheduled day = 0, whatever time of day it was ticked off; done
         // ahead of it is negative.
-        let slippageDays = null;
-        if (e.plannedFor && e.doneAt) {
-          const planned = utcDayStart(`${e.plannedFor}T00:00:00Z`);
-          const done = utcDayStart(e.doneAt);
-          if (!Number.isNaN(planned) && !Number.isNaN(done)) {
-            slippageDays = Math.round((done - planned) / 86400000);
-          }
-        }
+        const slippageDays =
+          e.plannedFor && e.doneAt
+            ? daysBetween(`${e.plannedFor}T00:00:00Z`, e.doneAt)
+            : null;
         completedTasks.push({
           taskName: e.taskName,
           headerName: e.headerName,
@@ -118,27 +124,22 @@ function computeStats(events) {
         break;
       }
       case "call_result": {
-        const key = e.callId || e.callName;
-        if (!callsByPerson[key]) {
-          callsByPerson[key] = {
-            callName: e.callName,
-            frequency: e.frequency,
-            results: [], // { dueDate, completed } oldest first
-          };
-        }
-        callsByPerson[key].callName = e.callName;
-        callsByPerson[key].frequency = e.frequency;
-        callsByPerson[key].results.push({
-          dueDate: e.dueDate,
-          completed: e.completed,
-        });
+        const person = bucket(callsByPerson, e.callId || e.callName, () => ({
+          callName: e.callName,
+          frequency: e.frequency,
+          results: [], // { dueDate, completed } oldest first
+        }));
+        person.callName = e.callName;
+        person.frequency = e.frequency;
+        person.results.push({ dueDate: e.dueDate, completed: e.completed });
         // Calls have no header — deliberately not counted in byHeader
         break;
       }
       case "task_rescheduled": {
-        const key = e.taskId || e.taskName;
-        if (!reschedulesByTask[key]) {
-          reschedulesByTask[key] = {
+        const rescheduled = bucket(
+          reschedulesByTask,
+          e.taskId || e.taskName,
+          () => ({
             taskName: e.taskName,
             headerName: e.headerName,
             total: 0,
@@ -148,18 +149,17 @@ function computeStats(events) {
             pushedLaterWithReason: 0,
             pushedLaterNoReason: 0,
             reasons: [],
-          };
-        }
-        const bucket = reschedulesByTask[key];
-        bucket.taskName = e.taskName;
-        bucket.total++;
+          }),
+        );
+        rescheduled.taskName = e.taskName;
+        rescheduled.total++;
         if (e.pushedLater) {
-          bucket.pushedLater++;
+          rescheduled.pushedLater++;
           if (e.reason) {
-            bucket.pushedLaterWithReason++;
-            bucket.reasons.push(e.reason);
+            rescheduled.pushedLaterWithReason++;
+            rescheduled.reasons.push(e.reason);
           } else {
-            bucket.pushedLaterNoReason++;
+            rescheduled.pushedLaterNoReason++;
           }
         }
         headerBucket(e.headerName).reschedules++;
@@ -179,25 +179,11 @@ function computeStats(events) {
   }
 
   // Finalize habit metrics: rate, streaks, misses by weekday
-  const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const wasCompleted = (result) => result.completed;
   const habitStats = Object.values(habits).map((h) => {
-    const results = h.results.sort((a, b) =>
-      a.dueDate < b.dueDate ? -1 : 1,
-    );
+    const results = h.results.sort(byDueDate);
     const scheduled = results.length;
-    const completed = results.filter((r) => r.completed).length;
-
-    let currentStreak = 0;
-    for (let i = results.length - 1; i >= 0; i--) {
-      if (!results[i].completed) break;
-      currentStreak++;
-    }
-    let longestStreak = 0;
-    let run = 0;
-    for (const r of results) {
-      run = r.completed ? run + 1 : 0;
-      if (run > longestStreak) longestStreak = run;
-    }
+    const completed = countWhere(results, wasCompleted);
 
     const missedByDow = {};
     for (const r of results) {
@@ -212,9 +198,9 @@ function computeStats(events) {
       scheduledDays: h.scheduledDays,
       scheduled,
       completed,
-      completionRate: scheduled ? Math.round((completed / scheduled) * 100) : 0,
-      currentStreak,
-      longestStreak,
+      completionRate: completionRate(completed, scheduled),
+      currentStreak: trailingStreak(results, wasCompleted),
+      longestStreak: longestRun(results, wasCompleted),
       missedByDow,
       recentResults: results.slice(-14),
     };
@@ -222,23 +208,17 @@ function computeStats(events) {
 
   // Finalize call metrics: rate and current miss streak per person
   const callStats = Object.values(callsByPerson).map((c) => {
-    const results = c.results.sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
+    const results = c.results.sort(byDueDate);
     const scheduled = results.length;
-    const completed = results.filter((r) => r.completed).length;
-
-    let currentMissStreak = 0;
-    for (let i = results.length - 1; i >= 0; i--) {
-      if (results[i].completed) break;
-      currentMissStreak++;
-    }
+    const completed = countWhere(results, wasCompleted);
 
     return {
       callName: c.callName,
       frequency: c.frequency,
       scheduled,
       completed,
-      completionRate: scheduled ? Math.round((completed / scheduled) * 100) : 0,
-      currentMissStreak,
+      completionRate: completionRate(completed, scheduled),
+      currentMissStreak: trailingStreak(results, (r) => !r.completed),
       recentResults: results.slice(-8),
     };
   });
@@ -255,19 +235,13 @@ function computeStats(events) {
     habits: habitStats,
     recurringTasks: Object.values(recurringTasks).map((t) => ({
       ...t,
-      completionRate: t.scheduled
-        ? Math.round((t.completed / t.scheduled) * 100)
-        : 0,
+      completionRate: completionRate(t.completed, t.scheduled),
     })),
     oneTimeTasks: {
       completedCount: completedTasks.length,
-      onTimeCount: completedTasks.filter((t) => t.onTime === true).length,
-      lateCount: completedTasks.filter((t) => t.onTime === false).length,
-      avgSlippageDays: lateness.length
-        ? Math.round(
-            (lateness.reduce((a, b) => a + b, 0) / lateness.length) * 10,
-          ) / 10
-        : null,
+      onTimeCount: countWhere(completedTasks, (t) => t.onTime === true),
+      lateCount: countWhere(completedTasks, (t) => t.onTime === false),
+      avgSlippageDays: average(lateness),
       recent: completedTasks.slice(-20),
     },
     reschedules: Object.values(reschedulesByTask).sort(
@@ -275,7 +249,7 @@ function computeStats(events) {
     ),
     deletions: {
       count: deletedTasks.length,
-      withReason: deletedTasks.filter((d) => d.reason).length,
+      withReason: countWhere(deletedTasks, (d) => d.reason),
       recent: deletedTasks.slice(-20),
     },
     byHeader,
@@ -374,23 +348,18 @@ Rules:
  * Recompute the exact archive stats (streaks, completion rates, on-time
  * counts, reschedules, calls) and store them as the current snapshot.
  *
- * Pure arithmetic over `TaskArchive` — no Anthropic call, no API key — so the
+ * Pure arithmetic over `TaskArchive` — no model call, no API key — so the
  * cron runs it every night and streaks stay current between the weekly AI
  * reports. `GET /insights/stats` still computes live on request; this is the
  * persisted "as of last night" copy.
  *
  * @param {Object} [options]
  * @param {number} [options.periodDays=28]  How far back to analyze
- * @param {Date} [options.computedAt]  Override for testing (defaults to now)
  * @returns {Promise<Object>} The stored snapshot
  */
-async function refreshStatsSnapshot({
-  periodDays = DEFAULT_PERIOD_DAYS,
-  computedAt = new Date(),
-} = {}) {
-  const to = new Date(computedAt);
-  const from = new Date(to.getTime() - periodDays * 86400000);
-  const events = await Archive.findByRange(from, to);
+async function refreshStatsSnapshot({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
+  const to = new Date();
+  const events = await Archive.findByRange(daysAgo(to, periodDays), to);
 
   // An empty archive is still a real answer (every streak is 0) — storing it
   // keeps `computedAt` honest instead of leaving yesterday's numbers around.
@@ -430,14 +399,17 @@ async function isInsightDue(today = new Date()) {
 
 /**
  * Generate and persist an insight report from the archive.
+ *
+ * The exact numbers are computed here in JS (`computeStats`) and handed to the
+ * model as `precomputedStats` — the model interprets and coaches, it never
+ * counts. Requires `GEMINI_API_KEY`.
  * @param {Object} [options]
  * @param {number} [options.periodDays=28]  How far back to analyze
  * @returns {Promise<Object|null>} The stored insight, or null if there is no data
  */
 async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   const to = new Date();
-  const from = new Date(to.getTime() - periodDays * 86400000);
-  const events = await Archive.findByRange(from, to);
+  const events = await Archive.findByRange(daysAgo(to, periodDays), to);
 
   if (events.length === 0) {
     console.log("[Insights] No archive events yet — skipping generation");
@@ -459,44 +431,46 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   // Cap raw events so the prompt stays small; stats carry the exact totals
   const recentEvents = events.slice(-300).map(({ _id, ...rest }) => rest);
 
-  const Anthropic = require("@anthropic-ai/sdk");
-  const client = new Anthropic();
+  const { GoogleGenAI } = require("@google/genai");
+  const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    output_config: { format: { type: "json_schema", schema: REPORT_SCHEMA } },
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify({
-          today: to.toISOString().slice(0, 10),
-          periodDays,
-          precomputedStats: stats,
-          currentCalls,
-          recentEvents,
-          previousReport: previous
-            ? {
-                generatedAt: previous.generatedAt,
-                report: previous.report,
-              }
-            : null,
-        }),
-      },
-    ],
+  // `response_format` with a schema is Gemini's structured-output mode: the
+  // model is constrained to emit JSON matching REPORT_SCHEMA, so the parse
+  // below cannot receive prose or a fenced code block.
+  const interaction = await client.interactions.create({
+    model: insightModel(),
+    system_instruction: SYSTEM_PROMPT,
+    response_format: {
+      type: "text",
+      mime_type: "application/json",
+      schema: REPORT_SCHEMA,
+    },
+    input: JSON.stringify({
+      today: to.toISOString().slice(0, 10),
+      periodDays,
+      precomputedStats: stats,
+      currentCalls,
+      recentEvents,
+      previousReport: previous
+        ? {
+            generatedAt: previous.generatedAt,
+            report: previous.report,
+          }
+        : null,
+    }),
   });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock) {
-    throw new Error(`No text block in model response (stop_reason: ${response.stop_reason})`);
+  if (!interaction.output_text) {
+    throw new Error(
+      `No text output in model response (interaction ${interaction.id || "?"})`,
+    );
   }
-  const report = JSON.parse(textBlock.text);
+  const report = JSON.parse(interaction.output_text);
 
   const stored = await Insight.save({
     generatedAt: new Date(),
     periodDays,
-    model: response.model,
+    model: interaction.model || insightModel(),
     stats,
     report,
   });
@@ -512,4 +486,6 @@ module.exports = {
   isInsightDue,
   DEFAULT_PERIOD_DAYS,
   INSIGHT_DAY_OF_WEEK,
+  DEFAULT_INSIGHT_MODEL,
+  insightModel,
 };

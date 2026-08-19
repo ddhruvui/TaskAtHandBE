@@ -1,25 +1,35 @@
-const { getDatabase } = require("../config/db");
 const { ObjectId } = require("mongodb");
 const Archive = require("../models/Archive");
 const { applyProjectHeaderOrder } = require("../services/headerOrder");
-
-// ─── Date / Day helpers ───────────────────────────────────────────────────────
-
-const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** Returns number of days in a given month (1-indexed) of a given year (UTC) */
-function daysInMonth(year, month) {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
+const { getCollections: openCollections } = require("../utils/collections");
+const {
+  DOW_NAMES,
+  daysInMonth,
+  parseSlashDate,
+  dayOfWeekName,
+  utcDayString,
+  utcToday,
+  daysAgo,
+} = require("../utils/dates");
+const {
+  groupBy,
+  orderDoneLast,
+  ascendingBy,
+  priorityBulkOps,
+} = require("../utils/ordering");
 
 /**
- * Parse a D/M/YYYY string into { day, month, year } numbers.
- * e.g. "7/3/2006" → { day: 7, month: 3, year: 2006 }
+ * How long raw `TaskArchive` events are kept before step 10 folds them into
+ * `ArchiveSummary` and deletes them. Overridable with `ARCHIVE_RETENTION_DAYS`,
+ * but never below the insights window.
  */
-function parseDayOfYear(str) {
-  const [d, m, y] = str.split("/").map(Number);
-  return { day: d, month: m, year: y };
-}
+const DEFAULT_ARCHIVE_RETENTION_DAYS = 30;
+
+// ─── ECD scheduling helpers ───────────────────────────────────────────────────
+//
+// Calendar arithmetic itself lives in `utils/dates`; what stays here is the
+// part that knows what an ECD *means* — which one is due today, and when its
+// next occurrence is.
 
 /**
  * Resolve stored `day_of_month` values against a specific month, clamping any
@@ -65,7 +75,7 @@ function effectiveDayOfYear(day, month, year) {
  * year between anniversaries.
  */
 function nextDayOfYearTimestamp(value, today) {
-  const { day, month } = parseDayOfYear(value);
+  const { day, month } = parseSlashDate(value);
   const todayTs = Date.UTC(
     today.getUTCFullYear(),
     today.getUTCMonth(),
@@ -94,7 +104,7 @@ function nextEcdTimestamp(ecd, today) {
   const todayYear = today.getUTCFullYear();
   const todayMonth = today.getUTCMonth() + 1; // 1-indexed
   const todayDate = today.getUTCDate();
-  const todayDow = DOW_NAMES[today.getUTCDay()]; // e.g. "Mon"
+  const todayDow = dayOfWeekName(today); // e.g. "Mon"
 
   switch (ecd.type) {
     case "date": {
@@ -148,18 +158,14 @@ function nextEcdTimestamp(ecd, today) {
 
 // ─── Collection helpers ───────────────────────────────────────────────────────
 
+/** The three collections a run touches directly, in one database round trip. */
 async function getCollections() {
-  const db = await getDatabase();
-  const useTestDB = process.env.USE_TEST_DB === "true";
-  const tasksCol = db.collection(useTestDB ? "Tasks-Test" : "Tasks");
-  const headersCol = db.collection(useTestDB ? "Headers-Test" : "Headers");
-  const callsCol = db.collection(useTestDB ? "Calls-Test" : "Calls");
+  const [tasksCol, headersCol, callsCol] = await openCollections(
+    "Tasks",
+    "Headers",
+    "Calls",
+  );
   return { tasksCol, headersCol, callsCol };
-}
-
-/** Format a Date as a "YYYY-MM-DD" UTC calendar-day string */
-function utcDayString(date) {
-  return date.toISOString().slice(0, 10);
 }
 
 /** Build a headerId → headerName map for archive denormalization */
@@ -183,20 +189,17 @@ async function getHeaderNameMap(headersCol) {
 async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yDow = DOW_NAMES[yesterday.getUTCDay()];
+  const yDow = dayOfWeekName(yesterday);
   const yDom = yesterday.getUTCDate();
   const yMonth = yesterday.getUTCMonth() + 1;
   const dueDate = utcDayString(yesterday);
 
   // Idempotency guard: skip tasks already archived for this dueDate
-  const archiveCol = await Archive.getCollection();
-  const existing = await archiveCol
-    .find(
-      { type: { $in: ["habit_result", "task_result"] }, dueDate },
-      { projection: { taskId: 1 } },
-    )
-    .toArray();
-  const alreadyLogged = new Set(existing.map((e) => e.taskId));
+  const alreadyLogged = await Archive.loggedIdsFor(
+    ["habit_result", "task_result"],
+    dueDate,
+    "taskId",
+  );
 
   const events = [];
   const baseFields = (task) => ({
@@ -244,7 +247,7 @@ async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
   // a Feb 29 task counts as due on Feb 28 of a non-leap year)
   const yearly = await tasksCol.find({ "ecd.type": "day_of_year" }).toArray();
   for (const task of yearly) {
-    const { day, month } = parseDayOfYear(task.ecd.value);
+    const { day, month } = parseSlashDate(task.ecd.value);
     if (month !== yMonth) continue;
     if (effectiveDayOfYear(day, month, yYear).day !== yDom) continue;
     if (alreadyLogged.has(task._id.toString())) continue;
@@ -278,7 +281,7 @@ async function step1IncrementDayOfYear(tasksCol, today) {
   let clamped = 0;
   let markedUndone = 0;
   for (const task of tasks) {
-    const { day, month, year } = parseDayOfYear(task.ecd.value);
+    const { day, month, year } = parseSlashDate(task.ecd.value);
 
     // Skip tasks already set to the current year or a future year
     if (year >= todayYear) continue;
@@ -309,7 +312,7 @@ async function step1IncrementDayOfYear(tasksCol, today) {
  * @returns {Promise<number>} Number of tasks marked undone
  */
 async function step2MarkUndoneDayOfWeek(tasksCol, today) {
-  const todayDow = DOW_NAMES[today.getUTCDay()];
+  const todayDow = dayOfWeekName(today);
 
   const result = await tasksCol.updateMany(
     { "ecd.type": "day_of_week", "ecd.value": todayDow, done: true },
@@ -386,17 +389,9 @@ async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
     return { tasksDeleted: 0, projectTasksCompleted: 0, lifeEventsCompleted: 0 };
 
   await Archive.logMany(
-    tasks.map((task) => ({
-      type: "task_completed",
-      taskId: task._id.toString(),
-      taskName: task.name,
-      headerId: task.headerId,
-      headerName: headerNames[task.headerId] || null,
-      ecdType: task.ecd ? task.ecd.type : null,
-      plannedFor: task.ecd && task.ecd.type === "date" ? task.ecd.value : null,
-      taskCreatedAt: task.createdAt || null,
-      doneAt: task.doneAt || null,
-    })),
+    tasks.map((task) =>
+      Archive.completionEvent(task, headerNames[task.headerId]),
+    ),
   );
 
   const ids = tasks.map((t) => t._id);
@@ -491,7 +486,7 @@ async function step6AddDueLifeEvents(tasksCol, headersCol, today) {
   let eventsHeaderId = null;
 
   for (const event of lifeEvents) {
-    const [day, month] = event.date.split("/").map(Number);
+    const { day, month } = parseSlashDate(event.date);
 
     if (event.lastAddedYear >= todayYear) continue;
     if (month !== todayMonth) continue;
@@ -564,40 +559,19 @@ async function step7ReorderPriorities(tasksCol, today) {
   // One pass over the task collection, grouped in memory, instead of a query
   // per header.
   const tasks = await tasksCol.find({}).sort({ priority: 1 }).toArray();
+  const byHeader = groupBy(tasks, (task) => task.headerId);
 
-  const byHeader = new Map();
-  for (const task of tasks) {
-    const list = byHeader.get(task.headerId);
-    if (list) list.push(task);
-    else byHeader.set(task.headerId, [task]);
-  }
+  const bySoonestEcd = ascendingBy((task) => nextEcdTimestamp(task.ecd, today));
 
   const bulkOps = [];
   let headersReordered = 0;
-  const byEcd = (a, b) =>
-    nextEcdTimestamp(a.ecd, today) - nextEcdTimestamp(b.ecd, today);
 
   for (const headerTasks of byHeader.values()) {
-    const undone = headerTasks.filter((t) => !t.done);
-    const done = headerTasks.filter((t) => t.done);
-
-    undone.sort(byEcd);
-
-    const ordered = [...undone, ...done];
-
-    let changed = false;
-    for (let i = 0; i < ordered.length; i++) {
-      if (ordered[i].priority !== i) {
-        changed = true;
-        bulkOps.push({
-          updateOne: {
-            filter: { _id: ordered[i]._id },
-            update: { $set: { priority: i } },
-          },
-        });
-      }
+    const ops = priorityBulkOps(orderDoneLast(headerTasks, bySoonestEcd));
+    if (ops.length > 0) {
+      bulkOps.push(...ops);
+      headersReordered++;
     }
-    if (changed) headersReordered++;
   }
 
   if (bulkOps.length > 0) await tasksCol.bulkWrite(bulkOps);
@@ -636,11 +610,11 @@ async function step8ResetCalls(callsCol, today) {
   const dueCalls = await callsCol.find(dueFilter).toArray();
 
   // Idempotency guard: skip calls already archived for this dueDate
-  const archiveCol = await Archive.getCollection();
-  const existing = await archiveCol
-    .find({ type: "call_result", dueDate }, { projection: { callId: 1 } })
-    .toArray();
-  const alreadyLogged = new Set(existing.map((e) => e.callId));
+  const alreadyLogged = await Archive.loggedIdsFor(
+    "call_result",
+    dueDate,
+    "callId",
+  );
 
   await Archive.logMany(
     dueCalls
@@ -668,7 +642,7 @@ async function step8ResetCalls(callsCol, today) {
  * on-time counts, reschedules, calls) from the archive.
  *
  * Runs **every night and needs no AI**: it is arithmetic over `TaskArchive`,
- * so it works without an `ANTHROPIC_API_KEY` and regardless of whether the
+ * so it works without an `GEMINI_API_KEY` and regardless of whether the
  * weekly report fires. That is the point — the AI narrative is weekly, but a
  * streak must be right the morning after the day it was earned.
  *
@@ -691,6 +665,77 @@ async function step9RefreshStatsSnapshot() {
     console.error("[Cron] Stats snapshot refresh failed:", error.message);
     return false;
   }
+}
+
+/**
+ * Step 10 — Summarise, then prune the archive.
+ *
+ * `TaskArchive` is append-only and used to grow without bound, while only the
+ * last few weeks were ever read (`DEFAULT_PERIOD_DAYS`). Events older than the
+ * retention window are folded into `ArchiveSummary` — one document per
+ * calendar month — and then deleted. Monthly totals survive for good; only the
+ * per-day detail ages out.
+ *
+ * Two rules make this safe to re-run:
+ *
+ *  - **The cutoff is a UTC day boundary**, not "now minus N days", so only
+ *    whole days are ever pruned. A day split across two runs would be counted
+ *    by one and dropped by the other.
+ *  - **The fold is idempotent per source day** (`ArchiveSummary.foldEvents`),
+ *    so a run that folded a batch but died before deleting it counts nothing
+ *    twice on the next pass.
+ *
+ * The window can never dip below the insights window: pruning inside it would
+ * silently starve the nightly stats snapshot of the events it reads.
+ *
+ * Like step 9, the cutoff is measured from the **real** today, never from the
+ * run's `date` override: archive events are stamped with their real insertion
+ * time, so a run pretending to be next year must not treat this week's events
+ * as ancient and delete them.
+ *
+ * @returns {Promise<{eventsPruned: number, eventsFolded: number, monthsTouched: number, cutoff: string|null}>}
+ */
+async function step10PruneArchive() {
+  const { ArchiveSummary } = require("../models/ArchiveSummary");
+  const { DEFAULT_PERIOD_DAYS } = require("../services/insightsService");
+
+  const configured = Number.parseInt(process.env.ARCHIVE_RETENTION_DAYS, 10);
+  const requested = Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_ARCHIVE_RETENTION_DAYS;
+  const retentionDays = Math.max(requested, DEFAULT_PERIOD_DAYS);
+  if (retentionDays !== requested) {
+    console.warn(
+      `[Cron] ARCHIVE_RETENTION_DAYS=${requested} is inside the ${DEFAULT_PERIOD_DAYS}-day insights window — using ${retentionDays}`,
+    );
+  }
+
+  // Real UTC midnight, so the cutoff lands on a day boundary and only complete
+  // days ever fall before it.
+  const cutoff = daysAgo(utcToday(), retentionDays);
+
+  const archiveCol = await Archive.getCollection();
+  const expiring = await archiveCol
+    .find({ at: { $lt: cutoff } })
+    .sort({ at: 1 })
+    .toArray();
+
+  if (expiring.length === 0) {
+    return { eventsPruned: 0, eventsFolded: 0, monthsTouched: 0, cutoff: null };
+  }
+
+  const { monthsTouched, eventsFolded } = await ArchiveSummary.foldAll(expiring);
+
+  const result = await archiveCol.deleteMany({
+    _id: { $in: expiring.map((event) => event._id) },
+  });
+
+  return {
+    eventsPruned: result.deletedCount,
+    eventsFolded,
+    monthsTouched,
+    cutoff: utcDayString(cutoff),
+  };
 }
 
 // ─── Main runner ──────────────────────────────────────────────────────────────
@@ -737,6 +782,7 @@ async function runCron(now, { skipInsights = false } = {}) {
   const headersReordered = await step7ReorderPriorities(tasksCol, today);
   const callsReset = await step8ResetCalls(callsCol, today);
   const statsRefreshed = await step9RefreshStatsSnapshot();
+  const archivePruned = await step10PruneArchive();
 
   const stats = {
     ranAt: today.toISOString(),
@@ -752,17 +798,21 @@ async function runCron(now, { skipInsights = false } = {}) {
     outcomesArchived,
     callsReset,
     statsRefreshed,
+    archiveEventsPruned: archivePruned.eventsPruned,
+    archiveEventsFolded: archivePruned.eventsFolded,
+    archiveMonthsSummarised: archivePruned.monthsTouched,
+    archiveCutoff: archivePruned.cutoff,
   };
 
   // Generate the weekly AI insight report (skipped in tests / without an API
   // key / when the caller opts out via skipInsights). The cron itself runs
-  // nightly, but the analysis costs an Anthropic call, so it only fires on
+  // nightly, but the analysis costs a Gemini call, so it only fires on
   // Fridays (UTC), once — `insightSkipped: "not-due"` says the run reached
   // this step and deliberately passed on it.
   if (
     !skipInsights &&
     process.env.NODE_ENV !== "test" &&
-    process.env.ANTHROPIC_API_KEY
+    process.env.GEMINI_API_KEY
   ) {
     try {
       const {
