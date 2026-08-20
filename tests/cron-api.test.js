@@ -367,7 +367,7 @@ describe("Cron API Endpoints", () => {
       expect(snapshot.body.periodDays).toBe(28);
     });
 
-    test("streaks are updated on a non-Friday run, with no report generated", async () => {
+    test("streaks are updated with no API key and no report generated", async () => {
       const db = await getDatabase();
       await db.collection("TaskArchive-Test").insertMany([
         { type: "habit_result", at: new Date(), taskId: "h1", taskName: "Stretch", headerName: "Health", scheduledDays: ["Mon"], dueDate: "2026-07-06", completed: true },
@@ -402,13 +402,14 @@ describe("Cron API Endpoints", () => {
     });
   });
 
-  describe("POST /cron/run — insight report (skipInsights + weekly cadence)", () => {
+  describe("POST /cron/run — insight report (skipInsights + daily cadence)", () => {
     // The insight branch requires NODE_ENV !== "test" and an API key; flip
     // both for these tests only (generateInsights is mocked at the top of
     // this file, so no real API call happens).
     const origNodeEnv = process.env.NODE_ENV;
     const origApiKey = process.env.GEMINI_API_KEY;
-    // The report runs on Fridays: 2026-07-24 is a Friday, 2026-07-23 a Thursday
+    // The report now fires every day; the weekday is irrelevant. These two
+    // dates are kept only as "today" and "yesterday".
     const FRIDAY = "2026-07-24T00:00:00.000Z";
     const THURSDAY = "2026-07-23T00:00:00.000Z";
 
@@ -450,7 +451,7 @@ describe("Cron API Endpoints", () => {
       expect(res.body).not.toHaveProperty("insightSkipped");
     });
 
-    test("without skipInsights the Friday insight step still runs", async () => {
+    test("without skipInsights the insight step runs", async () => {
       const res = await request(app)
         .post("/cron/run")
         .send({ date: FRIDAY })
@@ -461,18 +462,18 @@ describe("Cron API Endpoints", () => {
       expect(res.body).not.toHaveProperty("insightSkipped");
     });
 
-    test("skips the report on a non-Friday run", async () => {
+    test("runs on a weekday too — the report is no longer Friday-only", async () => {
       const res = await request(app)
         .post("/cron/run")
         .send({ date: THURSDAY })
         .expect(200);
 
-      expect(generateInsights).not.toHaveBeenCalled();
-      expect(res.body.insightGenerated).toBe(false);
-      expect(res.body.insightSkipped).toBe("not-due");
+      expect(generateInsights).toHaveBeenCalledTimes(1);
+      expect(res.body.insightGenerated).toBe(true);
+      expect(res.body).not.toHaveProperty("insightSkipped");
     });
 
-    test("skips a second run on a Friday that already reported", async () => {
+    test("skips a second run on a day that already reported", async () => {
       await seedInsight(0);
 
       const res = await request(app)
@@ -485,8 +486,8 @@ describe("Cron API Endpoints", () => {
       expect(res.body.insightSkipped).toBe("not-due");
     });
 
-    test("runs the report on the Friday after the last one", async () => {
-      await seedInsight(7);
+    test("runs again the day after the last report", async () => {
+      await seedInsight(1);
 
       const res = await request(app)
         .post("/cron/run")
@@ -499,12 +500,16 @@ describe("Cron API Endpoints", () => {
     });
 
     test("the rest of the cron still runs on a day the report is skipped", async () => {
+      // The only skip condition left is "today's report already exists".
+      await seedInsight(1); // stamped on THURSDAY
+
       const res = await request(app)
         .post("/cron/run")
         .send({ date: THURSDAY })
         .expect(200);
 
       expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("not-due");
       expect(res.body.ranAt).toBe(THURSDAY);
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("headersReordered");

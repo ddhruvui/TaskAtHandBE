@@ -481,9 +481,9 @@ The `Insights` collection stores one AI coaching report per generation:
 }
 ```
 
-Reports are generated **once a week, on Friday (UTC)**, at the end of that
+Reports are generated **once per UTC day**, at the end of that
 night's cron run (when `GEMINI_API_KEY` is set), and on demand via
-`POST /insights/generate`, which ignores the weekly gate. The previous report is
+`POST /insights/generate`, which ignores the daily gate. The previous report is
 fed into the next generation so suggestions build on each other. Tasks
 scheduled by `day_of_week` are treated as **habits**; everything else is a
 task. Calls feed in two ways: `call_result` archive events become a `calls`
@@ -524,7 +524,7 @@ This is the AI-free half of insights. Cron **step 9** recomputes it every
 night from `TaskArchive` — pure arithmetic, no Anthropic call, no
 `GEMINI_API_KEY` needed — so habit streaks and completion rates are current
 the morning after the day they were earned, even though the coaching narrative
-in `Insights` is only written on Fridays. The document is replaced in place
+in `Insights` is written once per day. The document is replaced in place
 (never appended to): the history it is derived from lives in `TaskArchive`, so
 any past snapshot can be recomputed. Read it via `GET /insights/stats/latest`;
 `GET /insights/stats` still computes live on request.
@@ -674,9 +674,9 @@ each period boundary:
 - **Runs on every cron run, needs no `GEMINI_API_KEY`, and is not affected
   by `skipInsights`** (that flag exists to avoid the paid API call; this step
   is arithmetic). Streak counts therefore stay current nightly while the AI
-  narrative is weekly
+  narrative is refreshed daily
 - Runs after step 8 so the night's `call_result` events are already archived,
-  and before the report so Friday's prompt and the snapshot agree
+  and before the report so the day's prompt and the snapshot agree
 - The window ends at the **real current time**, not the run's `date` override,
   because archive events are stamped with their real insertion time
 - A failure never fails the cron run (logged, `statsRefreshed: false` in stats)
@@ -704,16 +704,32 @@ each period boundary:
 - **Per-day detail is not recoverable once pruned** — only the monthly totals
   survive, readable at `GET /archive/summary`
 
-#### Final step — Generate the weekly AI insight report
+#### Step 11 — Trim stored insight reports _(every night)_
+
+- The report is daily, so `Insights` fills seven times faster than it used to,
+  at roughly 8 KB a report. Only the newest `INSIGHT_RETENTION_COUNT`
+  (default **100**) are kept
+- 100 is not arbitrary: it is `Insight.MAX_HISTORY`, the ceiling
+  `GET /insights/history?limit=` enforces, so a report past it cannot be read
+  through the API by any route
+- **No roll-up, unlike step 10.** A report is prose *derived from*
+  `TaskArchive`, and those numbers survive permanently in `ArchiveSummary` —
+  an aged-out report costs a piece of writing, not a fact
+- `INSIGHT_RETENTION_COUNT` can raise the window but is **floored** at
+  `MAX_HISTORY`: trimming inside the API's own ceiling would make
+  `?limit=100` unservable. A smaller value is logged and ignored
+- Reports `insightReportsPruned`
+
+#### Final step — Generate the AI insight report
 
 - After step 8, when `GEMINI_API_KEY` is set (and not in test mode):
-  - **Once per week, on Friday — not nightly.** The cron runs every night, but the analysis costs an Anthropic call, so it only fires when today is **Friday (UTC)** and no report has been generated yet on that Friday (so a second cron run the same day, e.g. a manual `POST /cron/run`, doesn't pay for a second call). On any other day, or on a Friday already reported on, the run records `insightGenerated: false` and `insightSkipped: "not-due"` and moves on. A report generated on some other day — e.g. an on-demand `POST /insights/generate` on a Wednesday — does **not** consume that week's Friday run.
+  - **Once per UTC day.** The cron runs every night and the report fires with it, provided no report has been generated yet that day (so a second cron run the same day, e.g. a manual `POST /cron/run`, doesn't pay for a second call). On a day already reported on, the run records `insightGenerated: false` and `insightSkipped: "not-due"` and moves on. An on-demand `POST /insights/generate` **does** consume that day's run — a manual report at noon means the nightly run skips.
   - Compute exact stats over the last 28 days of `TaskArchive` events (habit completion rates, streaks, missed-by-weekday, task slippage, reschedule counts, per-person call completion and miss streaks)
   - Fetch the live call list and include it as `currentCalls` in the prompt payload
   - Send stats + recent events + the previous report to `gemini-3.7-flash` with a structured-output schema
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
-- `POST /insights/generate` ignores the weekly gate — an explicit user request always generates a fresh report
+- `POST /insights/generate` ignores the daily gate — an explicit user request always generates a fresh report, and consumes that day's scheduled run
 
 ---
 
@@ -1340,7 +1356,7 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 7. Reorder priorities per header
 8. Reset done calls _(if today is the 15th: biweekly only; if today is the last day of the month: all)_
 9. Refresh the `InsightStats` snapshot — streaks, rates, on-time counts _(every night; no AI, no API key needed)_
-10. Generate the weekly AI insight report _(only on Fridays (UTC) and only once per Friday, when `GEMINI_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
+11. Generate the AI insight report _(once per UTC day, when `GEMINI_API_KEY` is set and the request did not pass `skipInsights: true` — not a numbered step)_
 
 **Response `200`**
 
@@ -1363,8 +1379,8 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 }
 ```
 
-On a night the weekly report is not due (any day that is not Friday, or a
-Friday already reported on), the same response carries
+On a night the report is not due (a day already reported on), the same
+response carries
 `"insightGenerated": false` plus `"insightSkipped": "not-due"`.
 
 ---
@@ -1479,7 +1495,7 @@ is a win and is never reported as a slip.
 
 The stats snapshot written by the nightly cron (step 9): the same body as
 `GET /insights/stats` plus `computedAt`, without recomputing it. Refreshed
-every night regardless of the weekly AI cadence, so streaks are never more
+every night regardless of the AI report, so streaks are never more
 than a day old. `404` if the cron has not run yet.
 
 #### `GET /insights/latest`
@@ -1492,9 +1508,9 @@ Recent AI reports, newest first.
 
 #### `POST /insights/generate`
 
-Generates a fresh AI report now, on any day — the cron's Friday-only gate does
-not apply to this explicit request, and a report generated here does not
-consume that week's Friday run. Optional body `{ "days": 28 }`. Returns `201`
+Generates a fresh AI report now — the cron's once-per-day gate does
+not apply to this explicit request. A report generated here **does** consume
+that day's scheduled run, so the nightly cron will then skip. Optional body `{ "days": 28 }`. Returns `201`
 with the stored report, `404` if the archive is empty, `503` if
 `GEMINI_API_KEY` is not configured.
 

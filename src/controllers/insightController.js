@@ -119,7 +119,9 @@ const getHistory = route(
   async (req, res) => {
     const limit = parseInt(req.query.limit, 10);
     const insights = await Insight.list(
-      Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 14,
+      Number.isInteger(limit) && limit > 0 && limit <= Insight.MAX_HISTORY
+        ? limit
+        : 14,
     );
     res.json(insights);
   },

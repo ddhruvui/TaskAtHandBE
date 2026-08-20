@@ -20,21 +20,14 @@ const {
 const DEFAULT_PERIOD_DAYS = 28;
 
 /**
- * The one weekday (UTC, 0 = Sunday) the cron spends a model call on a report.
- * The analysis is a weekly review, not a daily one: a day of archive events
- * rarely changes the picture, and every run costs an API call.
- */
-const INSIGHT_DAY_OF_WEEK = 5; // Friday
-
-/**
- * The Gemini model the weekly report is written by.
+ * The Gemini model the daily report is written by.
  *
  * **Flash, not Pro, and that is not a preference.** Verified against a live
  * free-tier key on 2026-08-19: `gemini-2.5-pro` 404s ("no longer available to
  * new users") and `gemini-3.1-pro-preview` 429s on the first request — Pro
  * carries no free-tier quota. Flash answers, and honours the JSON schema.
  *
- * A weekly call is a rounding error against any tier's limits, so the moment
+ * A daily call is a rounding error against any tier's limits, so the moment
  * billing is enabled this becomes a one-line switch:
  * `GEMINI_MODEL=gemini-3.1-pro-preview`. Read per call, not at require time,
  * so a restart is enough — no deploy.
@@ -338,8 +331,9 @@ Rules:
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
 - For deletions: read each reason and separate healthy pruning ("no longer needed", "duplicate", priorities genuinely changed) from avoidance ("too big", "ran out of time", "kept putting it off"). Name the task and quote/paraphrase its reason. Flag repeat abandonment of the same intention or a header where tasks are frequently dropped. If there were no deletions, return an empty deletionInsights array.
 - For postpones (pushed-later reschedules): call out tasks with pushedLaterNoReason > 0 as unexcused procrastination by name and count. For pushedLaterWithReason, quote/paraphrase the stated reason and say whether you accept it as valid (and therefore don't count it against the user) or read it as an excuse. Repeated no-reason postpones of the same task are a strong avoidance signal.
-- This report is generated weekly, so the previous report (when present) is about a week old and its suggestions have had a full week to land — judge them on that.
-- If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (repeatedly ignored advice is itself an avoidance signal), and don't repeat advice verbatim.
+- This report is generated **daily**, so the previous report (when present) is usually about a day old and its suggestions have had roughly one day to land. Judge them on that horizon: one day is enough to see whether a specific task got done, not enough to call a habit fixed or a pattern broken.
+- The analysis window is much longer than the gap between reports, so consecutive reports see nearly the same data. Lead with what actually CHANGED since the previous report — a habit completed or missed yesterday, a task finished or postponed — rather than restating standing totals. If nothing meaningful changed, say so plainly in one line instead of padding.
+- If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (advice ignored day after day is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
 - For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.
 - Keep every list item to one or two sentences.`;
@@ -349,8 +343,7 @@ Rules:
  * counts, reschedules, calls) and store them as the current snapshot.
  *
  * Pure arithmetic over `TaskArchive` — no model call, no API key — so the
- * cron runs it every night and streaks stay current between the weekly AI
- * reports. `GET /insights/stats` still computes live on request; this is the
+ * cron runs it every night, alongside the AI report but independent of it. `GET /insights/stats` still computes live on request; this is the
  * persisted "as of last night" copy.
  *
  * @param {Object} [options]
@@ -372,12 +365,18 @@ async function refreshStatsSnapshot({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
 }
 
 /**
- * Whether the cron's weekly AI analysis is due: it runs on Fridays (UTC) and
- * only once on any given Friday — a second cron run the same day (a manual
- * `POST /cron/run`, a redeploy) must not spend a second API call.
+ * Whether the cron's AI analysis is due: **once per calendar day (UTC)**.
+ *
+ * The report used to be weekly (Fridays only) because every run cost an
+ * Anthropic call. On Gemini's free tier a daily call is a rounding error, so
+ * the weekday gate is gone — but the once-per-day guard is not. A second cron
+ * run on the same day (a manual `POST /cron/run`, a redeploy, a retry) must
+ * still not spend a second call.
  *
  * On-demand generation via `POST /insights/generate` deliberately ignores
- * this — it is an explicit user action, not the scheduled spend.
+ * this — it is an explicit user action, not the scheduled spend. It does,
+ * however, consume the day: a manual report at noon means the nightly run
+ * reports `insightSkipped: "not-due"`.
  *
  * @param {Date} [today]  Override for testing (defaults to now)
  * @returns {Promise<boolean>}
@@ -385,7 +384,6 @@ async function refreshStatsSnapshot({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
 async function isInsightDue(today = new Date()) {
   const day = new Date(today);
   if (Number.isNaN(day.getTime())) return false;
-  if (day.getUTCDay() !== INSIGHT_DAY_OF_WEEK) return false;
 
   const previous = await Insight.latest();
   if (!previous || !previous.generatedAt) return true;
@@ -393,7 +391,7 @@ async function isInsightDue(today = new Date()) {
   const lastDay = utcDayStart(previous.generatedAt);
   if (Number.isNaN(lastDay)) return true;
 
-  // Already reported today — this Friday's analysis is done
+  // Already reported today — today's analysis is done
   return lastDay !== utcDayStart(day);
 }
 
@@ -485,7 +483,6 @@ module.exports = {
   refreshStatsSnapshot,
   isInsightDue,
   DEFAULT_PERIOD_DAYS,
-  INSIGHT_DAY_OF_WEEK,
   DEFAULT_INSIGHT_MODEL,
   insightModel,
 };

@@ -643,11 +643,11 @@ async function step8ResetCalls(callsCol, today) {
  *
  * Runs **every night and needs no AI**: it is arithmetic over `TaskArchive`,
  * so it works without an `GEMINI_API_KEY` and regardless of whether the
- * weekly report fires. That is the point — the AI narrative is weekly, but a
- * streak must be right the morning after the day it was earned.
+ * AI report fires. That is the point — the narrative is a model call away, but
+ * a streak must be right the morning after the day it was earned.
  *
  * Runs after step 8 so the day's `call_result` events are already archived,
- * and before the report so Friday's prompt and the snapshot agree.
+ * and before the report so the day's prompt and the snapshot agree.
  *
  * A failed snapshot never fails the cron run (same policy as the archive and
  * the AI report).
@@ -738,6 +738,43 @@ async function step10PruneArchive() {
   };
 }
 
+/**
+ * Step 11 — Trim stored insight reports.
+ *
+ * The report went from weekly to daily, so `Insights` fills seven times
+ * faster — and at ~8 KB a report that is a few MB a year of narrative nobody
+ * can read: only the newest `Insight.MAX_HISTORY` are reachable, because that
+ * is the ceiling `GET /insights/history` enforces.
+ *
+ * Unlike the archive there is nothing to roll up first. A report is prose
+ * derived from `TaskArchive`, and those numbers survive permanently in
+ * `ArchiveSummary`, so an aged-out report costs a piece of writing, not a
+ * fact.
+ *
+ * `INSIGHT_RETENTION_COUNT` can raise the window but never lower it past
+ * `MAX_HISTORY` — trimming inside the API's own ceiling would make
+ * `?limit=100` unservable.
+ *
+ * @returns {Promise<number>} reports deleted
+ */
+async function step11TrimInsightReports() {
+  const Insight = require("../models/Insight");
+
+  const configured = Number.parseInt(process.env.INSIGHT_RETENTION_COUNT, 10);
+  const requested =
+    Number.isInteger(configured) && configured > 0
+      ? configured
+      : Insight.MAX_HISTORY;
+  const keep = Math.max(requested, Insight.MAX_HISTORY);
+  if (keep !== requested) {
+    console.warn(
+      `[Cron] INSIGHT_RETENTION_COUNT=${requested} is below the ${Insight.MAX_HISTORY}-report history ceiling — using ${keep}`,
+    );
+  }
+
+  return Insight.pruneToNewest(keep);
+}
+
 // ─── Main runner ──────────────────────────────────────────────────────────────
 
 /** Persisted result of the most recent cron run (in-memory). */
@@ -747,7 +784,7 @@ let lastRun = null;
  * Run the full cron sequence.
  * @param {Date} [now]  Override for testing (defaults to current local midnight)
  * @param {Object} [options]
- * @param {boolean} [options.skipInsights]  Skip the weekly AI insight report (used by e2e runs)
+ * @param {boolean} [options.skipInsights]  Skip the AI insight report (used by e2e runs)
  * @returns {Promise<Object>} Stats about what the run did
  */
 async function runCron(now, { skipInsights = false } = {}) {
@@ -783,6 +820,7 @@ async function runCron(now, { skipInsights = false } = {}) {
   const callsReset = await step8ResetCalls(callsCol, today);
   const statsRefreshed = await step9RefreshStatsSnapshot();
   const archivePruned = await step10PruneArchive();
+  const insightReportsPruned = await step11TrimInsightReports();
 
   const stats = {
     ranAt: today.toISOString(),
@@ -802,13 +840,13 @@ async function runCron(now, { skipInsights = false } = {}) {
     archiveEventsFolded: archivePruned.eventsFolded,
     archiveMonthsSummarised: archivePruned.monthsTouched,
     archiveCutoff: archivePruned.cutoff,
+    insightReportsPruned,
   };
 
-  // Generate the weekly AI insight report (skipped in tests / without an API
-  // key / when the caller opts out via skipInsights). The cron itself runs
-  // nightly, but the analysis costs a Gemini call, so it only fires on
-  // Fridays (UTC), once — `insightSkipped: "not-due"` says the run reached
-  // this step and deliberately passed on it.
+  // Generate the AI insight report (skipped in tests / without an API key /
+  // when the caller opts out via skipInsights). It fires once per UTC day —
+  // `insightSkipped: "not-due"` says the run reached this step and
+  // deliberately passed because today's report already exists.
   if (
     !skipInsights &&
     process.env.NODE_ENV !== "test" &&

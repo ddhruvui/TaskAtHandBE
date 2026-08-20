@@ -260,8 +260,8 @@ db.Projects.find({ "tasks.todoTaskId": { $in: doneIds } });
 
 ## Insights Queries
 
-The `Insights` collection (`Insights-Test` in test mode) stores the weekly AI
-reports — written by the cron on Fridays (UTC) and by
+The `Insights` collection (`Insights-Test` in test mode) stores the AI
+reports — written by the cron once per UTC day and by
 `POST /insights/generate` on demand: `{ generatedAt, periodDays, model, stats, report }`.
 
 ### Latest report
@@ -276,14 +276,24 @@ db.Insights.find().sort({ generatedAt: -1 }).limit(1);
 db.Insights.find({ generatedAt: { $gte: new Date(Date.now() - 7 * 86400000) } });
 ```
 
-### Check the weekly cadence held (one report per Friday)
+### Retention: how close is Insights to the trim window?
+
+```js
+// Cron step 11 keeps only the newest INSIGHT_RETENTION_COUNT (default 100)
+db.Insights.countDocuments();
+
+// What the next run would delete
+db.Insights.find({}, { generatedAt: 1 }).sort({ generatedAt: -1 }).skip(100).count();
+```
+
+### Check the daily cadence held (one report per UTC day)
 
 ```javascript
 db.Insights.find({}, { generatedAt: 1 })
   .sort({ generatedAt: -1 })
   .limit(10)
   .toArray()
-  .map((i) => ({ at: i.generatedAt, dow: i.generatedAt.getUTCDay() })); // dow 5 = Friday
+  .map((i) => i.generatedAt.toISOString().slice(0, 10)); // expect no repeated day
 ```
 
 ### Nightly stats snapshot (no AI)

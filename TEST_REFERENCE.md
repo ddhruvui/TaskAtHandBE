@@ -540,13 +540,13 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
 | every run refreshes the snapshot and reports statsRefreshed | No `GEMINI_API_KEY` set → `statsRefreshed: true` and `GET /insights/stats/latest` returns a snapshot with `computedAt` and `periodDays: 28` |
-| streaks are updated on a non-Friday run, with no report generated | Two archived habit hits + a Thursday run → no `insightGenerated` key, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
+| streaks are updated with no API key and no report generated | Two archived habit hits + a run with no API key → no `insightGenerated` key, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
 | skipInsights does not suppress the snapshot             | `{ skipInsights: true }` → `statsRefreshed: true` and the snapshot endpoint still answers 200 (the flag only avoids the paid API call) |
 | skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ date: Fri 2026-07-24, skipInsights: true }` → `generateInsights` not called, no `insightGenerated`/`insightSkipped` keys |
-| without skipInsights the Friday insight step still runs | Same env, Friday run date, no stored report → `generateInsights` called once, `insightGenerated: true`, no `insightSkipped` |
-| skips the report on a non-Friday run                    | Thursday 2026-07-23 → `generateInsights` not called, `insightGenerated: false`, `insightSkipped: "not-due"` |
-| skips a second run on a Friday that already reported    | Report seeded on the Friday itself → `generateInsights` not called, `insightSkipped: "not-due"` (no second API call) |
-| runs the report on the Friday after the last one        | Report seeded 7 days before the Friday run date → `generateInsights` called once, `insightGenerated: true` |
+| without skipInsights the insight step runs               | Same env, no stored report → `generateInsights` called once, `insightGenerated: true`, no `insightSkipped` |
+| runs on a weekday too — the report is no longer Friday-only | Thursday 2026-07-23 → `generateInsights` called once, `insightGenerated: true` |
+| skips a second run on a day that already reported       | Report seeded the same day → `generateInsights` not called, `insightSkipped: "not-due"` (no second API call) |
+| runs again the day after the last report                | Report seeded 1 day before the run date → `generateInsights` called once, `insightGenerated: true` |
 | the rest of the cron still runs on a day the report is skipped | Thursday run → `insightGenerated: false` but `ranAt` and the task/header counters are all present |
 
 ### Archive retention counters (step 10)
@@ -641,7 +641,7 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 
 ## tests/insights.test.js
 
-Tests the stats engine (via `GET /insights/stats` with seeded archive events), the nightly AI-free stats snapshot, the weekly Friday report gate, and the insight report endpoints.
+Tests the stats engine (via `GET /insights/stats` with seeded archive events), the nightly AI-free stats snapshot, the once-per-day report gate, and the insight report endpoints.
 
 ### GET /insights/stats — computed stats
 
@@ -694,19 +694,19 @@ Tests the stats engine (via `GET /insights/stats` with seeded archive events), t
 | a later refresh overwrites the snapshot rather than stacking | Second refresh after a missed day → still 1 document, `eventCount: 4`, `currentStreak: 0` |
 | records an empty archive instead of leaving stale numbers behind | Archive wiped then refreshed → `eventCount: 0`, `habits: []`                |
 
-### isInsightDue — weekly cadence (Fridays)
+### isInsightDue — daily cadence, once per UTC day
 
 Unit tests on the cron's report gate (`src/services/insightsService.js`), seeded
-straight into `Insights-Test`. 2026-07-24 is a Friday.
+straight into `Insights-Test`. The fixture date 2026-07-24 is a Friday, kept only so the "any day works" case is visibly not Friday-dependent.
 
 | Test                                                        | What it checks                                                        |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| the report day is Friday                                    | `INSIGHT_DAY_OF_WEEK === 5` and the fixture date really is a Friday     |
-| is due on a Friday with no report yet                       | Empty Insights collection + Friday → `true`                             |
-| is not due on any other day of the week                     | Sat–Thu (the six days after the Friday) → `false` for each              |
-| is not due on a Friday a report was already generated on    | Report at 00:05 that Friday, checked at 23:30 → `false` (one call/Friday) |
-| is due again on the next Friday                             | Report from the previous Friday → `true`                                |
-| an off-day manual report does not consume the Friday run    | Report generated the Wednesday before → Friday still `true`             |
+| is due with no report yet                                   | Empty Insights collection → `true`                                      |
+| is due on every day of the week                             | All seven consecutive days → `true` for each (the old gate fired on one) |
+| is not due again on a day already reported on               | Report at 00:05, checked at 23:30 the same day → `false` (one call/day)  |
+| is due again the very next day                              | Report from the previous day → `true`                                   |
+| a manual report consumes that day's scheduled run           | `POST /insights/generate` at 15:00 → the nightly run that day is `false` |
+| the day boundary is UTC, not local                          | A report at 23:50 does not suppress the run 10 minutes later on the next UTC day |
 | measures against the newest report, ignoring older ones     | Reports 4 weeks back **and** today → `false` (newest wins)              |
 | is due when the stored report has no generatedAt            | Malformed stored report → `true` rather than blocking forever           |
 
@@ -715,6 +715,20 @@ straight into `Insights-Test`. 2026-07-24 is a Friday.
 | Test                                          | What it checks                                        |
 | ----------------------------------------------- | ------------------------------------------------------- |
 | save persists a report and returns it with an _id | `Insight.save()` inserts; `Insight.latest()` reads it back |
+
+### Insight retention (cron step 11)
+
+| Test                                                    | What it checks                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| MAX_HISTORY is the one source of truth for the history ceiling | `Insight.MAX_HISTORY === 100` — the controller's `?limit=` cap and the retention floor read the same constant |
+| pruneToNewest keeps the newest N and deletes the rest   | 12 seeded → prune to 5 → the 5 newest survive, in order               |
+| pruning twice deletes nothing the second time           | Idempotent                                                            |
+| is a no-op while under the window                       | 4 reports, keep 100 → 0 deleted                                       |
+| is a no-op on an empty collection                       | 0 deleted, no throw                                                   |
+| a full history window is still servable after a prune   | 105 seeded → trimmed to 100 → `?limit=100` still returns 100 (the floor's whole purpose) |
+| a cron run reports how many reports it trimmed          | 103 seeded → `insightReportsPruned: 3`, 100 left                      |
+| retention can never be set below the history ceiling    | `INSIGHT_RETENTION_COUNT=5` is clamped to 100, warns, and trims nothing |
+| a larger window than the ceiling is honoured            | `INSIGHT_RETENTION_COUNT=110` with 112 stored → 2 pruned              |
 
 ---
 

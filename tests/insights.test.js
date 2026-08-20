@@ -452,32 +452,25 @@ describe("Insights", () => {
     });
   });
 
-  describe("isInsightDue — weekly cadence (Fridays)", () => {
-    const {
-      isInsightDue,
-      INSIGHT_DAY_OF_WEEK,
-    } = require("../src/services/insightsService");
-    // 2026-07-24 is a Friday, so 07-23 = Thu and 07-25 = Sat
+  describe("isInsightDue — daily cadence, once per UTC day", () => {
+    const { isInsightDue } = require("../src/services/insightsService");
+    // 2026-07-24 is a Friday; the cadence no longer cares which day it is.
     const FRIDAY = new Date("2026-07-24T00:00:00Z");
 
-    test("the report day is Friday", () => {
-      expect(INSIGHT_DAY_OF_WEEK).toBe(5);
-      expect(FRIDAY.getUTCDay()).toBe(5);
-    });
-
-    test("is due on a Friday with no report yet", async () => {
+    test("is due with no report yet", async () => {
       await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
     });
 
-    test("is not due on any other day of the week", async () => {
-      for (let offset = 1; offset <= 6; offset++) {
+    test("is due on every day of the week", async () => {
+      // The old gate only fired on Fridays; a daily report fires on all seven.
+      for (let offset = 0; offset <= 6; offset++) {
         const day = new Date(FRIDAY.getTime() + offset * 86400000);
-        await expect(isInsightDue(day)).resolves.toBe(false);
+        await expect(isInsightDue(day)).resolves.toBe(true);
       }
     });
 
-    test("is not due on a Friday a report was already generated on", async () => {
-      // A second cron run the same Friday must not spend another API call
+    test("is not due again on a day already reported on", async () => {
+      // A second cron run the same day must not spend another API call
       await seedInsight({
         generatedAt: new Date("2026-07-24T00:05:00Z"),
         report: {},
@@ -487,21 +480,34 @@ describe("Insights", () => {
       ).resolves.toBe(false);
     });
 
-    test("is due again on the next Friday", async () => {
+    test("is due again the very next day", async () => {
       await seedInsight({
-        generatedAt: new Date("2026-07-17T00:05:00Z"),
+        generatedAt: new Date("2026-07-23T00:05:00Z"),
         report: {},
       });
       await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
     });
 
-    test("an off-day manual report does not consume the Friday run", async () => {
-      // POST /insights/generate on Wednesday — Friday's analysis still runs
+    test("a manual report consumes that day's scheduled run", async () => {
+      // POST /insights/generate at 15:00 → the nightly run passes on it
       await seedInsight({
-        generatedAt: new Date("2026-07-22T15:00:00Z"),
+        generatedAt: new Date("2026-07-24T15:00:00Z"),
         report: {},
       });
-      await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
+      await expect(
+        isInsightDue(new Date("2026-07-24T23:59:00Z")),
+      ).resolves.toBe(false);
+    });
+
+    test("the day boundary is UTC, not local", async () => {
+      await seedInsight({
+        generatedAt: new Date("2026-07-23T23:50:00Z"),
+        report: {},
+      });
+      // 10 minutes later, but a different UTC day
+      await expect(
+        isInsightDue(new Date("2026-07-24T00:00:00Z")),
+      ).resolves.toBe(true);
     });
 
     test("measures against the newest report, ignoring older ones", async () => {
@@ -519,6 +525,140 @@ describe("Insights", () => {
     test("is due when the stored report has no generatedAt", async () => {
       await seedInsight({ report: {} });
       await expect(isInsightDue(FRIDAY)).resolves.toBe(true);
+    });
+  });
+
+  describe("Insight retention (cron step 11)", () => {
+    const Insight = require("../src/models/Insight");
+
+    async function seedReports(count, startIso = "2026-01-01T00:00:00Z") {
+      const base = Date.parse(startIso);
+      for (let i = 0; i < count; i++) {
+        await seedInsight({
+          generatedAt: new Date(base + i * 86400000),
+          report: { summary: `report ${i}` },
+        });
+      }
+    }
+
+    async function storedReports() {
+      const db = await getDatabase();
+      return db
+        .collection("Insights-Test")
+        .find({})
+        .sort({ generatedAt: -1 })
+        .toArray();
+    }
+
+    beforeEach(async () => {
+      const db = await getDatabase();
+      await db.collection("Insights-Test").deleteMany({});
+    });
+
+    test("MAX_HISTORY is the one source of truth for the history ceiling", () => {
+      // The controller caps ?limit= at this value; retention floors at it too.
+      expect(Insight.MAX_HISTORY).toBe(100);
+    });
+
+    test("pruneToNewest keeps the newest N and deletes the rest", async () => {
+      await seedReports(12);
+
+      await expect(Insight.pruneToNewest(5)).resolves.toBe(7);
+
+      const left = await storedReports();
+      expect(left).toHaveLength(5);
+      expect(left.map((r) => r.report.summary)).toEqual([
+        "report 11",
+        "report 10",
+        "report 9",
+        "report 8",
+        "report 7",
+      ]);
+    });
+
+    test("pruning twice deletes nothing the second time", async () => {
+      await seedReports(8);
+      await Insight.pruneToNewest(3);
+      await expect(Insight.pruneToNewest(3)).resolves.toBe(0);
+      expect(await storedReports()).toHaveLength(3);
+    });
+
+    test("is a no-op while under the window", async () => {
+      await seedReports(4);
+      await expect(Insight.pruneToNewest(100)).resolves.toBe(0);
+      expect(await storedReports()).toHaveLength(4);
+    });
+
+    test("is a no-op on an empty collection", async () => {
+      await expect(Insight.pruneToNewest(100)).resolves.toBe(0);
+    });
+
+    test("a full history window is still servable after a prune", async () => {
+      // The point of flooring retention at MAX_HISTORY: ?limit=100 must not
+      // come back short because retention trimmed inside the ceiling.
+      await seedReports(Insight.MAX_HISTORY + 5);
+      await Insight.pruneToNewest(Insight.MAX_HISTORY);
+
+      const res = await request(app)
+        .get(`/insights/history?limit=${Insight.MAX_HISTORY}`)
+        .expect(200);
+      expect(res.body).toHaveLength(Insight.MAX_HISTORY);
+    });
+
+    test("a cron run reports how many reports it trimmed", async () => {
+      await seedReports(Insight.MAX_HISTORY + 3);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-08T00:00:00.000Z", skipInsights: true })
+        .expect(200);
+
+      expect(res.body.insightReportsPruned).toBe(3);
+      expect(await storedReports()).toHaveLength(Insight.MAX_HISTORY);
+    });
+
+    test("retention can never be set below the history ceiling", async () => {
+      const original = process.env.INSIGHT_RETENTION_COUNT;
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      process.env.INSIGHT_RETENTION_COUNT = "5";
+      await seedReports(12);
+
+      try {
+        const res = await request(app)
+          .post("/cron/run")
+          .send({ date: "2026-03-08T00:00:00.000Z", skipInsights: true })
+          .expect(200);
+
+        // 12 reports is under the 100 floor, so nothing is trimmed at all.
+        expect(res.body.insightReportsPruned).toBe(0);
+        expect(await storedReports()).toHaveLength(12);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("history ceiling"),
+        );
+      } finally {
+        warn.mockRestore();
+        if (original === undefined) delete process.env.INSIGHT_RETENTION_COUNT;
+        else process.env.INSIGHT_RETENTION_COUNT = original;
+      }
+    });
+
+    test("a larger window than the ceiling is honoured", async () => {
+      const original = process.env.INSIGHT_RETENTION_COUNT;
+      process.env.INSIGHT_RETENTION_COUNT = String(Insight.MAX_HISTORY + 10);
+      await seedReports(Insight.MAX_HISTORY + 12);
+
+      try {
+        const res = await request(app)
+          .post("/cron/run")
+          .send({ date: "2026-03-08T00:00:00.000Z", skipInsights: true })
+          .expect(200);
+
+        expect(res.body.insightReportsPruned).toBe(2);
+        expect(await storedReports()).toHaveLength(Insight.MAX_HISTORY + 10);
+      } finally {
+        if (original === undefined) delete process.env.INSIGHT_RETENTION_COUNT;
+        else process.env.INSIGHT_RETENTION_COUNT = original;
+      }
     });
   });
 

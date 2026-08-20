@@ -13,11 +13,12 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering, a done/undone barrier inside each project and dated steps ranked above undated ones; giving a task a date mirrors it into the todo under the project's own header (created via `POST /headers` with a `projectId`), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
 - **Server-owned header ordering** — headers linked to a project (`projectId`) are kept in the projects' priority order as one contiguous block, re-applied atomically on header create, project move/rename/delete and nightly by the cron; clients never reorder them
 - **ECD system** — four ECD types (`date`, `day_of_week`, `day_of_month`, `day_of_year`) with full validation
-- **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, refreshes the stats snapshot, and (once a week, on Friday) generates the AI report (all in UTC)
+- **Daily cron job** — archives yesterday's outcomes, auto-resets recurring tasks, cleans up expired ones, re-sorts by upcoming ECD, refreshes the stats snapshot, and generates the AI report (once per day) (all in UTC)
 - **Task archive** — append-only `TaskArchive` event log: habit hit/miss results, completed-task history (with planned vs. done dates), and reschedule tracking
+- **Bounded insight history** — the report is daily, so cron step 11 keeps only the newest `INSIGHT_RETENTION_COUNT` (default 100) stored reports: past that they are unreachable anyway, since `GET /insights/history` caps at 100. No roll-up needed — the numbers behind a report live on in the archive
 - **Bounded archive with permanent roll-ups** — cron step 10 folds raw events older than `ARCHIVE_RETENTION_DAYS` (default 30) into `ArchiveSummary`, one document per calendar month kept forever, then deletes them. The collection stops growing without bound while long-term monthly trends survive; read them at `GET /archive/summary`
-- **Nightly stats snapshot** — cron step 9 recomputes habit streaks, completion rates, on-time counts, reschedules and call results from the archive **every night with no AI involved** (no API key required, not affected by `skipInsights`) and stores them in `InsightStats`, readable at `GET /insights/stats/latest`. Streaks stay current daily; only the coaching narrative is weekly
-- **AI insights** — weekly coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Google Gemini API (`gemini-3.7-flash` by default) and stored in the `Insights` collection. The cron only calls the API on **Fridays** (UTC), once per Friday; `POST /insights/generate` bypasses that gate. Tasks finished on or before their planned date count as on time, never as slippage
+- **Nightly stats snapshot** — cron step 9 recomputes habit streaks, completion rates, on-time counts, reschedules and call results from the archive **every night with no AI involved** (no API key required, not affected by `skipInsights`) and stores them in `InsightStats`, readable at `GET /insights/stats/latest`. Streaks stay current daily; the coaching narrative is refreshed daily
+- **AI insights** — daily coaching report (habits on track/slipping, procrastination flags, call reminders, suggestions) generated via the Google Gemini API (`gemini-3.7-flash` by default) and stored in the `Insights` collection. The cron calls the API **once per UTC day**; a second run the same day skips. `POST /insights/generate` bypasses the gate but consumes that day's run. Tasks finished on or before their planned date count as on time, never as slippage
 - **Shared utility layer** — the rules the API repeats (undone-first/done-last ordering, contiguous `0..n-1` priorities, partial-update validation, the log-then-400/404/500 response contract, UTC calendar maths) live once in `src/utils/` and two model base classes instead of once per resource. Documented in [`wiki/`](wiki/Home.md)
 - **Swagger UI** — interactive API docs served at `/api-docs`
 - **Test isolation** — dedicated `*-Test` collections activated via `USE_TEST_DB=true`
@@ -43,7 +44,7 @@ TaskAtHandBE/
 │   │   ├── lifeEventController.js
 │   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (steps 0–10 + weekly AI report)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–11 + daily AI report)
 │   ├── models/
 │   │   ├── BaseModel.js        # Collection plumbing every model inherits
 │   │   ├── OrderedModel.js     # BaseModel + collection-wide priority ordering
@@ -57,7 +58,7 @@ TaskAtHandBE/
 │   │   ├── Project.js          # Long-term projects with ordered task lists
 │   │   ├── Archive.js          # TaskArchive event log
 │   │   ├── ArchiveSummary.js   # Permanent monthly roll-ups (cron step 10)
-│   │   ├── Insight.js          # Stored AI reports (weekly)
+│   │   ├── Insight.js          # Stored AI reports (one per day)
 │   │   └── InsightStats.js     # Nightly stats snapshot: streaks, rates (no AI)
 │   ├── services/
 │   │   ├── headerOrder.js      # Server-owned project↔header ordering
@@ -142,7 +143,8 @@ Server listens on **port 3002** by default.
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
 | `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Goals, Projects, TaskArchive, ArchiveSummary, Insights, InsightStats) |
 | `GEMINI_API_KEY` | —          | Google Gemini API key for AI insight generation (optional; insights are skipped without it) |
-| `GEMINI_MODEL` | `gemini-3.7-flash` | Which Gemini model writes the weekly report. Read per call, so a restart switches it — no deploy. Set to `gemini-3.1-pro-preview` once billing is enabled (Pro has no free-tier quota) |
+| `GEMINI_MODEL` | `gemini-3.7-flash` | Which Gemini model writes the daily report. Read per call, so a restart switches it — no deploy. Set to `gemini-3.1-pro-preview` once billing is enabled (Pro has no free-tier quota) |
+| `INSIGHT_RETENTION_COUNT` | `100` | How many stored AI reports survive cron step 11. Floored at the `/insights/history` ceiling (`Insight.MAX_HISTORY`), so it can only ever be raised |
 | `ARCHIVE_RETENTION_DAYS` | `30` | How long raw `TaskArchive` events survive before cron step 10 folds them into `ArchiveSummary` and deletes them. Clamped **up** to the 28-day insights window — a smaller value is logged and ignored |
 
 ## API Endpoints
@@ -297,12 +299,12 @@ npm run cleartest
 | `projects.test.js`       | Projects CRUD, task validation, dated-first/done-last task sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
-| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot and the Friday report gate) |
+| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot and the once-per-day report gate) |
 | `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive` |
-| `insights.test.js`       | Stats computation (incl. deletions, on-time vs late), the weekly Friday report gate, and the four `/insights` endpoints |
+| `insights.test.js`       | Stats computation (incl. deletions, on-time vs late), the once-per-day report gate, and the four `/insights` endpoints |
 | `done-at.test.js`        | `doneAt` lifecycle (set on done, cleared on undo/cron reset) |
 | `system.test.js`         | `GET /` and `GET /health` endpoints                        |
 | `utils.test.js`          | The shared utility layer: ordering, priority arithmetic, collection/document helpers, validation, the route wrapper, UTC dates, stats maths |
@@ -315,4 +317,4 @@ npm run cleartest
 - Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
 - Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events — a postpone (one-time date pushed later) can carry an optional `reason`, and the AI treats a reason-less postpone as procrastination but a valid reason as a legitimate deferral. Manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
 - The archive is bounded: cron step 10 summarises raw events older than `ARCHIVE_RETENTION_DAYS` into monthly `ArchiveSummary` documents and then deletes them. Monthly totals are kept forever, **per-day detail is not recoverable once pruned**, and `GET /archive?days=` can only ever return what is still inside the window
-- Insight generation runs at the end of a cron run when `GEMINI_API_KEY` is set (skipped in tests) — but only on **Fridays** (UTC) and only once per Friday; every other run reports `insightGenerated: false` with `insightSkipped: "not-due"`. Archive writes never throw, so they can't break task operations
+- Insight generation runs at the end of a cron run when `GEMINI_API_KEY` is set (skipped in tests) — once per UTC day; a second run the same day reports `insightGenerated: false` with `insightSkipped: "not-due"`. Archive writes never throw, so they can't break task operations

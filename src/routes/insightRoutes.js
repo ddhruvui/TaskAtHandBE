@@ -35,7 +35,7 @@ router.get("/stats", getStats);
  *     summary: The cron's nightly stats snapshot (no AI)
  *     description: >
  *       Same shape as /insights/stats plus `computedAt`, refreshed by every
- *       nightly cron run so streaks stay current between weekly AI reports.
+ *       nightly cron run; it is the AI-free half of insights.
  *     responses:
  *       200:
  *         description: Stored habit rates, streaks, task slippage, reschedule counts

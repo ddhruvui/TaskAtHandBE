@@ -106,6 +106,29 @@ of consecutive days, and the days are what was dropped.
 If that matters for a future feature, raise `ARCHIVE_RETENTION_DAYS` **before**
 the data ages out. There is no way to get it back afterwards.
 
+## The sibling: insight reports (step 11)
+
+`Insights` had the same unbounded shape, made worse when the report went from
+weekly to daily — seven times the volume at roughly 8 KB a report. Step 11
+bounds it, but with a different answer:
+
+| | Archive (step 10) | Insight reports (step 11) |
+| --- | --- | --- |
+| Window | 30 days | newest 100 reports |
+| Before deleting | folded into monthly `ArchiveSummary` | nothing — pruned outright |
+| What is lost | per-day detail | the report's prose |
+
+The asymmetry is the point. Archive events are **facts**, and facts summarise:
+"22 scheduled, 19 completed" survives the loss of which Tuesday was missed. A
+report is **prose derived from those facts**, and prose does not summarise into
+prose usefully — the numbers behind it already live on in `ArchiveSummary`.
+
+100 is not a taste call either: it is `Insight.MAX_HISTORY`, the ceiling
+`GET /insights/history?limit=` enforces. A report past it cannot be read
+through the API by any route, so keeping it serves nobody.
+`INSIGHT_RETENTION_COUNT` can raise the window and is **floored** at that
+ceiling — trimming inside it would make `?limit=100` come back short.
+
 ## Indexes
 
 Both are created at server startup (`startServer`), idempotently:
@@ -117,6 +140,8 @@ Both are created at server startup (`startServer`), idempotently:
 
 ## Tests
 
+`tests/insights.test.js`, `describe("Insight retention (cron step 11)")` covers
+the sibling. For the archive itself:
 `tests/archive.test.js`, `describe("Archive retention (cron step 10)")` — the
 window boundary, the fold's contents, the on-time rule, a repeated run, the
 crash-between-fold-and-delete case, a month-spanning batch, both endpoint

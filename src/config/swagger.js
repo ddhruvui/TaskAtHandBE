@@ -344,13 +344,13 @@ const options = {
               type: "boolean",
               example: true,
               description:
-                "Whether the weekly AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an GEMINI_API_KEY.",
+                "Whether the AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an GEMINI_API_KEY.",
             },
             insightSkipped: {
               type: "string",
               example: "not-due",
               description:
-                "Present as \"not-due\" when the run reached the insight step on a day it does not report: any day that is not Friday (UTC), or a Friday already reported on.",
+                "Present as \"not-due\" when the run reached the insight step but today's report already exists — the report fires once per UTC day, so a second run (a manual /cron/run, a redeploy, or a prior POST /insights/generate today) passes on it.",
             },
             archiveEventsPruned: {
               type: "integer",
@@ -368,6 +368,12 @@ const options = {
               type: "integer",
               example: 1,
               description: "Monthly ArchiveSummary documents written by step 10.",
+            },
+            insightReportsPruned: {
+              type: "integer",
+              example: 1,
+              description:
+                "Stored AI reports deleted by step 11. Only the newest INSIGHT_RETENTION_COUNT (default 100, the /insights/history ceiling) are kept.",
             },
             archiveCutoff: {
               type: "string",

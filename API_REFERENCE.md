@@ -1178,7 +1178,8 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 8    | 15th / last day of month | Archive a `call_result` event for every **due** call (done and missed; idempotent per dueDate), then reset done calls (`done: false`, `doneAt: null`): `biweekly` calls are due on the 15th; **all** calls on the last day of the month. No-op on other days |
 | 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `GEMINI_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
 | 10   | Every day          | **Summarise, then prune the archive**: fold `TaskArchive` events older than `ARCHIVE_RETENTION_DAYS` (default 30) into `ArchiveSummary` — one document per calendar month, kept forever — then delete the raw events. The cutoff is a **UTC day boundary** (only whole days are pruned) measured from the **real** clock, not the run's `date` override; the fold is idempotent per source day. Retention is clamped up to the 28-day insights window. Reports `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised`, `archiveCutoff` |
-| —    | Fridays            | Generate the AI insight report — only when today is **Friday (UTC)** and no report was already generated that Friday; on any other day (or a repeat run the same Friday) the response carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
+| 11   | Every day          | **Trim stored insight reports**: keep only the newest `INSIGHT_RETENTION_COUNT` (default 100 — the `/insights/history` ceiling, so older reports are unreachable anyway). No roll-up: a report is prose derived from `TaskArchive`, whose numbers survive in `ArchiveSummary`. Retention is floored at the ceiling. Reports `insightReportsPruned` |
+| —    | Every day          | Generate the AI insight report — once per **UTC day**; a second run the same day carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
 
 #### Resolving "next upcoming ECD" for step 7
 
@@ -1238,7 +1239,7 @@ Manually triggers the cron job with an optional date override in the request bod
 | Field          | Required | Notes                                                                                          |
 | -------------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `date`         | No       | ISO date string; defaults to today (UTC)                                                       |
-| `skipInsights` | No       | Skip the weekly AI insight report for this run (used by e2e tests to avoid a real Anthropic API call). Does **not** skip the step-9 stats snapshot, which costs nothing |
+| `skipInsights` | No       | Skip the AI insight report for this run (used by e2e tests to avoid a real Gemini API call). Does **not** skip the step-9 stats snapshot, which costs nothing |
 
 **Response `200`:**
 
@@ -1261,15 +1262,15 @@ Manually triggers the cron job with an optional date override in the request bod
   "archiveEventsFolded": 8,
   "archiveMonthsSummarised": 1,
   "archiveCutoff": "2026-07-20",
+  "insightReportsPruned": 1,
   "insightGenerated": true
 }
 ```
 
 `insightGenerated` is only present when the run reached the insight step
 (`skipInsights` unset, not test mode, `GEMINI_API_KEY` configured). The
-report is weekly: on any day that is not Friday (UTC) — or on a Friday it
-already ran for — it is `false` and the response also carries
-`"insightSkipped": "not-due"`.
+report fires once per UTC day: on a day it already ran for it is `false` and
+the response also carries `"insightSkipped": "not-due"`.
 
 **Error `500`:**
 
@@ -1304,6 +1305,7 @@ Manually triggers the cron job. No request body needed.
   "archiveEventsFolded": 8,
   "archiveMonthsSummarised": 1,
   "archiveCutoff": "2026-07-20",
+  "insightReportsPruned": 1,
   "insightGenerated": true
 }
 ```
@@ -1551,7 +1553,7 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
 The stats snapshot the **nightly cron** stored (cron step 9) — the same numbers
 as `GET /insights/stats` without recomputing them, plus `computedAt`. No AI is
 involved in either endpoint; this one exists so streaks and rates are available
-as of the last cron run, refreshed nightly even though the AI report is weekly.
+as of the last cron run, refreshed nightly alongside the AI report.
 
 **Response `200`:** the `/insights/stats` body plus `computedAt`:
 
@@ -1626,10 +1628,10 @@ Recent AI reports, newest first. `limit` defaults to 14 (max 100).
 
 ### `POST /insights/generate`
 
-Generates a fresh AI report now and stores it. The cron generates a report
-only on Fridays; this endpoint is an explicit user request, so it ignores that
-gate and always generates — and a report generated here does not consume that
-week's Friday run.
+Generates a fresh AI report now and stores it. The cron generates one per UTC
+day; this endpoint is an explicit user request, so it ignores that gate and
+always generates. A report generated here **does** consume that day's
+scheduled run — the nightly cron will then report `insightSkipped: "not-due"`.
 
 **Request Body (optional):**
 
