@@ -90,6 +90,7 @@ const updateTask = route(
       done: optionalBoolean(req.body.done, "done"),
       priority: optionalPriority(req.body.priority),
       reason: optionalText(req.body.reason, "reason"),
+      vacationMove: optionalBoolean(req.body.vacationMove, "vacationMove"),
       notes,
       ecd,
     });
@@ -101,6 +102,10 @@ const updateTask = route(
       if (trimmed === "") delete updates.reason;
       else updates.reason = trimmed;
     }
+
+    // vacationMove rides along the same way — set by the Vacation panel when
+    // it moves a task out of a booked trip, so the resulting postpone is
+    // never read as procrastination. Also never stored on the task.
 
     const updated = await Task.update(req.params.id, updates);
     res.json(requireFound(updated, "Task not found"));

@@ -71,6 +71,12 @@ currentMissStreak: trailingStreak(results, (r) => !r.completed),
 Keeping this out of the service is also what lets the numbers be unit-tested
 without an archive to read from.
 
+Neither function needed changing for vacation, and that is worth knowing: a
+paused day is not `completed`, so both runs already terminate on it — which is
+exactly the requested behaviour, a streak that restarts on return rather than
+spanning the break. What vacation changes is the *denominator* and the
+per-weekday miss counts, in `computeStats`. See [Vacation](Vacation.md).
+
 > **Naming gotcha.** `bucket` is a function here. `computeStats` has a
 > `headerBucket` accumulator too — do not shadow the import with a local
 > `const bucket = …` inside a `case` block, or the call above it hits the

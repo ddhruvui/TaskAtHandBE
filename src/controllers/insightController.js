@@ -3,7 +3,7 @@ const { ArchiveSummary } = require("../models/ArchiveSummary");
 const Insight = require("../models/Insight");
 const InsightStats = require("../models/InsightStats");
 const {
-  computeStats,
+  buildStats,
   generateInsights,
   DEFAULT_PERIOD_DAYS,
 } = require("../services/insightsService");
@@ -18,8 +18,11 @@ function parsePeriodDays(req) {
 }
 
 /**
- * The archive events for the requested window, with the window itself — both
- * archive reads need the same three lines of date arithmetic.
+ * The archive events for the requested window, with the window itself.
+ *
+ * Raw-archive reads only. The stats endpoints go through
+ * `insightsService.buildStats`, which applies the vacation freeze — a plain
+ * window read would report days the user was away as ordinary days.
  * @returns {Promise<{days: number, events: Array}>}
  */
 async function readPeriod(req, type) {
@@ -59,17 +62,17 @@ const getArchiveSummary = route(
 
 /**
  * GET /insights/stats?days=28
- * Exact computed stats (no AI): habit rates, streaks, slippage, reschedules.
+ * Exact computed stats (no AI): habit rates, streaks, slippage, reschedules,
+ * plus each habit's all-time completion count.
+ *
+ * Vacation-aware: days inside a booked range are paused rather than missed,
+ * and while the user is away the whole payload freezes at the day before they
+ * left (`vacation.frozenAt` says so).
  */
 const getStats = route(
   { action: "computing stats", failure: "Failed to compute stats" },
   async (req, res) => {
-    const { days, events } = await readPeriod(req);
-    res.json({
-      periodDays: days,
-      eventCount: events.length,
-      ...computeStats(events),
-    });
+    res.json(await buildStats({ periodDays: parsePeriodDays(req) }));
   },
 );
 
@@ -144,11 +147,26 @@ const generate = route(
         ? Math.min(req.body.days, 365)
         : DEFAULT_PERIOD_DAYS;
 
-    const insight = requireFound(
-      await generateInsights({ periodDays: days }),
-      "No archive data to analyze yet — complete some tasks and let the nightly cron run first",
-    );
-    res.status(201).json(insight);
+    const insight = await generateInsights({ periodDays: days });
+
+    // Generation is off for the whole trip, on demand as well as nightly:
+    // "skip it completely" was the requirement, and the stats it would report
+    // on are frozen anyway.
+    if (insight && insight.onVacation) {
+      return res.status(409).json({
+        error:
+          "You're on vacation — insight reports are paused until you're back",
+      });
+    }
+
+    res
+      .status(201)
+      .json(
+        requireFound(
+          insight,
+          "No archive data to analyze yet — complete some tasks and let the nightly cron run first",
+        ),
+      );
   },
 );
 

@@ -159,6 +159,51 @@ once; cron step 8 clears the `done` checkmark at each period boundary (the
 
 ---
 
+### Vacation
+
+```typescript
+interface Vacation {
+  _id: string; // MongoDB ObjectId
+  startDate: string; // "YYYY-MM-DD" — first vacation day, INCLUSIVE
+  endDate: string; // "YYYY-MM-DD" — last vacation day, INCLUSIVE
+  note: string; // Optional free text (default: "")
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+A period the user booked off. **Both dates are mandatory and both are
+inclusive** — the day a vacation starts and the day it ends are vacation days.
+There is no open-ended state; a required end date is what lets a trip be
+booked in advance, and coming home early is an edit. Ranges may not overlap,
+and they are **never pruned**: archive events carry no vacation flag, so every
+rule is re-derived from these ranges at read time.
+
+Vacation is a **lens on the history, not a pause button** — every cron step
+runs unchanged and anything the user ticks off while away still counts. What
+changes is how the archive is read:
+
+| Signal                            | Vacation rule                                                                                   |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Missed habit / recurring day      | **Paused** — out of the completion-rate denominator, `missedByDow` and `byHeader.missed`          |
+| Late completion                   | `adjustedSlippageDays` = raw slippage minus the vacation days between `plannedFor` and `doneAt`   |
+| Postpone                          | Counted as `vacationMoves`, excluded from both reason buckets                                     |
+| Deletion                          | Counted, but flagged `duringVacation`                                                             |
+| Missed call period                | Exempt **only** when ≥80% of the period was vacation                                              |
+
+**Streaks restart, they do not span.** An untouched vacation day is neither a
+hit nor a miss, but it does end the run: 10 clean days, a week away, then 3
+clean days reads as current 3, best 10, rate 100% over 13 scheduled days. A
+habit the user *did* complete while away is an ordinary win that keeps the run
+alive — vacation removes the penalty, never the credit.
+
+**The display freeze.** While a vacation is active, the stats window ends the
+day before it started (`vacation.frozenAt`), so numbers do not visibly decay
+over a holiday. Work done mid-trip is archived as usual and surfaces the day
+the user is back.
+
+---
+
 ### Goal
 
 ```typescript
@@ -545,10 +590,13 @@ Updates a task. All body fields are optional — send only what needs to change.
 | `done`     | boolean              | Triggers automatic priority reorder   |
 | `priority` | integer              | Manual reorder within header; 0-based |
 | `reason`   | string               | Optional postpone reason (see below)  |
+| `vacationMove` | boolean          | Optional; marks a re-date out of a booked vacation (see below) |
 
 > `headerId` is **not** updatable after creation.
 
 > Changing `ecd` also logs a `task_rescheduled` event to the TaskArchive (with a `pushedLater` flag when a one-time date moves later). Toggling `done` sets/clears `doneAt`.
+
+> **`vacationMove`** marks a postpone made because of a booked vacation — the Vacation panel sets it when moving a task out of a trip. It is stored on the `task_rescheduled` event, counted as a `vacationMove` rather than a postpone, and excluded from every procrastination signal. The flag is **required** rather than inferred because a trip booked in advance is re-dated before it starts, so the event's own timestamp falls outside every vacation range. Like `reason`, it is never written to the task document; a non-boolean returns `400`.
 
 > **`reason`** annotates a postpone. When the `ecd` change pushes a one-time date later, the (trimmed) `reason` is stored on the `task_rescheduled` event and weighed by the AI insights: a postpone with no reason (or a blank one) is treated as procrastination, a valid reason as a legitimate deferral. It is ignored for non-reschedule updates and is **never** written to the task document. A non-string `reason` returns `400`.
 
@@ -956,6 +1004,145 @@ Deletes a call.
 
 ---
 
+## Vacations API
+
+Base path: `/vacations`
+
+Ranges are inclusive at both ends and may not overlap. They are never pruned —
+they are the only record that makes past insights re-derivable.
+
+---
+
+### `GET /vacations`
+
+Returns every stored vacation, oldest `startDate` first.
+
+**Response `200`:**
+
+```json
+[
+  {
+    "_id": "...",
+    "startDate": "2026-09-03",
+    "endDate": "2026-09-15",
+    "note": "Kerala trip",
+    "createdAt": "2026-08-20T00:00:00.000Z",
+    "updatedAt": "2026-08-20T00:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `GET /vacations/status`
+
+Whether today (UTC) is a vacation day, with the day counts, anything upcoming,
+and anything that just ended. Clients render their banner from this rather
+than re-deriving the date maths.
+
+**Response `200`:**
+
+```json
+{
+  "today": "2026-09-07",
+  "onVacation": true,
+  "active": {
+    "_id": "...",
+    "startDate": "2026-09-03",
+    "endDate": "2026-09-15",
+    "note": "Kerala trip",
+    "totalDays": 13,
+    "dayOfVacation": 5,
+    "daysRemaining": 8
+  },
+  "upcoming": [],
+  "justReturnedFrom": null
+}
+```
+
+`justReturnedFrom` reports a vacation that ended within the last **3 days**
+(`{ startDate, endDate, days, daysAgo }`), which is what drives the "returned
+from an N-day break" framing on the first report back. The grace window means
+one missed cron night does not cost the user that report.
+
+---
+
+### `GET /vacations/:id/tasks`
+
+The undone one-time `date` tasks scheduled inside the vacation, oldest date
+first, each with a denormalized `headerName`. This is the re-date list the
+Vacation panel works through.
+
+Recurring tasks (`day_of_week`, `day_of_month`, `day_of_year`) are
+deliberately **absent**: they cannot be moved without permanently rewriting
+their schedule, so those days are exempted instead.
+
+**Response `200`:** array of tasks, each with `headerName`.
+**Error `404`:** vacation not found.
+
+---
+
+### `POST /vacations`
+
+Books a vacation.
+
+**Request Body:**
+
+```json
+{
+  "startDate": "2026-09-03",
+  "endDate": "2026-09-15",
+  "note": "Kerala trip"
+}
+```
+
+| Field       | Required | Type   | Notes                                       |
+| ----------- | -------- | ------ | ------------------------------------------- |
+| `startDate` | Yes      | string | `"YYYY-MM-DD"`; first vacation day          |
+| `endDate`   | Yes      | string | `"YYYY-MM-DD"`; last vacation day, `>= startDate` |
+| `note`      | No       | string | Free text, may be empty                     |
+
+**Response `201`:** the created vacation.
+
+**Error `400`:**
+
+```json
+{ "error": "Vacation overlaps an existing one (2026-09-01 to 2026-09-10)" }
+```
+
+Also `400` for a malformed date (`"startDate must be a YYYY-MM-DD string"`) or
+`endDate` before `startDate` (`"endDate must be on or after startDate"`).
+
+---
+
+### `PUT /vacations/:id`
+
+Corrects a vacation's `startDate`, `endDate` and/or `note` — the
+forgot-to-book-it case and the home-early case. All fields optional. The
+**resulting** range is validated, not just the fields sent, and the row being
+edited is never treated as overlapping itself.
+
+**Response `200`:** the updated vacation.
+**Error `400`:** invalid date, inverted range, or an overlap with another vacation.
+**Error `404`:** vacation not found.
+
+---
+
+### `DELETE /vacations/:id`
+
+Deletes a vacation — and with it the forgiveness it granted, since archive
+events carry no vacation flag of their own.
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** vacation not found.
+
+---
+
 ## Goals API
 
 Base path: `/goals`
@@ -1246,6 +1433,7 @@ Manually triggers the cron job with an optional date override in the request bod
 ```json
 {
   "ranAt": "2026-01-01T00:00:00.000Z",
+  "onVacation": false,
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
@@ -1289,6 +1477,7 @@ Manually triggers the cron job. No request body needed.
 ```json
 {
   "ranAt": "2026-01-01T00:00:00.000Z",
+  "onVacation": false,
   "tasksDeleted": 2,
   "tasksMarkedUndone": 3,
   "tasksClamped": 1,
@@ -1399,6 +1588,25 @@ Returns raw TaskArchive events for the period, oldest first.
 }
 ```
 
+`task_rescheduled` events carry both annotations the insights read — the user's optional postpone `reason` and the `vacationMove` flag set when the Vacation panel moves a task out of a booked trip:
+
+```json
+{
+  "_id": "...",
+  "type": "task_rescheduled",
+  "taskId": "...",
+  "taskName": "Ship report",
+  "headerId": "...",
+  "headerName": "Work",
+  "fromEcd": { "type": "date", "value": "2026-09-07" },
+  "toEcd": { "type": "date", "value": "2026-09-16" },
+  "pushedLater": true,
+  "reason": null,
+  "vacationMove": true,
+  "at": "2026-08-20T09:15:00.000Z"
+}
+```
+
 `task_deleted` events are logged by the Task model when an **undone** task is deleted manually (see `DELETE /tasks/:id`), carrying the user's `reason`:
 
 ```json
@@ -1434,20 +1642,21 @@ Monthly totals only — per-day detail is **not** recoverable from it.
     "month": "2026-07",
     "days": ["2026-07-01", "2026-07-02"],
     "eventCount": 412,
+    "vacationDays": 4,
     "habits": [
-      { "taskName": "Meditate", "headerName": "Health", "scheduled": 22, "completed": 19 }
+      { "taskName": "Meditate", "headerName": "Health", "scheduled": 22, "completed": 19, "paused": 4 }
     ],
     "recurring": [
-      { "taskName": "Pay rent", "headerName": "Admin", "ecdType": "day_of_month", "scheduled": 1, "completed": 1 }
+      { "taskName": "Pay rent", "headerName": "Admin", "ecdType": "day_of_month", "scheduled": 1, "completed": 1, "paused": 0 }
     ],
     "calls": [
-      { "callName": "Grandma", "frequency": "biweekly", "scheduled": 2, "completed": 1 }
+      { "callName": "Grandma", "frequency": "biweekly", "scheduled": 2, "completed": 1, "exempt": 0 }
     ],
     "oneTimeTasks": { "completed": 14, "onTime": 11, "late": 3 },
-    "reschedules": { "total": 5, "pushedLater": 4, "pushedLaterNoReason": 2 },
-    "deletions": { "count": 2, "withReason": 1 },
+    "reschedules": { "total": 5, "pushedLater": 4, "pushedLaterNoReason": 2, "vacationMoves": 1 },
+    "deletions": { "count": 2, "withReason": 1, "duringVacation": 0 },
     "byHeader": [
-      { "headerName": "Health", "completed": 19, "missed": 3, "reschedules": 1, "deleted": 0 }
+      { "headerName": "Health", "completed": 19, "missed": 3, "paused": 4, "reschedules": 1, "deleted": 0 }
     ],
     "firstAt": "2026-07-01T00:00:03.000Z",
     "lastAt": "2026-07-31T23:59:00.000Z",
@@ -1459,6 +1668,15 @@ Monthly totals only — per-day detail is **not** recoverable from it.
 `days` lists the source days already folded into the month — the guard that
 stops a repeated cron run counting a day twice. Calls are deliberately absent
 from `byHeader`; they have no header.
+
+**Vacation rules are applied at fold time**, and have to be: the live stats
+re-derive them on every read, but these totals outlive the events they came
+from. Once step 10 deletes the raw days nothing can re-derive them, so
+`vacationDays`, `paused`, `exempt`, `vacationMoves` and `duringVacation` are
+the surviving trace of a break. One consequence: correcting a vacation range
+more than `ARCHIVE_RETENTION_DAYS` after the fact does **not** revise a month
+that has already been folded. Summaries written before vacation existed are
+normalized on read, so a missing counter can never become `NaN`.
 
 Returns `[]` before anything has been pruned.
 
@@ -1489,11 +1707,13 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
       "scheduledDays": ["Mon", "Wed", "Fri"],
       "scheduled": 12,
       "completed": 10,
+      "pausedDays": 3,
+      "lifetimeCompleted": 214,
       "completionRate": 83,
       "currentStreak": 4,
       "longestStreak": 7,
       "missedByDow": { "Fri": 2 },
-      "recentResults": [{ "dueDate": "2026-07-03", "completed": true }]
+      "recentResults": [{ "dueDate": "2026-07-03", "completed": true, "vacation": false }]
     }
   ],
   "recurringTasks": [],
@@ -1509,6 +1729,7 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
         "plannedFor": "2026-07-06",
         "doneAt": "2026-07-04T18:00:00.000Z",
         "slippageDays": -2,
+        "adjustedSlippageDays": -2,
         "onTime": true
       }
     ]
@@ -1521,30 +1742,69 @@ Exact computed stats over the archive — no AI involved. Returns per-habit comp
       "pushedLater": 3,
       "pushedLaterWithReason": 1,
       "pushedLaterNoReason": 2,
+      "vacationMoves": 0,
       "reasons": ["Blocked on the editor"]
     }
   ],
   "deletions": {
     "count": 2,
     "withReason": 2,
+    "duringVacation": 0,
     "recent": [
-      { "taskName": "Learn cello", "headerName": "Hobbies", "ecdType": "date", "reason": "Too big, kept putting it off" }
+      { "taskName": "Learn cello", "headerName": "Hobbies", "ecdType": "date", "reason": "Too big, kept putting it off", "duringVacation": false }
     ]
   },
-  "byHeader": { "Health": { "completed": 19, "missed": 2, "reschedules": 3, "deleted": 0 } },
+  "byHeader": { "Health": { "completed": 19, "missed": 2, "paused": 0, "reschedules": 3, "deleted": 0 } },
   "calls": [
     {
       "callName": "Grandma",
       "frequency": "biweekly",
       "scheduled": 4,
       "completed": 2,
+      "exemptPeriods": 0,
       "completionRate": 50,
       "currentMissStreak": 2,
-      "recentResults": [{ "dueDate": "2026-07-15", "completed": false }]
+      "recentResults": [{ "dueDate": "2026-07-15", "completed": false, "exempt": false }]
     }
-  ]
+  ],
+  "vacation": {
+    "onVacation": false,
+    "active": null,
+    "frozenAt": null,
+    "vacationDaysInWindow": 0,
+    "justReturnedFrom": null
+  }
 }
 ```
+
+**Vacation-aware.** Every figure above already has the vacation rules applied —
+see the [Vacation](#vacation) data model for the full table:
+
+- `pausedDays` is how many scheduled days a booked vacation excused. Those days
+  leave `scheduled` (so the rate is not diluted), leave `missedByDow` and leave
+  `byHeader.missed` — but they still **end a streak**, because the streak
+  restarts on return rather than spanning the break. A habit the user *did*
+  complete while away is an ordinary hit and keeps the run alive.
+- `recentResults[].vacation` marks the days a vacation covered, so a client can
+  render them as paused rather than missed.
+- `adjustedSlippageDays` is `slippageDays` minus the vacation days between
+  `plannedFor` and `doneAt`. **`onTime`, `onTimeCount`, `lateCount` and
+  `avgSlippageDays` all use the adjusted number**; the raw one is kept for
+  reference.
+- `reschedules[].vacationMoves` counts postpones made because of a vacation.
+  They are excluded from both `pushedLaterWithReason` and
+  `pushedLaterNoReason`.
+- `calls[].exemptPeriods` counts periods a vacation swallowed (≥80% of the
+  period). Those leave `scheduled` and do not continue a miss streak; a short
+  trip is not a reason to skip ringing someone.
+- `lifetimeCompleted` is the habit's **all-time** completion count — the
+  permanent monthly summaries plus everything not yet folded into them. It
+  ignores `days` entirely. Because the summaries key on task *name*, renaming a
+  habit splits its lifetime total.
+- `vacation.frozenAt` non-null means the whole payload is **as of that day**,
+  not today: while a vacation is active the window ends the day before it
+  started, so a streak or a rate does not visibly decay over a holiday. Work
+  done mid-trip is archived as usual and appears once the user is home.
 
 ---
 
@@ -1593,6 +1853,7 @@ Most recent stored AI report.
   "periodDays": 28,
   "model": "gemini-3.7-flash",
   "stats": { "...": "stats the report was based on" },
+  "vacation": { "...": "the vacation context those stats were computed under" },
   "report": {
     "summary": "string",
     "habitsOnTrack": ["string"],
@@ -1609,6 +1870,8 @@ Most recent stored AI report.
 > `callReminders` (people to call: not yet called this period, repeat misses) is required in newly generated reports — an empty array when no calls are set up — but absent from reports stored before the Calls feature; clients must tolerate its absence.
 >
 > `deletionInsights` (patterns among manually-deleted undone tasks and their stated reasons — abandonment vs. healthy pruning) is likewise required in newly generated reports — an empty array when nothing was deleted — but absent from reports stored before this feature; clients must tolerate its absence.
+>
+> `vacation` mirrors the block on `GET /insights/stats` and is absent from reports stored before the Vacation feature. **No report exists for a vacation day at all** — a gap in `generatedAt` that lines up with a booked range is expected, not a failure.
 
 **Error `404`:**
 
@@ -1633,6 +1896,12 @@ day; this endpoint is an explicit user request, so it ignores that gate and
 always generates. A report generated here **does** consume that day's
 scheduled run — the nightly cron will then report `insightSkipped: "not-due"`.
 
+**One gate it does not bypass: vacation.** Reports are skipped entirely while
+the user is away, on demand as well as nightly — there is no coaching to do on
+a holiday, and the stats the report would draw on are frozen anyway. Clients
+should hide or disable their "generate now" control when
+`GET /vacations/status` reports `onVacation`.
+
 **Request Body (optional):**
 
 ```json
@@ -1645,6 +1914,12 @@ scheduled run — the nightly cron will then report `insightSkipped: "not-due"`.
 
 ```json
 { "error": "No archive data to analyze yet — complete some tasks and let the nightly cron run first" }
+```
+
+**Error `409`** — the user is on vacation:
+
+```json
+{ "error": "You're on vacation — insight reports are paused until you're back" }
 ```
 
 **Error `503`** — no API key configured:

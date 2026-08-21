@@ -14,9 +14,12 @@ const BaseModel = require("./BaseModel");
  *        taskCreatedAt, doneAt }
  *  - task_rescheduled: a task's ECD was changed by the user
  *      { taskId, taskName, headerId, headerName, fromEcd, toEcd, pushedLater,
- *        reason }  reason is the user's optional stated cause for a postpone
- *        (null when none was given); a pushedLater reschedule with no reason is
- *        an unexcused procrastination signal.
+ *        reason, vacationMove }  reason is the user's optional stated cause for
+ *        a postpone (null when none was given); a pushedLater reschedule with no
+ *        reason is an unexcused procrastination signal. `vacationMove` is set by
+ *        the Vacation panel when it moves a task out of a booked trip — such a
+ *        move is never procrastination, and the flag is required because a trip
+ *        booked in advance is re-dated before any vacation day has arrived.
  *  - task_deleted:    an undone task the user removed, with their stated reason
  *      { taskId, taskName, headerId, headerName, ecdType, ecd, reason,
  *        taskCreatedAt }
@@ -117,6 +120,35 @@ class Archive extends BaseModel {
       )
       .toArray();
     return new Set(existing.map((event) => event[idField]));
+  }
+
+  /**
+   * How many times each named task was completed, across every raw event of a
+   * type — no date window.
+   *
+   * The raw half of a lifetime total. `ArchiveSummary` holds the folded months
+   * and this holds everything since the last prune, and the two are disjoint
+   * by construction (step 10 deletes exactly what it folds), so the caller can
+   * add them without double-counting.
+   *
+   * Keyed by **name**, because that is the only identifier the monthly
+   * summaries kept — which also means renaming a task splits its lifetime
+   * total in two.
+   *
+   * @param {string} type  Event type, e.g. "habit_result"
+   * @returns {Promise<Object<string, number>>}
+   */
+  static async completedCountsByName(type) {
+    const collection = await this.getCollection();
+    const rows = await collection
+      .aggregate([
+        { $match: { type, completed: true } },
+        { $group: { _id: "$taskName", count: { $sum: 1 } } },
+      ])
+      .toArray();
+    return Object.fromEntries(
+      rows.filter((r) => r._id).map((r) => [r._id, r.count]),
+    );
   }
 
   /**

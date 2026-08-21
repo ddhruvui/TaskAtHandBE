@@ -118,6 +118,27 @@ function dateStringOrNull(value, label) {
 }
 
 /**
+ * A required "YYYY-MM-DD" date. Unlike `dateStringOrNull`, absent is a failure
+ * rather than a null — a vacation with no end date is not a vacation.
+ * @returns {string}
+ */
+function requiredDateString(value, label) {
+  if (!isDateString(value)) {
+    throw new ValidationError(`${label} must be a YYYY-MM-DD string`);
+  }
+  return value;
+}
+
+/**
+ * The same rule, applied only when the field is present.
+ * @returns {string|undefined}
+ */
+function optionalDateString(value, label) {
+  if (value === undefined) return undefined;
+  return requiredDateString(value, label);
+}
+
+/**
  * One of a fixed set of values. `message` is passed in whole because the
  * existing wordings differ too much to generate ('Call frequency must be
  * "biweekly" or "monthly"' vs "Step status must be one of: ...").
@@ -191,6 +212,8 @@ module.exports = {
   optionalPriority,
   optionalStringOrNull,
   dateStringOrNull,
+  requiredDateString,
+  optionalDateString,
   oneOf,
   requireObject,
   requireArray,

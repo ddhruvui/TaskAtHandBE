@@ -109,6 +109,15 @@ router.post("/", createTask);
  *                   no reason is treated as procrastination, a valid reason as a
  *                   legitimate deferral. Ignored for non-reschedule updates.
  *                 example: "Blocked on the vendor's reply"
+ *               vacationMove:
+ *                 type: boolean
+ *                 description: >
+ *                   Optional. Set by the Vacation panel when it moves a task out of
+ *                   a booked vacation. Stored on the `task_rescheduled` archive event
+ *                   and excluded from every procrastination signal — a trip booked in
+ *                   advance is re-dated before it starts, so the event's own timestamp
+ *                   cannot identify it. Never written to the task itself.
+ *                 example: true
  *     responses:
  *       200:
  *         description: Updated task

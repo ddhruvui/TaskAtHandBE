@@ -16,6 +16,19 @@ const {
   average,
   countWhere,
 } = require("../utils/stats");
+const {
+  isVacationDay,
+  isPausedResult,
+  isVacationEvent,
+  isCallPeriodExempt,
+  adjustedSlippage,
+  activeVacation,
+  statsCutoff,
+  recentlyEnded,
+  vacationDaysBetween,
+  vacationLength,
+  eventDay,
+} = require("../utils/vacation");
 
 const DEFAULT_PERIOD_DAYS = 28;
 
@@ -42,10 +55,26 @@ function insightModel() {
 
 /**
  * Compute per-habit and per-task statistics from archive events.
+ *
+ * Vacation ranges change how days are *read*, never what was recorded. The one
+ * rule that drives most of it: a scheduled day that passed inside a vacation
+ * and was not done is **paused** — neither a hit nor a miss. It drops out of
+ * the completion-rate denominator, out of `missedByDow`, out of the per-header
+ * miss count. It does still break a streak, because the user asked for the
+ * streak to restart when they get back rather than span the gap.
+ *
+ * A day inside a vacation that the user *did* tick off is an ordinary win: it
+ * counts, and it keeps the run alive. The asymmetry is deliberate — vacation
+ * removes the penalty, never the credit.
+ *
+ * Pure: no database access, so the arithmetic stays unit-testable.
+ *
  * @param {Array} events  Archive events, oldest first
+ * @param {Object} [options]
+ * @param {Array} [options.vacations]  Stored ranges; omitted means "no vacations"
  * @returns {Object}
  */
-function computeStats(events) {
+function computeStats(events, { vacations = [] } = {}) {
   const habits = {};
   const recurringTasks = {};
   const completedTasks = [];
@@ -58,6 +87,7 @@ function computeStats(events) {
     bucket(byHeader, name || "(no header)", () => ({
       completed: 0,
       missed: 0,
+      paused: 0,
       reschedules: 0,
       deleted: 0,
     }));
@@ -69,27 +99,42 @@ function computeStats(events) {
           taskName: e.taskName,
           headerName: e.headerName,
           scheduledDays: e.scheduledDays,
-          results: [], // { dueDate, completed } oldest first
+          results: [], // { dueDate, completed, vacation } oldest first
         }));
         habit.taskName = e.taskName;
-        habit.results.push({ dueDate: e.dueDate, completed: e.completed });
+        habit.results.push({
+          dueDate: e.dueDate,
+          completed: e.completed,
+          vacation: isVacationDay(e.dueDate, vacations),
+        });
         const header = headerBucket(e.headerName);
         if (e.completed) header.completed++;
+        else if (isPausedResult(e, vacations)) header.paused++;
         else header.missed++;
         break;
       }
       case "task_result": {
-        const recurring = bucket(recurringTasks, e.taskId || e.taskName, () => ({
-          taskName: e.taskName,
-          headerName: e.headerName,
-          ecdType: e.ecdType,
-          scheduled: 0,
-          completed: 0,
-        }));
-        recurring.scheduled++;
+        const recurring = bucket(
+          recurringTasks,
+          e.taskId || e.taskName,
+          () => ({
+            taskName: e.taskName,
+            headerName: e.headerName,
+            ecdType: e.ecdType,
+            scheduled: 0,
+            completed: 0,
+            paused: 0,
+          }),
+        );
+        const paused = isPausedResult(e, vacations);
+        // A paused cycle never reached the user, so it is not something they
+        // were scheduled to do — it leaves the denominator entirely.
+        if (paused) recurring.paused++;
+        else recurring.scheduled++;
         if (e.completed) recurring.completed++;
         const header = headerBucket(e.headerName);
         if (e.completed) header.completed++;
+        else if (paused) header.paused++;
         else header.missed++;
         break;
       }
@@ -103,15 +148,26 @@ function computeStats(events) {
           e.plannedFor && e.doneAt
             ? daysBetween(`${e.plannedFor}T00:00:00Z`, e.doneAt)
             : null;
+        // ...and then the days the user was away come back out of it, so a
+        // task that outlived a holiday is only as late as the days it was
+        // actually actionable. This is the number every on-time count uses.
+        const adjustedSlippageDays = adjustedSlippage(
+          e.plannedFor,
+          e.doneAt ? new Date(e.doneAt).toISOString().slice(0, 10) : null,
+          slippageDays,
+          vacations,
+        );
         completedTasks.push({
           taskName: e.taskName,
           headerName: e.headerName,
           plannedFor: e.plannedFor,
           doneAt: e.doneAt,
           slippageDays,
+          adjustedSlippageDays,
           // Finishing early or on the day counts as a win, not as slip — only
           // a task that outlived its planned date is late.
-          onTime: slippageDays === null ? null : slippageDays <= 0,
+          onTime:
+            adjustedSlippageDays === null ? null : adjustedSlippageDays <= 0,
         });
         headerBucket(e.headerName).completed++;
         break;
@@ -120,11 +176,20 @@ function computeStats(events) {
         const person = bucket(callsByPerson, e.callId || e.callName, () => ({
           callName: e.callName,
           frequency: e.frequency,
-          results: [], // { dueDate, completed } oldest first
+          results: [], // { dueDate, completed, exempt } oldest first
         }));
         person.callName = e.callName;
         person.frequency = e.frequency;
-        person.results.push({ dueDate: e.dueDate, completed: e.completed });
+        person.results.push({
+          dueDate: e.dueDate,
+          completed: e.completed,
+          // Calls are the one signal measured over a period, not a day: a
+          // short trip must not excuse a whole fortnight of not ringing
+          // someone, so only a near-total overlap forgives the period.
+          exempt:
+            !e.completed &&
+            isCallPeriodExempt(e.dueDate, e.frequency, vacations),
+        });
         // Calls have no header — deliberately not counted in byHeader
         break;
       }
@@ -141,6 +206,11 @@ function computeStats(events) {
             // pushes are unexcused procrastination, reasons are for the AI to judge.
             pushedLaterWithReason: 0,
             pushedLaterNoReason: 0,
+            // ...and a third bucket that is neither: moves made because of a
+            // vacation. Counted separately so they never reach the AI as
+            // avoidance, which is the whole point of the Vacation panel's
+            // re-date flow.
+            vacationMoves: 0,
             reasons: [],
           }),
         );
@@ -148,7 +218,9 @@ function computeStats(events) {
         rescheduled.total++;
         if (e.pushedLater) {
           rescheduled.pushedLater++;
-          if (e.reason) {
+          if (isVacationEvent(e, vacations)) {
+            rescheduled.vacationMoves++;
+          } else if (e.reason) {
             rescheduled.pushedLaterWithReason++;
             rescheduled.reasons.push(e.reason);
           } else {
@@ -164,6 +236,10 @@ function computeStats(events) {
           headerName: e.headerName || null,
           ecdType: e.ecdType || null,
           reason: e.reason || null,
+          // Still counted — dropping an intention is a real event — but
+          // labelled, so the coach does not read a holiday clear-out as
+          // avoidance.
+          duringVacation: isVacationEvent(e, vacations),
         });
         headerBucket(e.headerName).deleted++;
         break;
@@ -173,14 +249,16 @@ function computeStats(events) {
 
   // Finalize habit metrics: rate, streaks, misses by weekday
   const wasCompleted = (result) => result.completed;
+  const wasPaused = (result) => result.vacation && !result.completed;
   const habitStats = Object.values(habits).map((h) => {
     const results = h.results.sort(byDueDate);
-    const scheduled = results.length;
+    const pausedDays = countWhere(results, wasPaused);
+    const scheduled = results.length - pausedDays;
     const completed = countWhere(results, wasCompleted);
 
     const missedByDow = {};
     for (const r of results) {
-      if (r.completed) continue;
+      if (r.completed || wasPaused(r)) continue;
       const dow = DOW_NAMES[new Date(`${r.dueDate}T00:00:00Z`).getUTCDay()];
       missedByDow[dow] = (missedByDow[dow] || 0) + 1;
     }
@@ -191,7 +269,11 @@ function computeStats(events) {
       scheduledDays: h.scheduledDays,
       scheduled,
       completed,
+      pausedDays,
       completionRate: completionRate(completed, scheduled),
+      // A paused day is not `completed`, so both runs terminate on it without
+      // any extra handling — which is exactly the requested behaviour: the
+      // streak restarts on return rather than spanning the trip.
       currentStreak: trailingStreak(results, wasCompleted),
       longestStreak: longestRun(results, wasCompleted),
       missedByDow,
@@ -202,7 +284,8 @@ function computeStats(events) {
   // Finalize call metrics: rate and current miss streak per person
   const callStats = Object.values(callsByPerson).map((c) => {
     const results = c.results.sort(byDueDate);
-    const scheduled = results.length;
+    const exemptPeriods = countWhere(results, (r) => r.exempt);
+    const scheduled = results.length - exemptPeriods;
     const completed = countWhere(results, wasCompleted);
 
     return {
@@ -210,8 +293,13 @@ function computeStats(events) {
       frequency: c.frequency,
       scheduled,
       completed,
+      exemptPeriods,
       completionRate: completionRate(completed, scheduled),
-      currentMissStreak: trailingStreak(results, (r) => !r.completed),
+      // An exempt period neither continues a miss streak nor counts as one.
+      currentMissStreak: trailingStreak(
+        results,
+        (r) => !r.completed && !r.exempt,
+      ),
       recentResults: results.slice(-8),
     };
   });
@@ -220,7 +308,7 @@ function computeStats(events) {
   // on-time one, so a task done three days early can no longer cancel out a
   // task done three days late and report the pair as "no slip".
   const slippages = completedTasks
-    .map((t) => t.slippageDays)
+    .map((t) => t.adjustedSlippageDays)
     .filter((s) => s !== null);
   const lateness = slippages.map((s) => Math.max(0, s));
 
@@ -243,6 +331,7 @@ function computeStats(events) {
     deletions: {
       count: deletedTasks.length,
       withReason: countWhere(deletedTasks, (d) => d.reason),
+      duringVacation: countWhere(deletedTasks, (d) => d.duringVacation),
       recent: deletedTasks.slice(-20),
     },
     byHeader,
@@ -323,6 +412,7 @@ Definitions:
 - A one-time task finished **on or before** the date it was planned for is ON TIME — a success. precomputedStats.oneTimeTasks gives onTimeCount, lateCount and avgSlippageDays (days late, where early and on-the-day completions count as 0), and each entry in .recent carries slippageDays (negative = finished early) plus onTime. Only slippageDays > 0 is slippage: never describe a 0 or negative slippageDays as a slip, a delay or a problem, and don't ask the user to fix it. Credit early and on-the-day completions where the data shows them.
 - "Calls" are people the user must phone on a cadence: "biweekly" means twice a month (periods 1st–14th and 15th–month-end), "monthly" means once a month. The called checkmark resets at each period boundary; a call_result with completed=false means that person was NOT called that period. currentCalls shows the live status for the current period.
 - A reschedule that pushes a date later (a "postpone") is a procrastination signal, especially when repeated on the same task. When the user postpones they may attach a reason: for each rescheduled task, precomputedStats.reschedules gives pushedLater, pushedLaterNoReason, pushedLaterWithReason and the stated reasons[]. A pushed-later reschedule with NO reason is procrastination for sure. One WITH a reason must be judged: accept genuinely valid causes (blocked by a dependency, illness, a real higher-priority emergency, plans changed for a legitimate reason) as legitimate deferrals and do NOT flag them; treat weak excuses ("didn't feel like it", "too big", "ran out of time", "kept putting it off") as avoidance, same as an unexcused postpone.
+- A "vacation" is a period the user booked off, inclusive of both its first and last day. Vacation changes how days are READ, not what happened. precomputedStats.vacation gives the current status and how many vacation days fall inside the window; individual entries carry their own markers (habit recentResults[].vacation, calls recentResults[].exempt, reschedules vacationMoves, deletions duringVacation).
 - A "deletion" (task_deleted event) is a task the user removed *while it was still not done*, each carrying the user's stated reason. It represents an abandoned intention, not a completed one — treat the reason as the primary signal for WHY it was dropped. precomputedStats.deletions has the counts; the reasons live on the raw task_deleted events and byHeader.deleted counts them per header.
 
 Rules:
@@ -330,13 +420,126 @@ Rules:
 - Be direct and specific: name the task, the day pattern, the number. No generic advice ("try to be more consistent") — every suggestion must name a concrete task and a concrete change.
 - The user's goal is to stop procrastinating. Diagnose WHY a task is slipping (too big, wrong day, wrong header, competing habits) and prescribe the smallest change that would fix it.
 - For deletions: read each reason and separate healthy pruning ("no longer needed", "duplicate", priorities genuinely changed) from avoidance ("too big", "ran out of time", "kept putting it off"). Name the task and quote/paraphrase its reason. Flag repeat abandonment of the same intention or a header where tasks are frequently dropped. If there were no deletions, return an empty deletionInsights array.
-- For postpones (pushed-later reschedules): call out tasks with pushedLaterNoReason > 0 as unexcused procrastination by name and count. For pushedLaterWithReason, quote/paraphrase the stated reason and say whether you accept it as valid (and therefore don't count it against the user) or read it as an excuse. Repeated no-reason postpones of the same task are a strong avoidance signal.
+- For postpones (pushed-later reschedules): call out tasks with pushedLaterNoReason > 0 as unexcused procrastination by name and count. vacationMoves are excluded from both reason buckets and must never be treated as postponement. For pushedLaterWithReason, quote/paraphrase the stated reason and say whether you accept it as valid (and therefore don't count it against the user) or read it as an excuse. Repeated no-reason postpones of the same task are a strong avoidance signal.
 - This report is generated **daily**, so the previous report (when present) is usually about a day old and its suggestions have had roughly one day to land. Judge them on that horizon: one day is enough to see whether a specific task got done, not enough to call a habit fixed or a pattern broken.
 - The analysis window is much longer than the gap between reports, so consecutive reports see nearly the same data. Lead with what actually CHANGED since the previous report — a habit completed or missed yesterday, a task finished or postponed — rather than restating standing totals. If nothing meaningful changed, say so plainly in one line instead of padding.
 - If a previous report is provided, follow up on its suggestions: acknowledge what improved, call out ignored suggestions (advice ignored day after day is itself an avoidance signal), and don't repeat advice verbatim.
 - With sparse data (first days of tracking), say so honestly and limit conclusions to what the data supports.
 - For calls: flag people not yet called as their period end approaches (biweekly periods end on the 14th and the last day of the month; monthly on the last day), and call out repeat misses across periods by name. If there are no calls set up, return an empty callReminders array.
+
+Vacation rules (these override the procrastination rules above):
+- NEVER describe anything that happened on a vacation day as procrastination, avoidance, slipping, a miss, or a lapse. The user booked that time off; not working was the plan.
+- A habit's paused days are already out of its completion rate and out of missedByDow, and its slippage figures are already vacation-adjusted. Cite the numbers as given — do not "correct" them back, and do not editorialise about the gap.
+- A habit's streak restarts after a break by design. Say so neutrally if you mention it ("the streak restarted after your break"), never as a setback or something to feel bad about.
+- reschedules.vacationMoves are tasks moved out of a booked trip. They are planning, not postponement — never count them against the user and never include them in procrastinationFlags.
+- deletions marked duringVacation may be mentioned, but never read as avoidance.
+- calls with exemptPeriods had a period almost entirely swallowed by a trip; those periods do not count as misses. Periods only partly covered DO still count — a short trip is not a reason to skip ringing someone.
+- When precomputedStats.vacation.justReturnedFrom is present, the user has just come back from a break of that many days. Open by acknowledging it in one short sentence, then give a RESTART plan: pick the one or two things most worth resuming first and say how to restart them small. Do NOT inventory everything that lapsed, do not judge the break, and do not evaluate whether the previous report's suggestions were followed — they were given before or during a holiday and have not had a fair run.
+- When vacation.frozenAt is set the numbers are as of that day, not today.
 - Keep every list item to one or two sentences.`;
+
+/**
+ * All-time completion counts per habit name.
+ *
+ * The stats window is 28 days and raw events are pruned at 30, so "how many
+ * times have I ever done this" cannot come from the window alone. It is the
+ * permanent monthly summaries plus everything not yet folded into them — two
+ * disjoint sets, because cron step 10 deletes exactly what it folds.
+ *
+ * Only habits: a goal step is a `day_of_week` task, and that is what the
+ * lifetime figure on the card is about.
+ *
+ * @returns {Promise<Object<string, number>>} taskName → times completed, ever
+ */
+async function lifetimeHabitTotals() {
+  const { ArchiveSummary } = require("../models/ArchiveSummary");
+  const totals = {};
+
+  for (const month of await ArchiveSummary.findAll()) {
+    for (const habit of month.habits || []) {
+      if (!habit.taskName) continue;
+      totals[habit.taskName] =
+        (totals[habit.taskName] || 0) + (habit.completed || 0);
+    }
+  }
+
+  const raw = await Archive.completedCountsByName("habit_result");
+  for (const [taskName, count] of Object.entries(raw)) {
+    totals[taskName] = (totals[taskName] || 0) + count;
+  }
+
+  return totals;
+}
+
+/**
+ * The full stats payload, vacation rules applied — what `GET /insights/stats`
+ * returns and what the nightly snapshot stores. One function so the live
+ * numbers and the stored ones can never disagree.
+ *
+ * Two vacation behaviours meet here:
+ *
+ *  - **The freeze.** While the user is away the window ends the day before
+ *    they left, so a streak or a rate does not visibly decay over a holiday.
+ *    It is a display freeze only — anything ticked off mid-trip is archived
+ *    as usual and appears the day they are back.
+ *  - **The rules.** Once home, the trip's days are inside the window again and
+ *    `computeStats` reads them as paused rather than missed.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.periodDays=28]
+ * @returns {Promise<Object>} { periodDays, eventCount, vacation, ...stats }
+ */
+async function buildStats({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
+  const Vacation = require("../models/Vacation");
+  const to = new Date();
+  const today = to.toISOString().slice(0, 10);
+
+  const vacations = await Vacation.findAll();
+  const cutoff = statsCutoff(vacations, today);
+
+  const windowStart = daysAgo(to, periodDays);
+  const all = await Archive.findByRange(windowStart, to);
+  // The freeze filters on each event's *subject* day, not its insertion time:
+  // the outcome of the last day before a trip is written at the following
+  // midnight, and filtering by `at` would throw that day away.
+  const events = cutoff
+    ? all.filter((e) => {
+        const day = eventDay(e);
+        return !day || day <= cutoff;
+      })
+    : all;
+
+  const stats = computeStats(events, { vacations });
+
+  const lifetime = await lifetimeHabitTotals();
+  stats.habits = stats.habits.map((habit) => ({
+    ...habit,
+    lifetimeCompleted: lifetime[habit.taskName] || habit.completed,
+  }));
+
+  const active = activeVacation(vacations, today);
+  const windowFrom = windowStart.toISOString().slice(0, 10);
+
+  return {
+    periodDays,
+    eventCount: events.length,
+    vacation: {
+      onVacation: Boolean(active),
+      active: active ? { ...active, totalDays: vacationLength(active) } : null,
+      // Non-null means the numbers below are as of this day, not today.
+      frozenAt: cutoff,
+      // Vacation days inside the reported window — what the panel cites when
+      // it explains why a denominator shrank.
+      vacationDaysInWindow: vacationDaysBetween(
+        windowFrom,
+        cutoff || today,
+        vacations,
+      ),
+      justReturnedFrom: recentlyEnded(vacations, today),
+    },
+    ...stats,
+  };
+}
 
 /**
  * Recompute the exact archive stats (streaks, completion rates, on-time
@@ -351,21 +554,31 @@ Rules:
  * @returns {Promise<Object>} The stored snapshot
  */
 async function refreshStatsSnapshot({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
-  const to = new Date();
-  const events = await Archive.findByRange(daysAgo(to, periodDays), to);
+  const {
+    periodDays: days,
+    eventCount,
+    ...stats
+  } = await buildStats({
+    periodDays,
+  });
 
   // An empty archive is still a real answer (every streak is 0) — storing it
   // keeps `computedAt` honest instead of leaving yesterday's numbers around.
+  //
+  // The snapshot inherits the freeze from `buildStats`: while the user is away
+  // it stores the same as-of-departure numbers night after night, and resumes
+  // moving the day they are back.
   return InsightStats.save({
-    computedAt: to,
-    periodDays,
-    eventCount: events.length,
-    stats: computeStats(events),
+    computedAt: new Date(),
+    periodDays: days,
+    eventCount,
+    stats,
   });
 }
 
 /**
- * Whether the cron's AI analysis is due: **once per calendar day (UTC)**.
+ * Whether the cron's AI analysis is due: **once per calendar day (UTC)**, and
+ * never on a vacation day.
  *
  * The report used to be weekly (Fridays only) because every run cost an
  * Anthropic call. On Gemini's free tier a daily call is a rounding error, so
@@ -385,6 +598,13 @@ async function isInsightDue(today = new Date()) {
   const day = new Date(today);
   if (Number.isNaN(day.getTime())) return false;
 
+  // Nothing is generated while the user is away. There is no coaching to do on
+  // a holiday, the window is frozen so the numbers would not have moved
+  // anyway, and a fortnight of "you missed everything" reports is the exact
+  // opposite of what a break is for.
+  const Vacation = require("../models/Vacation");
+  if (await Vacation.activeOn(day.toISOString().slice(0, 10))) return false;
+
   const previous = await Insight.latest();
   if (!previous || !previous.generatedAt) return true;
 
@@ -403,18 +623,37 @@ async function isInsightDue(today = new Date()) {
  * counts. Requires `GEMINI_API_KEY`.
  * @param {Object} [options]
  * @param {number} [options.periodDays=28]  How far back to analyze
- * @returns {Promise<Object|null>} The stored insight, or null if there is no data
+ * @returns {Promise<Object|null>} The stored insight, `{ onVacation: true }`
+ *   when the user is away, or null if there is no data
  */
 async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
   const to = new Date();
-  const events = await Archive.findByRange(daysAgo(to, periodDays), to);
+  const today = to.toISOString().slice(0, 10);
 
-  if (events.length === 0) {
+  // No report on a vacation day, however it was asked for. The cron gate in
+  // `isInsightDue` covers the nightly run; this covers the on-demand endpoint,
+  // which deliberately bypasses that gate for everything else.
+  const Vacation = require("../models/Vacation");
+  if (await Vacation.activeOn(today)) {
+    console.log("[Insights] On vacation — skipping generation");
+    return { onVacation: true };
+  }
+
+  // The same frozen, vacation-aware numbers the panel shows, so the prose and
+  // the figures beside it can never tell different stories.
+  const {
+    periodDays: days,
+    eventCount,
+    vacation,
+    ...stats
+  } = await buildStats({ periodDays });
+
+  if (eventCount === 0) {
     console.log("[Insights] No archive events yet — skipping generation");
     return null;
   }
 
-  const stats = computeStats(events);
+  const events = await Archive.findByRange(daysAgo(to, periodDays), to);
   const previous = await Insight.latest();
 
   // Live call status for the current period (archive only has past boundaries)
@@ -444,9 +683,9 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
       schema: REPORT_SCHEMA,
     },
     input: JSON.stringify({
-      today: to.toISOString().slice(0, 10),
-      periodDays,
-      precomputedStats: stats,
+      today,
+      periodDays: days,
+      precomputedStats: { ...stats, vacation },
       currentCalls,
       recentEvents,
       previousReport: previous
@@ -467,9 +706,10 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
 
   const stored = await Insight.save({
     generatedAt: new Date(),
-    periodDays,
+    periodDays: days,
     model: interaction.model || insightModel(),
     stats,
+    vacation,
     report,
   });
 
@@ -479,6 +719,8 @@ async function generateInsights({ periodDays = DEFAULT_PERIOD_DAYS } = {}) {
 
 module.exports = {
   computeStats,
+  buildStats,
+  lifetimeHabitTotals,
   generateInsights,
   refreshStatsSnapshot,
   isInsightDue,

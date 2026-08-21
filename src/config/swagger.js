@@ -37,9 +37,17 @@ const options = {
         name: "Projects",
         description: "Long-term project (multi-step) management endpoints",
       },
+      {
+        name: "Vacations",
+        description:
+          "Vacation range management — periods where missed work is not procrastination",
+      },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "Archive", description: "Task history (TaskArchive) endpoints" },
-      { name: "Insights", description: "Stats and AI insight report endpoints" },
+      {
+        name: "Insights",
+        description: "Stats and AI insight report endpoints",
+      },
       { name: "System", description: "System health endpoints" },
     ],
     components: {
@@ -97,7 +105,8 @@ const options = {
               type: "string",
               format: "date-time",
               nullable: true,
-              description: "Set when done flips to true; cleared on undo/cron reset",
+              description:
+                "Set when done flips to true; cleared on undo/cron reset",
             },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
@@ -146,7 +155,7 @@ const options = {
                 enum: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
               },
               description:
-                'Weekdays the habit is expected on. Mirrored onto the linked task\'s day_of_week ECD when the step is started, so the nightly archive only records a result — and the streak only counts — on these days. Deduped and sorted into week order (Sun → Sat); omitted means the whole week.',
+                "Weekdays the habit is expected on. Mirrored onto the linked task's day_of_week ECD when the step is started, so the nightly archive only records a result — and the streak only counts — on these days. Deduped and sorted into week order (Sun → Sat); omitted means the whole week.",
               default: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
               example: ["Mon", "Wed", "Fri"],
             },
@@ -303,10 +312,69 @@ const options = {
               type: "string",
               format: "date-time",
               nullable: true,
-              description: "Set when done flips to true; cleared on undo/cron reset",
+              description:
+                "Set when done flips to true; cleared on undo/cron reset",
             },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        Vacation: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            startDate: {
+              type: "string",
+              description: "First vacation day (inclusive), YYYY-MM-DD UTC",
+              example: "2026-09-03",
+            },
+            endDate: {
+              type: "string",
+              description: "Last vacation day (inclusive), YYYY-MM-DD UTC",
+              example: "2026-09-15",
+            },
+            note: { type: "string", example: "Kerala trip" },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        VacationStatus: {
+          type: "object",
+          properties: {
+            today: { type: "string", example: "2026-09-07" },
+            onVacation: { type: "boolean", example: true },
+            active: {
+              type: "object",
+              nullable: true,
+              description:
+                "The vacation covering today, with day counts for the banner",
+              properties: {
+                _id: { type: "string" },
+                startDate: { type: "string", example: "2026-09-03" },
+                endDate: { type: "string", example: "2026-09-15" },
+                note: { type: "string" },
+                totalDays: { type: "integer", example: 13 },
+                dayOfVacation: { type: "integer", example: 5 },
+                daysRemaining: { type: "integer", example: 8 },
+              },
+            },
+            upcoming: {
+              type: "array",
+              description: "Vacations starting after today",
+              items: { $ref: "#/components/schemas/Vacation" },
+            },
+            justReturnedFrom: {
+              type: "object",
+              nullable: true,
+              description:
+                "A vacation that ended in the last 3 days — drives the 'returned from an N-day break' report framing",
+              properties: {
+                startDate: { type: "string" },
+                endDate: { type: "string" },
+                days: { type: "integer", example: 13 },
+                daysAgo: { type: "integer", example: 1 },
+              },
+            },
           },
         },
         Error: {
@@ -323,6 +391,12 @@ const options = {
               type: "string",
               format: "date-time",
               example: "2026-01-01T00:00:00.000Z",
+            },
+            onVacation: {
+              type: "boolean",
+              description:
+                "Whether the run's day fell inside a booked vacation. No cron step behaves differently; it explains why insightSkipped may be 'vacation' and why the stats snapshot is frozen.",
+              example: false,
             },
             tasksDeleted: { type: "integer", example: 2 },
             tasksMarkedUndone: { type: "integer", example: 3 },
@@ -350,7 +424,7 @@ const options = {
               type: "string",
               example: "not-due",
               description:
-                "Present as \"not-due\" when the run reached the insight step but today's report already exists — the report fires once per UTC day, so a second run (a manual /cron/run, a redeploy, or a prior POST /insights/generate today) passes on it.",
+                'Present as "not-due" when the run reached the insight step but today\'s report already exists — the report fires once per UTC day, so a second run (a manual /cron/run, a redeploy, or a prior POST /insights/generate today) passes on it.',
             },
             archiveEventsPruned: {
               type: "integer",
@@ -367,7 +441,8 @@ const options = {
             archiveMonthsSummarised: {
               type: "integer",
               example: 1,
-              description: "Monthly ArchiveSummary documents written by step 10.",
+              description:
+                "Monthly ArchiveSummary documents written by step 10.",
             },
             insightReportsPruned: {
               type: "integer",
@@ -404,7 +479,11 @@ const options = {
                 type: "object",
                 properties: {
                   taskName: { type: "string", example: "Meditate" },
-                  headerName: { type: "string", nullable: true, example: "Health" },
+                  headerName: {
+                    type: "string",
+                    nullable: true,
+                    example: "Health",
+                  },
                   scheduled: { type: "integer", example: 22 },
                   completed: { type: "integer", example: 19 },
                 },
@@ -416,8 +495,16 @@ const options = {
                 type: "object",
                 properties: {
                   taskName: { type: "string", example: "Pay rent" },
-                  headerName: { type: "string", nullable: true, example: "Admin" },
-                  ecdType: { type: "string", nullable: true, example: "day_of_month" },
+                  headerName: {
+                    type: "string",
+                    nullable: true,
+                    example: "Admin",
+                  },
+                  ecdType: {
+                    type: "string",
+                    nullable: true,
+                    example: "day_of_month",
+                  },
                   scheduled: { type: "integer", example: 1 },
                   completed: { type: "integer", example: 1 },
                 },
@@ -429,7 +516,11 @@ const options = {
                 type: "object",
                 properties: {
                   callName: { type: "string", example: "Grandma" },
-                  frequency: { type: "string", nullable: true, example: "biweekly" },
+                  frequency: {
+                    type: "string",
+                    nullable: true,
+                    example: "biweekly",
+                  },
                   scheduled: { type: "integer", example: 2 },
                   completed: { type: "integer", example: 1 },
                 },
@@ -483,6 +574,12 @@ const options = {
               type: "string",
               format: "date-time",
               example: "2026-01-01T00:00:00.000Z",
+            },
+            onVacation: {
+              type: "boolean",
+              description:
+                "Whether the run's day fell inside a booked vacation. No cron step behaves differently; it explains why insightSkipped may be 'vacation' and why the stats snapshot is frozen.",
+              example: false,
             },
             tasksDeleted: { type: "integer", example: 2 },
             tasksMarkedUndone: { type: "integer", example: 3 },

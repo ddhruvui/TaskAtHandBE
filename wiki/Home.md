@@ -38,6 +38,7 @@ internal, and are covered through the public function that wraps them.
 | `utils/http.js` | the route wrapper: 400 / 404 / 500 and what gets logged | [Validation and HTTP](Validation-and-HTTP.md) |
 | `utils/dates.js` | UTC calendar arithmetic | [Dates and Stats](Dates-and-Stats.md) |
 | `utils/stats.js` | the arithmetic behind the insights numbers | [Dates and Stats](Dates-and-Stats.md) |
+| `utils/vacation.js` | what a booked day off does to every procrastination signal | [Vacation](Vacation.md) |
 | `models/BaseModel.js` | collection plumbing every model shares | [Model base classes](Model-Base-Classes.md) |
 | `models/OrderedModel.js` | `BaseModel` plus collection-wide priority ordering | [Model base classes](Model-Base-Classes.md) |
 
@@ -46,6 +47,7 @@ Beyond the utility layer, one behaviour has its own page:
 | Topic | Page |
 | --- | --- |
 | Bounding `TaskArchive` — cron step 10, monthly roll-ups, the retention floor | [Archive retention](Archive-Retention.md) |
+| Vacation — the rules, the freeze, and why the ranges are never pruned | [Vacation](Vacation.md) |
 
 ## Where to start
 

@@ -228,6 +228,95 @@ db.Calls.find({ frequency: "biweekly", done: true });
 
 ---
 
+## Vacations Queries
+
+The `Vacations` collection (`Vacations-Test` when `USE_TEST_DB=true`) stores
+booked time off: `{ startDate, endDate, note, createdAt, updatedAt }`. Both
+dates are **inclusive** `"YYYY-MM-DD"` UTC days and ranges may not overlap.
+
+**These documents are never pruned, and that matters.** Archive events carry no
+vacation flag of their own — every rule (paused habit days, adjusted slippage,
+exempt call periods) is re-derived from these ranges at read time. Deleting a
+row silently turns a forgiven fortnight back into two weeks of missed habits.
+
+### All vacations, chronological
+
+```javascript
+db.Vacations.find().sort({ startDate: 1 });
+```
+
+### Am I on vacation today?
+
+```javascript
+const today = new Date().toISOString().slice(0, 10);
+db.Vacations.findOne({ startDate: { $lte: today }, endDate: { $gte: today } });
+```
+
+### Upcoming trips
+
+```javascript
+db.Vacations.find({ startDate: { $gt: new Date().toISOString().slice(0, 10) } }).sort({
+  startDate: 1,
+});
+```
+
+### Sanity-check the no-overlap invariant
+
+```javascript
+// Should return nothing. Overlaps would double-count a day in vacationDaysBetween,
+// over-forgiving task slippage.
+db.Vacations.aggregate([
+  { $sort: { startDate: 1 } },
+  { $group: { _id: null, ranges: { $push: { s: "$startDate", e: "$endDate" } } } },
+  {
+    $project: {
+      overlaps: {
+        $filter: {
+          input: { $range: [1, { $size: "$ranges" }] },
+          as: "i",
+          cond: {
+            $lte: [
+              { $arrayElemAt: ["$ranges.s", "$$i"] },
+              { $arrayElemAt: ["$ranges.e", { $subtract: ["$$i", 1] }] },
+            ],
+          },
+        },
+      },
+    },
+  },
+]);
+```
+
+### Which archived habit misses a given trip forgave
+
+```javascript
+// The days that stop counting as misses — and stop the streak, since it
+// restarts on return rather than spanning the break.
+const trip = db.Vacations.findOne({ note: "Kerala trip" });
+db.TaskArchive.find({
+  type: "habit_result",
+  completed: false,
+  dueDate: { $gte: trip.startDate, $lte: trip.endDate },
+});
+```
+
+### Reschedules made because of a vacation
+
+```javascript
+// Set by the Vacation panel's re-date flow. Never counted as procrastination.
+db.TaskArchive.find({ type: "task_rescheduled", vacationMove: true });
+```
+
+### Months whose permanent totals already bake in a break
+
+```javascript
+// Once step 10 prunes the raw days, these counters are the only trace left —
+// correcting a vacation range after the fold does not revise them.
+db.ArchiveSummary.find({ vacationDays: { $gt: 0 } }, { month: 1, vacationDays: 1 });
+```
+
+---
+
 ## Projects Queries
 
 The `Projects` collection (`Projects-Test` when `USE_TEST_DB=true`) holds
@@ -262,7 +351,9 @@ db.Projects.find({ "tasks.todoTaskId": { $in: doneIds } });
 
 The `Insights` collection (`Insights-Test` in test mode) stores the AI
 reports — written by the cron once per UTC day and by
-`POST /insights/generate` on demand: `{ generatedAt, periodDays, model, stats, report }`.
+`POST /insights/generate` on demand: `{ generatedAt, periodDays, model, stats, vacation, report }`.
+No report is written on a vacation day at all, so a gap in `generatedAt` that
+lines up with a `Vacations` range is expected, not a failure.
 
 ### Latest report
 

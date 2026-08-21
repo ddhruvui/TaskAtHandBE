@@ -134,6 +134,30 @@ class Task extends BaseModel {
   }
 
   /**
+   * Undone one-time `date` tasks scheduled inside an inclusive day range.
+   *
+   * The Vacation panel's re-date list: only `date` tasks are offered, because
+   * they are the only kind that can be moved. A `day_of_month` or
+   * `day_of_week` task cannot be pushed without permanently rewriting its
+   * schedule, so those are silently exempted for the days instead.
+   *
+   * @param {string} from  "YYYY-MM-DD"
+   * @param {string} to    "YYYY-MM-DD"
+   * @returns {Promise<Array>} oldest scheduled date first
+   */
+  static async findDatedBetween(from, to) {
+    const collection = await this.getCollection();
+    return collection
+      .find({
+        "ecd.type": "date",
+        "ecd.value": { $gte: from, $lte: to },
+        done: false,
+      })
+      .sort({ "ecd.value": 1 })
+      .toArray();
+  }
+
+  /**
    * Return all tasks for a header, sorted by priority ascending
    * @param {string} headerId
    * @returns {Promise<Array>}
@@ -156,7 +180,10 @@ class Task extends BaseModel {
 
     // The insertion point is "after every undone task", i.e. where the first
     // done task currently sits — so the done block makes room for it.
-    const undoneCount = await nextPriority(collection, { ...scope, done: false });
+    const undoneCount = await nextPriority(collection, {
+      ...scope,
+      done: false,
+    });
     await openSlot(collection, { ...scope, done: true }, { stamp: true });
 
     return this.insert({
@@ -197,7 +224,8 @@ class Task extends BaseModel {
       // Archive ECD changes so reschedules (procrastination signal) are visible.
       // A postpone (pushedLater) may carry the user's stated reason: no reason is
       // procrastination for sure, a valid reason is a legitimate deferral (judged
-      // by the AI insights). `data.reason` is never written to the task document.
+      // by the AI insights). Neither `data.reason` nor `data.vacationMove` is
+      // ever written to the task document.
       if (JSON.stringify(updates.ecd) !== JSON.stringify(current.ecd || null)) {
         const header = await this.getHeaderForTask(current.headerId);
         await Archive.log({
@@ -210,6 +238,12 @@ class Task extends BaseModel {
           toEcd: updates.ecd,
           pushedLater: isPushedLater(current.ecd, updates.ecd),
           reason: data.reason ? data.reason : null,
+          // Set by the Vacation panel when it moves a task out of a trip.
+          // A trip booked in advance is re-dated *before* it starts, so the
+          // event's own timestamp falls outside every vacation range — this
+          // flag is the only thing stopping the insights reading a planned
+          // move as procrastination. Like `reason`, never a task field.
+          vacationMove: data.vacationMove === true,
         });
       }
     }
@@ -309,9 +343,7 @@ class Task extends BaseModel {
     const collection = await this.getCollection();
     const scope = this.scopeOf(headerId);
 
-    const doneTasks = await collection
-      .find({ ...scope, done: true })
-      .toArray();
+    const doneTasks = await collection.find({ ...scope, done: true }).toArray();
     if (doneTasks.length > 0) {
       const header = await this.getHeaderForTask(headerId);
       const headerName = header ? header.name : null;

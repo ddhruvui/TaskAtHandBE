@@ -7,6 +7,23 @@ async function clearCollections() {
   await db.collection("TaskArchive-Test").deleteMany({});
   await db.collection("Insights-Test").deleteMany({});
   await db.collection("InsightStats-Test").deleteMany({});
+  await db.collection("ArchiveSummary-Test").deleteMany({});
+  await db.collection("Vacations-Test").deleteMany({});
+}
+
+async function seedVacation(startDate, endDate) {
+  const db = await getDatabase();
+  await db
+    .collection("Vacations-Test")
+    .insertOne({ startDate, endDate, note: "" });
+}
+
+/** A UTC day string relative to today — vacation rules are measured against the real clock. */
+function dayUtc(offsetDays = 0) {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
 }
 
 async function seedArchive(events) {
@@ -34,10 +51,42 @@ describe("Insights", () => {
   describe("GET /insights/stats — computed stats", () => {
     // 2026-07-06 is a Monday, so 07-07 = Tue, 07-08 = Wed, 07-09 = Thu
     const habitEvents = [
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed", "Thu"], dueDate: "2026-07-06", completed: true },
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed", "Thu"], dueDate: "2026-07-07", completed: false },
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed", "Thu"], dueDate: "2026-07-08", completed: true },
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed", "Thu"], dueDate: "2026-07-09", completed: true },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed", "Thu"],
+        dueDate: "2026-07-06",
+        completed: true,
+      },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed", "Thu"],
+        dueDate: "2026-07-07",
+        completed: false,
+      },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed", "Thu"],
+        dueDate: "2026-07-08",
+        completed: true,
+      },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed", "Thu"],
+        dueDate: "2026-07-09",
+        completed: true,
+      },
     ];
 
     test("aggregates habit completion rate, streaks, and missed-by-weekday", async () => {
@@ -60,8 +109,24 @@ describe("Insights", () => {
 
     test("aggregates recurring task_result events into scheduled/completed counts", async () => {
       await seedArchive([
-        { type: "task_result", taskId: "r1", taskName: "Pay rent", headerName: "Bills", ecdType: "day_of_month", dueDate: "2026-07-01", completed: true },
-        { type: "task_result", taskId: "r1", taskName: "Pay rent", headerName: "Bills", ecdType: "day_of_month", dueDate: "2026-07-08", completed: false },
+        {
+          type: "task_result",
+          taskId: "r1",
+          taskName: "Pay rent",
+          headerName: "Bills",
+          ecdType: "day_of_month",
+          dueDate: "2026-07-01",
+          completed: true,
+        },
+        {
+          type: "task_result",
+          taskId: "r1",
+          taskName: "Pay rent",
+          headerName: "Bills",
+          ecdType: "day_of_month",
+          dueDate: "2026-07-08",
+          completed: false,
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -74,10 +139,42 @@ describe("Insights", () => {
 
     test("aggregates call_result events into per-person rates and miss streaks", async () => {
       await seedArchive([
-        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-06-15", completed: true, doneAt: "2026-06-10T12:00:00.000Z" },
-        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-06-30", completed: false, doneAt: null },
-        { type: "call_result", callId: "c1", callName: "Grandma", frequency: "biweekly", dueDate: "2026-07-15", completed: false, doneAt: null },
-        { type: "call_result", callId: "c2", callName: "Dentist", frequency: "monthly", dueDate: "2026-06-30", completed: true, doneAt: "2026-06-28T09:00:00.000Z" },
+        {
+          type: "call_result",
+          callId: "c1",
+          callName: "Grandma",
+          frequency: "biweekly",
+          dueDate: "2026-06-15",
+          completed: true,
+          doneAt: "2026-06-10T12:00:00.000Z",
+        },
+        {
+          type: "call_result",
+          callId: "c1",
+          callName: "Grandma",
+          frequency: "biweekly",
+          dueDate: "2026-06-30",
+          completed: false,
+          doneAt: null,
+        },
+        {
+          type: "call_result",
+          callId: "c1",
+          callName: "Grandma",
+          frequency: "biweekly",
+          dueDate: "2026-07-15",
+          completed: false,
+          doneAt: null,
+        },
+        {
+          type: "call_result",
+          callId: "c2",
+          callName: "Dentist",
+          frequency: "monthly",
+          dueDate: "2026-06-30",
+          completed: true,
+          doneAt: "2026-06-28T09:00:00.000Z",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -89,11 +186,13 @@ describe("Insights", () => {
       expect(grandma.completed).toBe(1);
       expect(grandma.completionRate).toBe(33);
       expect(grandma.currentMissStreak).toBe(2); // missed 06-30 and 07-15
+      // `exempt` marks a period a vacation swallowed; none here.
       expect(grandma.recentResults).toEqual([
-        { dueDate: "2026-06-15", completed: true },
-        { dueDate: "2026-06-30", completed: false },
-        { dueDate: "2026-07-15", completed: false },
+        { dueDate: "2026-06-15", completed: true, exempt: false },
+        { dueDate: "2026-06-30", completed: false, exempt: false },
+        { dueDate: "2026-07-15", completed: false, exempt: false },
       ]);
+      expect(grandma.exemptPeriods).toBe(0);
 
       const dentist = res.body.calls.find((c) => c.callName === "Dentist");
       expect(dentist.frequency).toBe("monthly");
@@ -113,8 +212,22 @@ describe("Insights", () => {
 
     test("computes one-time task slippage from plannedFor vs doneAt", async () => {
       await seedArchive([
-        { type: "task_completed", taskId: "t1", taskName: "Ship report", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-08T00:00:00Z" },
-        { type: "task_completed", taskId: "t2", taskName: "No plan", headerName: "Work", plannedFor: null, doneAt: "2026-07-08T00:00:00Z" },
+        {
+          type: "task_completed",
+          taskId: "t1",
+          taskName: "Ship report",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-08T00:00:00Z",
+        },
+        {
+          type: "task_completed",
+          taskId: "t2",
+          taskName: "No plan",
+          headerName: "Work",
+          plannedFor: null,
+          doneAt: "2026-07-08T00:00:00Z",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -139,13 +252,38 @@ describe("Insights", () => {
       await seedArchive([
         // Late-evening completion on the scheduled day: the day-boundary diff
         // must stay 0 rather than rounding the part-day up to a full day slip
-        { type: "task_completed", taskId: "t1", taskName: "Evening finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T23:59:00Z" },
-        { type: "task_completed", taskId: "t2", taskName: "Midday finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T12:30:00Z" },
-        { type: "task_completed", taskId: "t3", taskName: "Morning finish", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-06T07:15:00Z" },
+        {
+          type: "task_completed",
+          taskId: "t1",
+          taskName: "Evening finish",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-06T23:59:00Z",
+        },
+        {
+          type: "task_completed",
+          taskId: "t2",
+          taskName: "Midday finish",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-06T12:30:00Z",
+        },
+        {
+          type: "task_completed",
+          taskId: "t3",
+          taskName: "Morning finish",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-06T07:15:00Z",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
-      for (const name of ["Evening finish", "Midday finish", "Morning finish"]) {
+      for (const name of [
+        "Evening finish",
+        "Midday finish",
+        "Morning finish",
+      ]) {
         const task = res.body.oneTimeTasks.recent.find(
           (t) => t.taskName === name,
         );
@@ -160,8 +298,22 @@ describe("Insights", () => {
     test("counts slippage in whole days across a boundary and keeps an early finish out of the average", async () => {
       await seedArchive([
         // 07-07T00:30 is 1 calendar day past 07-06, not 0 as a raw-ms round would give
-        { type: "task_completed", taskId: "t1", taskName: "Just past midnight", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-07T00:30:00Z" },
-        { type: "task_completed", taskId: "t2", taskName: "Done early", headerName: "Work", plannedFor: "2026-07-06", doneAt: "2026-07-04T18:00:00Z" },
+        {
+          type: "task_completed",
+          taskId: "t1",
+          taskName: "Just past midnight",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-07T00:30:00Z",
+        },
+        {
+          type: "task_completed",
+          taskId: "t2",
+          taskName: "Done early",
+          headerName: "Work",
+          plannedFor: "2026-07-06",
+          doneAt: "2026-07-04T18:00:00Z",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -185,9 +337,27 @@ describe("Insights", () => {
 
     test("counts reschedules and pushedLater per task, most-rescheduled first", async () => {
       await seedArchive([
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true },
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: false },
-        { type: "task_rescheduled", taskId: "t2", taskName: "Once", headerName: "Work", pushedLater: false },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Work",
+          pushedLater: true,
+        },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Work",
+          pushedLater: false,
+        },
+        {
+          type: "task_rescheduled",
+          taskId: "t2",
+          taskName: "Once",
+          headerName: "Work",
+          pushedLater: false,
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -200,9 +370,30 @@ describe("Insights", () => {
 
     test("splits pushed-later postpones by reason and collects stated reasons", async () => {
       await seedArchive([
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true, reason: "blocked on vendor" },
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: true, reason: null },
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Work", pushedLater: false, reason: "moved up" },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Work",
+          pushedLater: true,
+          reason: "blocked on vendor",
+        },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Work",
+          pushedLater: true,
+          reason: null,
+        },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Work",
+          pushedLater: false,
+          reason: "moved up",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -216,13 +407,20 @@ describe("Insights", () => {
     test("rolls up completed/missed/reschedules per header", async () => {
       await seedArchive([
         ...habitEvents,
-        { type: "task_rescheduled", taskId: "t1", taskName: "Dodger", headerName: "Health", pushedLater: true },
+        {
+          type: "task_rescheduled",
+          taskId: "t1",
+          taskName: "Dodger",
+          headerName: "Health",
+          pushedLater: true,
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
       expect(res.body.byHeader.Health).toEqual({
         completed: 3,
         missed: 1,
+        paused: 0, // days a vacation excused; none here
         reschedules: 1,
         deleted: 0,
       });
@@ -230,9 +428,30 @@ describe("Insights", () => {
 
     test("aggregates task_deleted events into deletions and per-header counts", async () => {
       await seedArchive([
-        { type: "task_deleted", taskId: "d1", taskName: "Learn cello", headerName: "Hobbies", ecdType: "date", reason: "too big, kept putting it off" },
-        { type: "task_deleted", taskId: "d2", taskName: "Old idea", headerName: "Hobbies", ecdType: null, reason: null },
-        { type: "task_deleted", taskId: "d3", taskName: "Duplicate", headerName: "Work", ecdType: "day_of_week", reason: "no longer needed" },
+        {
+          type: "task_deleted",
+          taskId: "d1",
+          taskName: "Learn cello",
+          headerName: "Hobbies",
+          ecdType: "date",
+          reason: "too big, kept putting it off",
+        },
+        {
+          type: "task_deleted",
+          taskId: "d2",
+          taskName: "Old idea",
+          headerName: "Hobbies",
+          ecdType: null,
+          reason: null,
+        },
+        {
+          type: "task_deleted",
+          taskId: "d3",
+          taskName: "Duplicate",
+          headerName: "Work",
+          ecdType: "day_of_week",
+          reason: "no longer needed",
+        },
       ]);
 
       const res = await request(app).get("/insights/stats").expect(200);
@@ -247,6 +466,7 @@ describe("Insights", () => {
         headerName: "Hobbies",
         ecdType: "date",
         reason: "too big, kept putting it off",
+        duringVacation: false,
       });
       expect(res.body.byHeader.Hobbies.deleted).toBe(2);
       expect(res.body.byHeader.Work.deleted).toBe(1);
@@ -259,6 +479,7 @@ describe("Insights", () => {
       expect(res.body.deletions).toEqual({
         count: 0,
         withReason: 0,
+        duringVacation: 0,
         recent: [],
       });
     });
@@ -295,9 +516,18 @@ describe("Insights", () => {
 
   describe("GET /insights/history", () => {
     beforeEach(async () => {
-      await seedInsight({ generatedAt: new Date("2026-07-01T00:00:00Z"), report: { summary: "first" } });
-      await seedInsight({ generatedAt: new Date("2026-07-05T00:00:00Z"), report: { summary: "second" } });
-      await seedInsight({ generatedAt: new Date("2026-07-09T00:00:00Z"), report: { summary: "third" } });
+      await seedInsight({
+        generatedAt: new Date("2026-07-01T00:00:00Z"),
+        report: { summary: "first" },
+      });
+      await seedInsight({
+        generatedAt: new Date("2026-07-05T00:00:00Z"),
+        report: { summary: "second" },
+      });
+      await seedInsight({
+        generatedAt: new Date("2026-07-09T00:00:00Z"),
+        report: { summary: "third" },
+      });
     });
 
     test("returns reports newest first", async () => {
@@ -370,15 +600,37 @@ describe("Insights", () => {
   });
 
   describe("GET /insights/stats/latest — nightly snapshot (no AI)", () => {
-    const {
-      refreshStatsSnapshot,
-    } = require("../src/services/insightsService");
+    const { refreshStatsSnapshot } = require("../src/services/insightsService");
 
     // 2026-07-06 is a Monday, so 07-07 = Tue, 07-08 = Wed
     const streakEvents = [
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-06", completed: false },
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-07", completed: true },
-      { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-08", completed: true },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed"],
+        dueDate: "2026-07-06",
+        completed: false,
+      },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed"],
+        dueDate: "2026-07-07",
+        completed: true,
+      },
+      {
+        type: "habit_result",
+        taskId: "h1",
+        taskName: "Meditate",
+        headerName: "Health",
+        scheduledDays: ["Mon", "Tue", "Wed"],
+        dueDate: "2026-07-08",
+        completed: true,
+      },
     ];
 
     test("returns 404 before the cron has ever written one", async () => {
@@ -393,7 +645,9 @@ describe("Insights", () => {
         await seedArchive(streakEvents);
         await refreshStatsSnapshot();
 
-        const res = await request(app).get("/insights/stats/latest").expect(200);
+        const res = await request(app)
+          .get("/insights/stats/latest")
+          .expect(200);
         expect(res.body.computedAt).toBeDefined();
         expect(res.body.periodDays).toBe(28);
         expect(res.body.eventCount).toBe(3);
@@ -426,7 +680,15 @@ describe("Insights", () => {
 
       // The habit is missed the next day — the streak must drop, not persist
       await seedArchive([
-        { type: "habit_result", taskId: "h1", taskName: "Meditate", headerName: "Health", scheduledDays: ["Mon", "Tue", "Wed"], dueDate: "2026-07-13", completed: false },
+        {
+          type: "habit_result",
+          taskId: "h1",
+          taskName: "Meditate",
+          headerName: "Health",
+          scheduledDays: ["Mon", "Tue", "Wed"],
+          dueDate: "2026-07-13",
+          completed: false,
+        },
       ]);
       await refreshStatsSnapshot();
 
@@ -659,6 +921,437 @@ describe("Insights", () => {
         if (original === undefined) delete process.env.INSIGHT_RETENTION_COUNT;
         else process.env.INSIGHT_RETENTION_COUNT = original;
       }
+    });
+  });
+
+  describe("Vacation — days off are not procrastination", () => {
+    /** A habit result for a given day. */
+    const habit = (dueDate, completed) => ({
+      type: "habit_result",
+      taskId: "h1",
+      taskName: "Meditate",
+      headerName: "Health",
+      scheduledDays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+      dueDate,
+      completed,
+    });
+
+    describe("Habits", () => {
+      test("a missed day on vacation leaves the denominator instead of counting as a miss", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([
+          habit(dayUtc(-7), true),
+          habit(dayUtc(-6), true),
+          habit(dayUtc(-5), false), // away
+          habit(dayUtc(-4), false), // away
+          habit(dayUtc(-3), false), // away
+          habit(dayUtc(-2), true),
+          habit(dayUtc(-1), true),
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const h = res.body.habits[0];
+        expect(h.pausedDays).toBe(3);
+        expect(h.scheduled).toBe(4); // the 3 paused days are not scheduled days
+        expect(h.completed).toBe(4);
+        expect(h.completionRate).toBe(100); // not 4/7 = 57%
+      });
+
+      test("the streak restarts after the break rather than spanning it", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([
+          habit(dayUtc(-8), true),
+          habit(dayUtc(-7), true),
+          habit(dayUtc(-6), true),
+          habit(dayUtc(-5), false), // away
+          habit(dayUtc(-4), false), // away
+          habit(dayUtc(-3), false), // away
+          habit(dayUtc(-2), true),
+          habit(dayUtc(-1), true),
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const h = res.body.habits[0];
+        expect(h.currentStreak).toBe(2); // the two days since getting back
+        expect(h.longestStreak).toBe(3); // the pre-vacation run is still the best
+      });
+
+      test("a habit ticked off on vacation counts and keeps the run alive", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([
+          habit(dayUtc(-6), true),
+          habit(dayUtc(-5), true), // away, but done anyway
+          habit(dayUtc(-4), true), // away, but done anyway
+          habit(dayUtc(-3), true), // away, but done anyway
+          habit(dayUtc(-2), true),
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const h = res.body.habits[0];
+        expect(h.pausedDays).toBe(0);
+        expect(h.scheduled).toBe(5);
+        expect(h.currentStreak).toBe(5);
+      });
+
+      test("vacation misses are excluded from missedByDow", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([habit(dayUtc(-4), false), habit(dayUtc(-1), false)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const misses = Object.values(res.body.habits[0].missedByDow);
+        expect(misses.reduce((a, b) => a + b, 0)).toBe(1); // only the real one
+      });
+
+      test("recentResults marks vacation days so the UI can show them as paused", async () => {
+        await seedVacation(dayUtc(-4), dayUtc(-4));
+        await seedArchive([habit(dayUtc(-5), true), habit(dayUtc(-4), false)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const results = res.body.habits[0].recentResults;
+        expect(results[0].vacation).toBe(false);
+        expect(results[1].vacation).toBe(true);
+      });
+
+      test("a vacation day the user never had scheduled changes nothing", async () => {
+        await seedVacation(dayUtc(-20), dayUtc(-18));
+        await seedArchive([habit(dayUtc(-2), true), habit(dayUtc(-1), true)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const h = res.body.habits[0];
+        expect(h.pausedDays).toBe(0);
+        expect(h.currentStreak).toBe(2);
+      });
+    });
+
+    describe("The display freeze", () => {
+      test("while away, the window ends the day before departure", async () => {
+        await seedVacation(dayUtc(-2), dayUtc(3)); // currently on vacation
+        await seedArchive([
+          habit(dayUtc(-4), true),
+          habit(dayUtc(-3), true),
+          habit(dayUtc(-2), false), // away — not reported yet
+          habit(dayUtc(-1), false), // away — not reported yet
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.vacation.onVacation).toBe(true);
+        expect(res.body.vacation.frozenAt).toBe(dayUtc(-3));
+        expect(res.body.eventCount).toBe(2);
+        expect(res.body.habits[0].currentStreak).toBe(2); // undisturbed
+      });
+
+      test("a habit done mid-trip is archived now and surfaces once home", async () => {
+        await seedVacation(dayUtc(-2), dayUtc(3));
+        await seedArchive([habit(dayUtc(-4), true), habit(dayUtc(-1), true)]);
+
+        const frozen = await request(app).get("/insights/stats").expect(200);
+        expect(frozen.body.habits[0].completed).toBe(1);
+
+        // End the trip yesterday: the same events are now inside the window.
+        const db = await getDatabase();
+        await db
+          .collection("Vacations-Test")
+          .updateOne({}, { $set: { endDate: dayUtc(-1) } });
+
+        const home = await request(app).get("/insights/stats").expect(200);
+        expect(home.body.vacation.onVacation).toBe(false);
+        expect(home.body.vacation.frozenAt).toBeNull();
+        expect(home.body.habits[0].completed).toBe(2);
+      });
+
+      test("no vacation means no freeze", async () => {
+        await seedArchive([habit(dayUtc(-1), true)]);
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.vacation.onVacation).toBe(false);
+        expect(res.body.vacation.frozenAt).toBeNull();
+        expect(res.body.vacation.vacationDaysInWindow).toBe(0);
+      });
+
+      test("reports how many vacation days fall inside the window", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([habit(dayUtc(-1), true)]);
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.vacation.vacationDaysInWindow).toBe(3);
+      });
+
+      test("reports a trip that just ended as justReturnedFrom", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-1));
+        await seedArchive([habit(dayUtc(-6), true)]);
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.vacation.justReturnedFrom.days).toBe(5);
+      });
+    });
+
+    describe("One-time task slippage", () => {
+      test("subtracts the days away from a task that outlived a trip", async () => {
+        await seedVacation("2026-08-03", "2026-08-15");
+        await seedArchive([
+          {
+            type: "task_completed",
+            taskName: "File taxes",
+            headerName: "Admin",
+            plannedFor: "2026-08-01",
+            doneAt: new Date("2026-08-20T10:00:00Z"),
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const task = res.body.oneTimeTasks.recent[0];
+        expect(task.slippageDays).toBe(19); // raw, kept for reference
+        expect(task.adjustedSlippageDays).toBe(6); // Aug 1-2 plus Aug 16-20
+        expect(res.body.oneTimeTasks.avgSlippageDays).toBe(6);
+      });
+
+      test("a task planned mid-trip behaves as if it were due the day back", async () => {
+        await seedVacation("2026-08-03", "2026-08-15");
+        await seedArchive([
+          {
+            type: "task_completed",
+            taskName: "Renew passport",
+            plannedFor: "2026-08-05",
+            doneAt: new Date("2026-08-20T10:00:00Z"),
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.oneTimeTasks.recent[0].adjustedSlippageDays).toBe(4);
+      });
+
+      test("a task finished during the trip is on time, not late", async () => {
+        await seedVacation("2026-08-03", "2026-08-15");
+        await seedArchive([
+          {
+            type: "task_completed",
+            taskName: "Small thing",
+            plannedFor: "2026-08-04",
+            doneAt: new Date("2026-08-06T10:00:00Z"),
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.oneTimeTasks.onTimeCount).toBe(1);
+        expect(res.body.oneTimeTasks.lateCount).toBe(0);
+      });
+
+      test("a task unaffected by the trip is still judged late", async () => {
+        await seedVacation("2026-08-03", "2026-08-15");
+        await seedArchive([
+          {
+            type: "task_completed",
+            taskName: "Unrelated",
+            plannedFor: "2026-09-01",
+            doneAt: new Date("2026-09-04T10:00:00Z"),
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.oneTimeTasks.lateCount).toBe(1);
+        expect(res.body.oneTimeTasks.recent[0].adjustedSlippageDays).toBe(3);
+      });
+    });
+
+    describe("Calls — only a near-total overlap forgives a period", () => {
+      const call = (dueDate, completed) => ({
+        type: "call_result",
+        callId: "c1",
+        callName: "Grandma",
+        frequency: "biweekly",
+        dueDate,
+        completed,
+      });
+
+      test("a period almost entirely swallowed by a trip is exempt", async () => {
+        await seedVacation("2026-08-01", "2026-08-13");
+        await seedArchive([call("2026-08-15", false)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const c = res.body.calls[0];
+        expect(c.exemptPeriods).toBe(1);
+        expect(c.scheduled).toBe(0);
+        expect(c.currentMissStreak).toBe(0);
+      });
+
+      test("a short trip does not excuse a whole fortnight", async () => {
+        await seedVacation("2026-08-03", "2026-08-05");
+        await seedArchive([call("2026-08-15", false)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const c = res.body.calls[0];
+        expect(c.exemptPeriods).toBe(0);
+        expect(c.scheduled).toBe(1);
+        expect(c.currentMissStreak).toBe(1);
+      });
+
+      test("an exempt period does not continue a miss streak across it", async () => {
+        // A finished trip, not the current one: an active vacation would
+        // freeze the window and hide both periods instead.
+        await seedVacation("2026-07-15", "2026-07-31");
+        await seedArchive([
+          call("2026-07-15", false), // real miss, period 1-14 not covered
+          call("2026-07-31", false), // exempt, period 15-31 fully covered
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.calls[0].currentMissStreak).toBe(0);
+      });
+    });
+
+    describe("Reschedules and deletions", () => {
+      test("a vacationMove is counted apart from both reason buckets", async () => {
+        await seedArchive([
+          {
+            type: "task_rescheduled",
+            taskId: "t1",
+            taskName: "Dentist",
+            pushedLater: true,
+            reason: null,
+            vacationMove: true,
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        const r = res.body.reschedules[0];
+        expect(r.vacationMoves).toBe(1);
+        expect(r.pushedLaterNoReason).toBe(0);
+        expect(r.pushedLaterWithReason).toBe(0);
+      });
+
+      test("an unflagged postpone is still unexcused procrastination", async () => {
+        await seedArchive([
+          {
+            type: "task_rescheduled",
+            taskId: "t1",
+            taskName: "Dentist",
+            pushedLater: true,
+            reason: null,
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.reschedules[0].pushedLaterNoReason).toBe(1);
+        expect(res.body.reschedules[0].vacationMoves).toBe(0);
+      });
+
+      test("a deletion made on vacation is counted but labelled", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-3));
+        await seedArchive([
+          {
+            type: "task_deleted",
+            taskName: "Dropped",
+            reason: "not needed",
+            // A deletion has no dueDate, so it is judged on when it happened.
+            at: new Date(`${dayUtc(-4)}T10:00:00Z`),
+          },
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.deletions.count).toBe(1);
+        expect(res.body.deletions.duringVacation).toBe(1);
+      });
+    });
+
+    describe("Lifetime habit totals", () => {
+      test("counts every completion still in the raw archive", async () => {
+        await seedArchive([
+          habit(dayUtc(-3), true),
+          habit(dayUtc(-2), true),
+          habit(dayUtc(-1), false),
+        ]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        expect(res.body.habits[0].lifetimeCompleted).toBe(2);
+      });
+
+      test("adds the permanent monthly summaries to the raw window", async () => {
+        const db = await getDatabase();
+        await db.collection("ArchiveSummary-Test").insertMany([
+          {
+            month: "2026-05",
+            days: ["2026-05-01"],
+            habits: [{ taskName: "Meditate", scheduled: 31, completed: 28 }],
+          },
+          {
+            month: "2026-06",
+            days: ["2026-06-01"],
+            habits: [{ taskName: "Meditate", scheduled: 30, completed: 25 }],
+          },
+        ]);
+        await seedArchive([habit(dayUtc(-1), true)]);
+
+        const res = await request(app).get("/insights/stats").expect(200);
+        // 28 + 25 folded, plus the one still raw — the two sets are disjoint.
+        expect(res.body.habits[0].lifetimeCompleted).toBe(54);
+      });
+
+      test("is unaffected by the reporting window", async () => {
+        // Explicit `at` values: the window filters on insertion time, and
+        // seedArchive would otherwise stamp both events as "now".
+        await seedArchive([
+          {
+            ...habit(dayUtc(-3), true),
+            at: new Date(`${dayUtc(-3)}T10:00:00Z`),
+          },
+          {
+            ...habit(dayUtc(-2), true),
+            at: new Date(`${dayUtc(-2)}T10:00:00Z`),
+          },
+        ]);
+
+        const res = await request(app)
+          .get("/insights/stats?days=1")
+          .expect(200);
+        expect(res.body.habits).toHaveLength(0); // outside the 1-day window
+        const full = await request(app).get("/insights/stats").expect(200);
+        expect(full.body.habits[0].lifetimeCompleted).toBe(2);
+      });
+    });
+
+    describe("The AI report is skipped entirely while away", () => {
+      const { isInsightDue } = require("../src/services/insightsService");
+
+      test("isInsightDue is false on a vacation day", async () => {
+        await seedVacation(dayUtc(-1), dayUtc(1));
+        expect(await isInsightDue(new Date())).toBe(false);
+      });
+
+      test("isInsightDue is true again once home", async () => {
+        await seedVacation(dayUtc(-5), dayUtc(-1));
+        expect(await isInsightDue(new Date())).toBe(true);
+      });
+
+      test("POST /insights/generate refuses with 409 while away", async () => {
+        await seedVacation(dayUtc(-1), dayUtc(1));
+        await seedArchive([habit(dayUtc(-5), true)]);
+
+        const res = await request(app).post("/insights/generate").send({});
+        // Without an API key the key check answers first; with one, the
+        // vacation gate does. Either way no report is written.
+        expect([409, 503]).toContain(res.status);
+        expect(res.body.error).toBeDefined();
+      });
+    });
+
+    describe("The nightly snapshot inherits the freeze", () => {
+      const {
+        refreshStatsSnapshot,
+      } = require("../src/services/insightsService");
+
+      test("stores as-of-departure numbers while the user is away", async () => {
+        await seedVacation(dayUtc(-2), dayUtc(3));
+        await seedArchive([
+          habit(dayUtc(-4), true),
+          habit(dayUtc(-3), true),
+          habit(dayUtc(-1), false), // away
+        ]);
+
+        await refreshStatsSnapshot();
+        const res = await request(app)
+          .get("/insights/stats/latest")
+          .expect(200);
+        expect(res.body.eventCount).toBe(2);
+        expect(res.body.vacation.frozenAt).toBe(dayUtc(-3));
+        expect(res.body.habits[0].currentStreak).toBe(2);
+      });
     });
   });
 

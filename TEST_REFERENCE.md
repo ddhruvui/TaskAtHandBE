@@ -158,6 +158,80 @@ Calls CRUD — people the user must call biweekly or monthly (completely indepen
 
 ---
 
+## tests/vacation.test.js
+
+Vacations CRUD and the re-date flow — booked time off, where a missed day is not procrastination. Both dates are inclusive, ranges may not overlap, and the documents are never pruned because every vacation rule is re-derived from them at read time.
+
+### POST /vacations — booking
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| creates a vacation with both inclusive dates          | `POST /vacations` → 201 with `_id`, both dates, `note`, timestamps             |
+| allows a single-day vacation (start === end)          | A one-day trip is legal                                                        |
+| rejects a missing endDate                             | `{ startDate }` → 400; both dates are mandatory                                |
+| rejects a malformed date                              | `"03-09-2026"` → 400                                                           |
+| rejects endDate before startDate                      | Inverted range → 400 "on or after"                                             |
+| rejects a range overlapping an existing one           | Overlapping trip → 400, so no day is ever counted twice                        |
+| allows a range that starts the day after another ends | Adjacent (non-overlapping) ranges are fine                                     |
+
+### GET /vacations
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| returns every vacation, oldest start date first       | Sorted by `startDate` ascending                                                |
+| returns an empty array when nothing is booked         | `[]` on a clean DB                                                             |
+
+### GET /vacations/status
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| reports onVacation=false with no ranges               | `{ onVacation: false, active: null, upcoming: [] }`                            |
+| reports the active vacation with its day counts       | `totalDays`, `dayOfVacation`, `daysRemaining`                                  |
+| counts the first and last day as vacation days        | A one-day trip today is active, day 1 of 1                                     |
+| lists future vacations under upcoming                 | A booked-ahead trip does not activate                                          |
+| reports a vacation that ended yesterday as justReturnedFrom | Drives the "returned from an N-day break" framing                        |
+| does not report a vacation that ended long ago        | Outside the 3-day grace window → `null`                                        |
+
+### PUT /vacations/:id
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| corrects a forgotten start date                       | The forgot-to-book-it case                                                     |
+| shortens a vacation when the user comes home early    | `endDate` moved earlier                                                        |
+| validates the resulting range, not just the field sent| A new `endDate` before the stored `startDate` → 400                            |
+| does not treat the row being edited as an overlap with itself | Extending your own range is allowed                                     |
+| still rejects an edit that collides with another vacation | Extending into another trip → 400                                          |
+| 404s for an unknown id                                | Fake ObjectId → 404                                                            |
+
+### DELETE /vacations/:id
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| deletes a vacation                                    | `{ deleted: id }`, and the list is empty afterwards                            |
+| 404s for an unknown id                                | Fake ObjectId → 404                                                            |
+
+### GET /vacations/:id/tasks — the re-date list
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| returns undone one-time dated tasks inside the window, with headerName | The panel's list, header denormalized                          |
+| includes tasks dated on the first and last day        | Both ends inclusive here too                                                   |
+| excludes tasks outside the window                     | The days either side are not offered                                           |
+| excludes recurring tasks — they cannot be moved, only exempted | `day_of_week` / `day_of_month` never appear                            |
+| excludes tasks already done                           | Nothing to re-date                                                             |
+| 404s for an unknown vacation                          | Fake ObjectId → 404                                                            |
+
+### Re-dating out of a vacation
+
+| Test                                                  | What it checks                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| flags the reschedule as a vacationMove                | `PUT /tasks/:id { ecd, vacationMove: true }` → `task_rescheduled` event carries `vacationMove: true`, so a trip booked in advance is never read as procrastination |
+| an ordinary postpone is not flagged                   | `vacationMove: false` on a normal reschedule                                   |
+| vacationMove is never written onto the task itself    | The response body has no `vacationMove` field                                  |
+| rejects a non-boolean vacationMove                    | `"yes"` → 400                                                                  |
+
+---
+
 ## tests/goals.test.js
 
 Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side). Each step also carries the weekdays it runs on (`days`), which clients mirror onto its task's `day_of_week` ECD and which the streak is therefore measured over.
@@ -557,6 +631,15 @@ Tests the four cron HTTP endpoints.
 | archiveCutoff is null when nothing was old enough to prune | A fresh event leaves `archiveCutoff: null`                     |
 | archiveCutoff is the UTC day events had to predate    | A 60-day-old event is pruned and the cutoff is a `YYYY-MM-DD` string |
 
+### POST /cron/run — vacation
+
+| Test                                                  | What it checks                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------- |
+| reports onVacation=false with nothing booked          | The run stats always carry the flag                                 |
+| reports onVacation=true when the run's day falls inside a range | The flag explains the two things vacation does change     |
+| every other cron step still runs while away           | Habits still reset, stats still refresh, headers still reorder — vacation is a lens, not a pause button |
+| skips the AI report with insightSkipped='vacation'    | `generateInsights` is never called; the reason is distinguishable from `"not-due"` |
+
 ---
 
 ## tests/archive.test.js
@@ -637,6 +720,19 @@ Tests the TaskArchive event log: cron archiving (Steps 0 and 5), reschedule logg
 | retention can never be set inside the insights window   | `ARCHIVE_RETENTION_DAYS=1` is clamped to 28, warns, and prunes nothing inside the window |
 | a shorter-than-default but still safe window is honoured | `ARCHIVE_RETENTION_DAYS=29` prunes the 40-day-old event, keeps the 20-day-old one |
 
+### Vacation rules survive the fold (cron step 10)
+
+Per-day detail is deleted once folded, so the monthly totals are the only place a break survives. The fold must apply the same rules as the live stats.
+
+| Test                                                    | What it checks                                                        |
+| --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| folds a vacation miss as paused, not as a missed scheduled day | `habits[].paused`, `scheduled` untouched, `byHeader[].paused`, `vacationDays` |
+| folds an ordinary miss as a miss                        | No vacation → `scheduled: 1`, `paused: 0`, `vacationDays: 0`            |
+| still credits a habit done while away                   | A completed vacation day is an ordinary hit — credit is never removed   |
+| folds a vacationMove apart from the unexcused postpone count | `reschedules.vacationMoves: 1`, `pushedLaterNoReason: 0`           |
+| folds on-time using vacation-adjusted slippage          | A task that outlived a trip is on time, not late                        |
+| a summary written before vacation existed gains the counters safely | `withDefaults` normalizes a legacy document; no counter becomes `NaN` |
+
 ---
 
 ## tests/insights.test.js
@@ -709,6 +805,78 @@ straight into `Insights-Test`. The fixture date 2026-07-24 is a Friday, kept onl
 | the day boundary is UTC, not local                          | A report at 23:50 does not suppress the run 10 minutes later on the next UTC day |
 | measures against the newest report, ignoring older ones     | Reports 4 weeks back **and** today → `false` (newest wins)              |
 | is due when the stored report has no generatedAt            | Malformed stored report → `true` rather than blocking forever           |
+
+### Vacation — days off are not procrastination
+
+Every rule applied end to end through `GET /insights/stats`, with seeded ranges in `Vacations-Test`.
+
+**Habits**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| a missed day on vacation leaves the denominator          | `pausedDays: 3`, `scheduled: 4` not 7, rate 100% not 57%             |
+| the streak restarts after the break rather than spanning it | current 2 (days since getting back), longest 3 (the pre-trip run)  |
+| a habit ticked off on vacation counts and keeps the run alive | `pausedDays: 0`, streak 5 — credit is never removed              |
+| vacation misses are excluded from missedByDow            | Only the real miss is counted                                        |
+| recentResults marks vacation days                        | `vacation: true` so the UI can render a paused pip                   |
+| a vacation day the user never had scheduled changes nothing | An unrelated trip does not touch the streak                       |
+
+**The display freeze**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| while away, the window ends the day before departure     | `frozenAt`, `eventCount` excludes the trip, streak undisturbed        |
+| a habit done mid-trip is archived now and surfaces once home | Ending the trip reveals the completion — a display freeze, not data loss |
+| no vacation means no freeze                              | `frozenAt: null`, `vacationDaysInWindow: 0`                           |
+| reports how many vacation days fall inside the window    | `vacationDaysInWindow: 3`                                             |
+| reports a trip that just ended as justReturnedFrom       | `days: 5`                                                             |
+
+**One-time task slippage**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| subtracts the days away from a task that outlived a trip | raw 19, adjusted 6, `avgSlippageDays: 6`                              |
+| a task planned mid-trip behaves as if due the day back   | adjusted 4                                                            |
+| a task finished during the trip is on time, not late     | `onTimeCount: 1`                                                      |
+| a task unaffected by the trip is still judged late       | No over-forgiveness                                                   |
+
+**Calls**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| a period almost entirely swallowed by a trip is exempt   | `exemptPeriods: 1`, `scheduled: 0`, no miss streak                    |
+| a short trip does not excuse a whole fortnight           | `exemptPeriods: 0`, `currentMissStreak: 1`                            |
+| an exempt period does not continue a miss streak across it | The streak stops at the exempt period                               |
+
+**Reschedules and deletions**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| a vacationMove is counted apart from both reason buckets | `vacationMoves: 1`, both `pushedLater*` buckets 0                     |
+| an unflagged postpone is still unexcused procrastination | The ordinary case is unchanged                                        |
+| a deletion made on vacation is counted but labelled      | `count: 1`, `duringVacation: 1`                                       |
+
+**Lifetime habit totals**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| counts every completion still in the raw archive         | `lifetimeCompleted: 2`                                                |
+| adds the permanent monthly summaries to the raw window   | 28 + 25 folded + 1 raw = 54; the two sets are disjoint                |
+| is unaffected by the reporting window                    | `?days=1` empties `habits` but the lifetime figure is unchanged       |
+
+**The AI report is skipped entirely while away**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| isInsightDue is false on a vacation day                  | The nightly gate                                                      |
+| isInsightDue is true again once home                     | Reports resume                                                        |
+| POST /insights/generate refuses while away               | 409 (or 503 when no API key is configured); no report is written      |
+
+**The nightly snapshot inherits the freeze**
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| stores as-of-departure numbers while the user is away    | `refreshStatsSnapshot` shares `buildStats`, so one rule covers both paths |
 
 ### Insight model
 
@@ -871,3 +1039,45 @@ Runs against a real collection seeded with four rows in `H1` and two in `H2`.
 | longestRun finds the longest run anywhere         | `longestStreak`                                                      |
 | average rounds to one decimal and returns null when empty | "No data" is `null`, not 0                                    |
 | countWhere counts matches                         | On-time / late / with-reason counts                                  |
+
+### utils/vacation
+
+The arithmetic behind every vacation rule, shared by the live stats and the permanent monthly fold (which must agree).
+
+| Test                                                    | What it checks                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------- |
+| isVacationDay: the first and last day are vacation days | Both ends inclusive                                                  |
+| isVacationDay: the days either side are not             | The boundary is exact                                                |
+| isVacationDay: no ranges / a null day                   | Neither exempts anything                                             |
+| toRanges drops entries with a missing or inverted date  | Malformed input can never exempt history                             |
+| toRanges sorts by start date / tolerates a non-array    | Defensive normalization                                              |
+| vacationDaysBetween counts the overlap, both ends inclusive | 13 days for a 13-day trip inside a wider span                     |
+| vacationDaysBetween counts only the overlapping part    | Partial overlap                                                      |
+| vacationDaysBetween is zero when the spans do not meet / for an inverted span | No accidental credit                              |
+| vacationDaysBetween sums separate trips without double counting | Non-overlapping ranges add                                    |
+| vacationLength counts both ends                         | A one-day trip is 1, not 0                                           |
+| statsCutoff freezes at the day before departure         | The display freeze, from the very first vacation day                 |
+| statsCutoff is null once home / before the trip starts  | The freeze lifts on return                                           |
+| recentlyEnded reports a trip that ended yesterday with its length | Drives the "returned from an N-day break" framing           |
+| recentlyEnded honours the three-day grace window        | One missed cron night does not cost the restart report               |
+| recentlyEnded does not report the trip the user is still on | Only finished trips                                              |
+| callPeriod: the 15th closes the first half of the month | `[1st, 14th]`, 14 days                                               |
+| callPeriod: month end closes the back half (biweekly) / the whole month (monthly) | The documented spans, not the reset mechanics       |
+| callPeriod resolves short months                        | February is 28 days                                                  |
+| isCallPeriodExempt: a whole period away exempts it      | 100% ≥ 80%                                                           |
+| isCallPeriodExempt: 12 of 14 days clears the bar, 11 does not | The 80% boundary                                               |
+| isCallPeriodExempt: a short trip never excuses a period | A fortnight of not calling is not forgiven by three days away        |
+| eventDay: outcome events use dueDate                    | Habit/task/call results                                              |
+| eventDay: a completion uses the day it was finished     | Not its insertion time                                               |
+| eventDay: a reschedule uses its own timestamp           | Reschedules and deletions have no `dueDate`                          |
+| isPausedResult: a missed day on vacation is paused      | The core rule                                                        |
+| isPausedResult: a day the user actually did is never paused | Vacation removes the penalty, never the credit                   |
+| isPausedResult: a missed day outside the trip is an ordinary miss | No over-forgiveness                                         |
+| isVacationEvent: an event during the trip qualifies on its timestamp | The during-trip case                                    |
+| isVacationEvent: a trip booked in advance qualifies only via the flag | Why `vacationMove` has to be explicit                  |
+| adjustedSlippage subtracts the trip from a task that outlived it | Planned Aug 1, done Aug 20, away Aug 3–15 → 6 days late, not 19 |
+| adjustedSlippage: a task planned mid-trip behaves as if due the day back | Planned Aug 5 → 4 days late                             |
+| adjustedSlippage leaves an unaffected task alone        | No trip in the gap → unchanged                                       |
+| adjustedSlippage never turns lateness negative          | Floored at 0                                                         |
+| adjustedSlippage passes early and on-the-day completions through | Negative and zero are untouched                             |
+| adjustedSlippage: null stays null                       | No `plannedFor` → no slippage                                        |

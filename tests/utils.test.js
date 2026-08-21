@@ -25,6 +25,21 @@ const {
   openSlot,
 } = require("../src/utils/priority");
 const {
+  isVacationDay,
+  activeVacation,
+  vacationDaysBetween,
+  vacationLength,
+  statsCutoff,
+  recentlyEnded,
+  callPeriod,
+  isCallPeriodExempt,
+  eventDay,
+  isPausedResult,
+  isVacationEvent,
+  adjustedSlippage,
+  toRanges,
+} = require("../src/utils/vacation");
+const {
   ValidationError,
   isDateString,
   requiredString,
@@ -195,7 +210,10 @@ describe("utils/ordering", () => {
 
   test("orderDoneLast does not mutate its input", () => {
     const input = tasks();
-    orderDoneLast(input, ascendingBy((t) => (t.date ? 1 : 0)));
+    orderDoneLast(
+      input,
+      ascendingBy((t) => (t.date ? 1 : 0)),
+    );
     expect(input.map((t) => t.name)).toEqual([
       "undated",
       "finished",
@@ -420,7 +438,12 @@ describe("utils/priority", () => {
   });
 
   test("stamp writes updatedAt onto the shifted neighbours only when asked", async () => {
-    const move = { id: ids[0].toString(), from: 0, to: 3, scope: { headerId: "H1" } };
+    const move = {
+      id: ids[0].toString(),
+      from: 0,
+      to: 3,
+      scope: { headerId: "H1" },
+    };
 
     // Ordered collections (headers, goals, projects, life events) never stamp.
     await shiftForMove(collection, move);
@@ -544,7 +567,9 @@ describe("utils/validate", () => {
 describe("utils/http", () => {
   test("requireFound passes a value through and throws on a miss", () => {
     expect(requireFound({ _id: 1 }, "Task not found")).toEqual({ _id: 1 });
-    expect(() => requireFound(null, "Task not found")).toThrow("Task not found");
+    expect(() => requireFound(null, "Task not found")).toThrow(
+      "Task not found",
+    );
     expect(() => requireFound(undefined, "Task not found")).toThrow(
       "Task not found",
     );
@@ -574,9 +599,12 @@ describe("utils/http", () => {
   test("route answers a ValidationError with 400 and does not log", async () => {
     const spy = jest.spyOn(console, "error").mockImplementation(() => {});
     const res = fakeRes();
-    await route({ action: "creating call", failure: "Failed to create call" }, async () => {
-      throw new ValidationError("Call name must be a non-empty string");
-    })({}, res);
+    await route(
+      { action: "creating call", failure: "Failed to create call" },
+      async () => {
+        throw new ValidationError("Call name must be a non-empty string");
+      },
+    )({}, res);
     expect(res.statusCode).toBe(400);
     expect(res.body).toEqual({ error: "Call name must be a non-empty string" });
     expect(spy).not.toHaveBeenCalled();
@@ -586,9 +614,12 @@ describe("utils/http", () => {
   test("route answers a NotFoundError with 404 and does not log", async () => {
     const spy = jest.spyOn(console, "error").mockImplementation(() => {});
     const res = fakeRes();
-    await route({ action: "updating call", failure: "Failed to update call" }, async () => {
-      requireFound(null, "Call not found");
-    })({}, res);
+    await route(
+      { action: "updating call", failure: "Failed to update call" },
+      async () => {
+        requireFound(null, "Call not found");
+      },
+    )({}, res);
     expect(res.statusCode).toBe(404);
     expect(res.body).toEqual({ error: "Call not found" });
     expect(spy).not.toHaveBeenCalled();
@@ -610,7 +641,10 @@ describe("utils/http", () => {
     )({}, res);
     expect(res.statusCode).toBe(400);
     expect(res.body).toEqual({ error: "Priority must be between 0 and 2" });
-    expect(spy).toHaveBeenCalledWith("Error updating header:", expect.any(Error));
+    expect(spy).toHaveBeenCalledWith(
+      "Error updating header:",
+      expect.any(Error),
+    );
     spy.mockRestore();
   });
 
@@ -639,7 +673,15 @@ describe("utils/http", () => {
 
 describe("utils/dates", () => {
   test("the weekday and month tables are the shared constants", () => {
-    expect(DOW_NAMES).toEqual(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
+    expect(DOW_NAMES).toEqual([
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+    ]);
     expect(MAX_DAYS_BY_MONTH[1]).toBe(29);
   });
 
@@ -674,9 +716,7 @@ describe("utils/dates", () => {
   });
 
   test("utcDayStart snaps to midnight and reports NaN for junk", () => {
-    expect(utcDayStart("2026-03-08T23:59:00Z")).toBe(
-      Date.UTC(2026, 2, 8),
-    );
+    expect(utcDayStart("2026-03-08T23:59:00Z")).toBe(Date.UTC(2026, 2, 8));
     expect(Number.isNaN(utcDayStart("not a date"))).toBe(true);
   });
 
@@ -685,7 +725,9 @@ describe("utils/dates", () => {
     // day must be 0 days, not 1.
     expect(daysBetween("2026-03-08T00:00:00Z", "2026-03-08T18:00:00Z")).toBe(0);
     expect(daysBetween("2026-03-08T00:00:00Z", "2026-03-10T01:00:00Z")).toBe(2);
-    expect(daysBetween("2026-03-08T00:00:00Z", "2026-03-06T23:00:00Z")).toBe(-2);
+    expect(daysBetween("2026-03-08T00:00:00Z", "2026-03-06T23:00:00Z")).toBe(
+      -2,
+    );
     expect(daysBetween("junk", "2026-03-08T00:00:00Z")).toBeNull();
   });
 
@@ -763,5 +805,328 @@ describe("utils/stats", () => {
   test("countWhere counts matches", () => {
     expect(countWhere([1, 2, 3, 4], (n) => n % 2 === 0)).toBe(2);
     expect(countWhere([], () => true)).toBe(0);
+  });
+});
+
+describe("utils/vacation", () => {
+  // A single trip, used by most of the cases below.
+  const TRIP = [{ startDate: "2026-08-03", endDate: "2026-08-15" }];
+
+  describe("isVacationDay — both ends inclusive", () => {
+    test("the first and last day are vacation days", () => {
+      expect(isVacationDay("2026-08-03", TRIP)).toBe(true);
+      expect(isVacationDay("2026-08-15", TRIP)).toBe(true);
+    });
+
+    test("the days either side are not", () => {
+      expect(isVacationDay("2026-08-02", TRIP)).toBe(false);
+      expect(isVacationDay("2026-08-16", TRIP)).toBe(false);
+    });
+
+    test("no ranges means no vacation days", () => {
+      expect(isVacationDay("2026-08-10", [])).toBe(false);
+    });
+
+    test("a null day is never a vacation day", () => {
+      expect(isVacationDay(null, TRIP)).toBe(false);
+    });
+  });
+
+  describe("toRanges — malformed input cannot exempt history", () => {
+    test("drops entries with a missing or inverted date", () => {
+      expect(
+        toRanges([
+          { startDate: "2026-08-03" },
+          { startDate: "2026-08-10", endDate: "2026-08-01" },
+          null,
+        ]),
+      ).toEqual([]);
+    });
+
+    test("sorts by start date", () => {
+      const sorted = toRanges([
+        { startDate: "2026-09-01", endDate: "2026-09-02" },
+        { startDate: "2026-08-01", endDate: "2026-08-02" },
+      ]);
+      expect(sorted.map((r) => r.startDate)).toEqual([
+        "2026-08-01",
+        "2026-09-01",
+      ]);
+    });
+
+    test("tolerates a non-array", () => {
+      expect(toRanges(undefined)).toEqual([]);
+    });
+  });
+
+  describe("vacationDaysBetween", () => {
+    test("counts the overlap, both ends inclusive", () => {
+      expect(vacationDaysBetween("2026-08-01", "2026-08-20", TRIP)).toBe(13);
+    });
+
+    test("counts only the overlapping part", () => {
+      expect(vacationDaysBetween("2026-08-10", "2026-08-20", TRIP)).toBe(6);
+    });
+
+    test("is zero when the spans do not meet", () => {
+      expect(vacationDaysBetween("2026-08-16", "2026-08-20", TRIP)).toBe(0);
+    });
+
+    test("is zero for an inverted span", () => {
+      expect(vacationDaysBetween("2026-08-20", "2026-08-01", TRIP)).toBe(0);
+    });
+
+    test("sums separate trips without double counting", () => {
+      const two = [
+        { startDate: "2026-08-03", endDate: "2026-08-05" },
+        { startDate: "2026-08-10", endDate: "2026-08-12" },
+      ];
+      expect(vacationDaysBetween("2026-08-01", "2026-08-20", two)).toBe(6);
+    });
+  });
+
+  test("vacationLength counts both ends", () => {
+    expect(vacationLength(TRIP[0])).toBe(13);
+    expect(
+      vacationLength({ startDate: "2026-08-03", endDate: "2026-08-03" }),
+    ).toBe(1);
+  });
+
+  describe("activeVacation / statsCutoff — the display freeze", () => {
+    test("freezes at the day before departure while away", () => {
+      expect(activeVacation(TRIP, "2026-08-10")).not.toBeNull();
+      expect(statsCutoff(TRIP, "2026-08-10")).toBe("2026-08-02");
+    });
+
+    test("freezes from the very first vacation day", () => {
+      expect(statsCutoff(TRIP, "2026-08-03")).toBe("2026-08-02");
+    });
+
+    test("no cutoff once home", () => {
+      expect(activeVacation(TRIP, "2026-08-16")).toBeNull();
+      expect(statsCutoff(TRIP, "2026-08-16")).toBeNull();
+    });
+
+    test("no cutoff before the trip starts", () => {
+      expect(statsCutoff(TRIP, "2026-08-01")).toBeNull();
+    });
+
+    test("activeVacation returns the stored document, not a normalized range", () => {
+      // The clients match the active vacation against the list by `_id`, so
+      // searching `toRanges` output here (which keeps only the two dates)
+      // silently broke that match.
+      const stored = [
+        {
+          _id: "abc",
+          startDate: "2026-08-03",
+          endDate: "2026-08-15",
+          note: "Goa",
+        },
+      ];
+      expect(activeVacation(stored, "2026-08-10")).toMatchObject({
+        _id: "abc",
+        note: "Goa",
+      });
+    });
+
+    test("activeVacation ignores a malformed range", () => {
+      expect(activeVacation([{ startDate: "nope" }], "2026-08-10")).toBeNull();
+      expect(activeVacation(undefined, "2026-08-10")).toBeNull();
+    });
+  });
+
+  describe("recentlyEnded — the welcome-back window", () => {
+    test("reports a trip that ended yesterday with its length", () => {
+      expect(recentlyEnded(TRIP, "2026-08-16")).toEqual({
+        startDate: "2026-08-03",
+        endDate: "2026-08-15",
+        days: 13,
+        daysAgo: 1,
+      });
+    });
+
+    test("still reports within the three-day grace window", () => {
+      expect(recentlyEnded(TRIP, "2026-08-18").daysAgo).toBe(3);
+    });
+
+    test("stops reporting past the grace window", () => {
+      expect(recentlyEnded(TRIP, "2026-08-19")).toBeNull();
+    });
+
+    test("does not report the trip the user is still on", () => {
+      expect(recentlyEnded(TRIP, "2026-08-10")).toBeNull();
+    });
+  });
+
+  describe("callPeriod — the documented calendar spans", () => {
+    test("the 15th closes the first half of the month", () => {
+      expect(callPeriod("2026-08-15", "biweekly")).toEqual({
+        start: "2026-08-01",
+        end: "2026-08-14",
+        days: 14,
+      });
+    });
+
+    test("month end closes the back half for a biweekly call", () => {
+      expect(callPeriod("2026-08-31", "biweekly")).toEqual({
+        start: "2026-08-15",
+        end: "2026-08-31",
+        days: 17,
+      });
+    });
+
+    test("month end covers the whole month for a monthly call", () => {
+      expect(callPeriod("2026-08-31", "monthly").days).toBe(31);
+    });
+
+    test("short months resolve their own last day", () => {
+      expect(callPeriod("2026-02-28", "monthly").days).toBe(28);
+    });
+  });
+
+  describe("isCallPeriodExempt — only a near-total overlap forgives", () => {
+    test("a trip covering the whole period exempts it", () => {
+      expect(
+        isCallPeriodExempt("2026-08-15", "biweekly", [
+          { startDate: "2026-08-01", endDate: "2026-08-14" },
+        ]),
+      ).toBe(true);
+    });
+
+    test("12 of 14 days away clears the 80% bar", () => {
+      expect(
+        isCallPeriodExempt("2026-08-15", "biweekly", [
+          { startDate: "2026-08-01", endDate: "2026-08-12" },
+        ]),
+      ).toBe(true);
+    });
+
+    test("11 of 14 days away does not", () => {
+      expect(
+        isCallPeriodExempt("2026-08-15", "biweekly", [
+          { startDate: "2026-08-01", endDate: "2026-08-11" },
+        ]),
+      ).toBe(false);
+    });
+
+    test("a short trip never excuses a whole period", () => {
+      expect(
+        isCallPeriodExempt("2026-08-15", "biweekly", [
+          { startDate: "2026-08-03", endDate: "2026-08-05" },
+        ]),
+      ).toBe(false);
+    });
+
+    test("no vacation is never exempt", () => {
+      expect(isCallPeriodExempt("2026-08-15", "biweekly", [])).toBe(false);
+    });
+  });
+
+  describe("eventDay — which day an event is judged on", () => {
+    test("outcome events use their dueDate", () => {
+      expect(eventDay({ type: "habit_result", dueDate: "2026-08-04" })).toBe(
+        "2026-08-04",
+      );
+    });
+
+    test("a completion uses the day it was finished", () => {
+      expect(
+        eventDay({
+          type: "task_completed",
+          doneAt: new Date("2026-08-04T18:00:00Z"),
+          at: new Date("2026-08-09T00:00:00Z"),
+        }),
+      ).toBe("2026-08-04");
+    });
+
+    test("a reschedule has no dueDate, so it uses its own timestamp", () => {
+      expect(
+        eventDay({
+          type: "task_rescheduled",
+          at: new Date("2026-08-04T09:00:00Z"),
+        }),
+      ).toBe("2026-08-04");
+    });
+  });
+
+  describe("isPausedResult — the asymmetry that makes vacation work", () => {
+    test("a missed day on vacation is paused", () => {
+      expect(
+        isPausedResult(
+          { type: "habit_result", dueDate: "2026-08-04", completed: false },
+          TRIP,
+        ),
+      ).toBe(true);
+    });
+
+    test("a day the user actually did is never paused — credit is kept", () => {
+      expect(
+        isPausedResult(
+          { type: "habit_result", dueDate: "2026-08-04", completed: true },
+          TRIP,
+        ),
+      ).toBe(false);
+    });
+
+    test("a missed day outside the trip is an ordinary miss", () => {
+      expect(
+        isPausedResult(
+          { type: "habit_result", dueDate: "2026-08-20", completed: false },
+          TRIP,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("isVacationEvent — timestamp or explicit flag", () => {
+    test("an event during the trip qualifies on its timestamp", () => {
+      expect(
+        isVacationEvent(
+          { type: "task_rescheduled", at: new Date("2026-08-04T09:00:00Z") },
+          TRIP,
+        ),
+      ).toBe(true);
+    });
+
+    test("a trip booked in advance qualifies only via the flag", () => {
+      const bookedAhead = {
+        type: "task_rescheduled",
+        at: new Date("2026-07-20T09:00:00Z"),
+        vacationMove: true,
+      };
+      expect(isVacationEvent(bookedAhead, TRIP)).toBe(true);
+      expect(
+        isVacationEvent({ ...bookedAhead, vacationMove: false }, TRIP),
+      ).toBe(false);
+    });
+  });
+
+  describe("adjustedSlippage — lateness minus the days away", () => {
+    test("subtracts the trip from a task that outlived it", () => {
+      // Planned Aug 1, done Aug 20, away Aug 3–15: only Aug 1–2 and 16–20
+      // were ever actionable, so six days late, not nineteen.
+      expect(adjustedSlippage("2026-08-01", "2026-08-20", 19, TRIP)).toBe(6);
+    });
+
+    test("a task planned mid-trip behaves as if due the day back", () => {
+      expect(adjustedSlippage("2026-08-05", "2026-08-20", 15, TRIP)).toBe(4);
+    });
+
+    test("leaves an unaffected task alone", () => {
+      expect(adjustedSlippage("2026-09-01", "2026-09-03", 2, TRIP)).toBe(2);
+    });
+
+    test("never turns lateness negative", () => {
+      expect(adjustedSlippage("2026-08-05", "2026-08-06", 1, TRIP)).toBe(0);
+    });
+
+    test("passes early and on-the-day completions straight through", () => {
+      expect(adjustedSlippage("2026-08-20", "2026-08-18", -2, TRIP)).toBe(-2);
+      expect(adjustedSlippage("2026-08-20", "2026-08-20", 0, TRIP)).toBe(0);
+    });
+
+    test("null stays null", () => {
+      expect(adjustedSlippage(null, null, null, TRIP)).toBeNull();
+    });
   });
 });

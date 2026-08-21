@@ -12,6 +12,7 @@ async function clearCollections() {
   await db.collection("Tasks-Test").deleteMany({});
   await db.collection("TaskArchive-Test").deleteMany({});
   await db.collection("ArchiveSummary-Test").deleteMany({});
+  await db.collection("Vacations-Test").deleteMany({});
 }
 
 async function getArchiveEvents(filter = {}) {
@@ -492,7 +493,10 @@ describe("TaskArchive event log", () => {
     test("does NOT log task_deleted when a done task is deleted", async () => {
       const h = await createHeader("Work");
       const t = await createTask({ name: "Finished", headerId: h._id });
-      await request(app).put(`/tasks/${t._id}`).send({ done: true }).expect(200);
+      await request(app)
+        .put(`/tasks/${t._id}`)
+        .send({ done: true })
+        .expect(200);
 
       await request(app)
         .delete(`/tasks/${t._id}`)
@@ -575,6 +579,184 @@ describe("TaskArchive event log", () => {
     });
   });
   // ─── Retention: summarise, then prune (cron step 10) ──────────────────────
+  describe("Vacation rules survive the fold (cron step 10)", () => {
+    const DAY = 86400000;
+
+    /** The UTC day `daysOld` days before now. */
+    function agedDay(daysOld) {
+      return new Date(Date.now() - daysOld * DAY).toISOString().slice(0, 10);
+    }
+
+    async function seedAged(daysOld, doc) {
+      const db = await getDatabase();
+      await db
+        .collection("TaskArchive-Test")
+        .insertOne({ at: new Date(Date.now() - daysOld * DAY), ...doc });
+    }
+
+    async function seedVacation(startDate, endDate) {
+      const db = await getDatabase();
+      await db
+        .collection("Vacations-Test")
+        .insertOne({ startDate, endDate, note: "" });
+    }
+
+    async function summaries() {
+      const db = await getDatabase();
+      return db.collection("ArchiveSummary-Test").find({}).toArray();
+    }
+
+    /** Step 10 measures from the real clock, so any run date exercises it. */
+    async function prune() {
+      return request(app)
+        .post("/cron/run")
+        .send({ date: `${RUN_DATE}T00:00:00.000Z`, skipInsights: true })
+        .expect(200);
+    }
+
+    beforeEach(clearCollections);
+
+    test("folds a vacation miss as paused, not as a missed scheduled day", async () => {
+      // Per-day detail is deleted after the retention window, so if the fold
+      // did not apply the vacation rules the forgiveness would be lost forever.
+      const day = agedDay(40);
+      await seedVacation(day, day);
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Meditate",
+        headerName: "Health",
+        dueDate: day,
+        completed: false,
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      const habit = summary.habits.find((h) => h.taskName === "Meditate");
+      expect(habit.paused).toBe(1);
+      expect(habit.scheduled).toBe(0);
+      expect(habit.completed).toBe(0);
+      expect(summary.vacationDays).toBe(1);
+      const header = summary.byHeader.find((h) => h.headerName === "Health");
+      expect(header.paused).toBe(1);
+      expect(header.missed).toBe(0);
+    });
+
+    test("folds an ordinary miss as a miss", async () => {
+      const day = agedDay(40);
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Meditate",
+        headerName: "Health",
+        dueDate: day,
+        completed: false,
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      const habit = summary.habits.find((h) => h.taskName === "Meditate");
+      expect(habit.paused).toBe(0);
+      expect(habit.scheduled).toBe(1);
+      expect(summary.vacationDays).toBe(0);
+    });
+
+    test("still credits a habit done while away", async () => {
+      const day = agedDay(40);
+      await seedVacation(day, day);
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Meditate",
+        headerName: "Health",
+        dueDate: day,
+        completed: true,
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      const habit = summary.habits.find((h) => h.taskName === "Meditate");
+      expect(habit.completed).toBe(1);
+      expect(habit.scheduled).toBe(1);
+      expect(habit.paused).toBe(0);
+    });
+
+    test("folds a vacationMove apart from the unexcused postpone count", async () => {
+      await seedAged(40, {
+        type: "task_rescheduled",
+        taskName: "Dentist",
+        headerName: "Health",
+        pushedLater: true,
+        reason: null,
+        vacationMove: true,
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      expect(summary.reschedules.vacationMoves).toBe(1);
+      expect(summary.reschedules.pushedLaterNoReason).toBe(0);
+    });
+
+    test("folds on-time using vacation-adjusted slippage", async () => {
+      // Planned 4 days before the trip's last day, finished the day after it
+      // ended: every day between was vacation, so it is on time, not late.
+      const start = agedDay(44);
+      const end = agedDay(41);
+      await seedVacation(start, end);
+      await seedAged(40, {
+        type: "task_completed",
+        taskName: "Renew passport",
+        headerName: "Admin",
+        plannedFor: start,
+        doneAt: new Date(`${agedDay(40)}T10:00:00Z`),
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      expect(summary.oneTimeTasks.onTime).toBe(1);
+      expect(summary.oneTimeTasks.late).toBe(0);
+    });
+
+    test("a summary written before vacation existed gains the counters safely", async () => {
+      const db = await getDatabase();
+      const day = agedDay(40);
+      // A legacy document: no vacationDays, no paused, no vacationMoves.
+      await db.collection("ArchiveSummary-Test").insertOne({
+        month: day.slice(0, 7),
+        days: ["1999-01-01"],
+        eventCount: 5,
+        habits: [{ taskName: "Meditate", scheduled: 5, completed: 4 }],
+        recurring: [],
+        calls: [],
+        oneTimeTasks: { completed: 0, onTime: 0, late: 0 },
+        reschedules: { total: 0, pushedLater: 0, pushedLaterNoReason: 0 },
+        deletions: { count: 0, withReason: 0 },
+        byHeader: [],
+        firstAt: null,
+        lastAt: null,
+      });
+      await seedVacation(day, day);
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Meditate",
+        headerName: "Health",
+        dueDate: day,
+        completed: false,
+      });
+
+      await prune();
+
+      const [summary] = await summaries();
+      const habit = summary.habits.find((h) => h.taskName === "Meditate");
+      expect(habit.scheduled).toBe(5); // untouched — the new day was paused
+      expect(habit.paused).toBe(1);
+      expect(summary.vacationDays).toBe(1);
+      expect(Number.isNaN(summary.eventCount)).toBe(false);
+    });
+  });
+
   describe("Archive retention (cron step 10)", () => {
     const DAY = 86400000;
 
@@ -608,7 +790,11 @@ describe("TaskArchive event log", () => {
     beforeEach(clearCollections);
 
     test("keeps events inside the retention window", async () => {
-      await seedAged(5, { type: "habit_result", taskName: "Recent", completed: true });
+      await seedAged(5, {
+        type: "habit_result",
+        taskName: "Recent",
+        completed: true,
+      });
 
       const res = await runCron();
 
@@ -640,14 +826,32 @@ describe("TaskArchive event log", () => {
       expect(stored[0].month).toBe(month);
       expect(stored[0].eventCount).toBe(1);
       expect(stored[0].habits).toEqual([
-        { taskName: "Meditate", headerName: "Health", scheduled: 1, completed: 1 },
+        {
+          taskName: "Meditate",
+          headerName: "Health",
+          scheduled: 1,
+          completed: 1,
+          paused: 0, // days a vacation excused; none here
+        },
       ]);
     });
 
     test("counts habit hits and misses, and rolls them up per header", async () => {
-      await seedAged(40, { type: "habit_result", taskName: "Meditate", completed: true });
-      await seedAged(41, { type: "habit_result", taskName: "Meditate", completed: false });
-      await seedAged(42, { type: "task_rescheduled", taskName: "Gym", pushedLater: true });
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Meditate",
+        completed: true,
+      });
+      await seedAged(41, {
+        type: "habit_result",
+        taskName: "Meditate",
+        completed: false,
+      });
+      await seedAged(42, {
+        type: "task_rescheduled",
+        taskName: "Gym",
+        pushedLater: true,
+      });
 
       await runCron();
 
@@ -657,9 +861,17 @@ describe("TaskArchive event log", () => {
         total: 1,
         pushedLater: 1,
         pushedLaterNoReason: 1,
+        vacationMoves: 0,
       });
       expect(stored.byHeader).toEqual([
-        { headerName: "Health", completed: 1, missed: 1, reschedules: 1, deleted: 0 },
+        {
+          headerName: "Health",
+          completed: 1,
+          missed: 1,
+          paused: 0,
+          reschedules: 1,
+          deleted: 0,
+        },
       ]);
     });
 
@@ -686,7 +898,11 @@ describe("TaskArchive event log", () => {
     });
 
     test("a second run neither double-counts nor resurrects anything", async () => {
-      await seedAged(45, { type: "habit_result", taskName: "Meditate", completed: true });
+      await seedAged(45, {
+        type: "habit_result",
+        taskName: "Meditate",
+        completed: true,
+      });
 
       await runCron();
       const second = await runCron();
@@ -706,8 +922,18 @@ describe("TaskArchive event log", () => {
         emptySummary,
       } = require("../src/models/ArchiveSummary");
       const events = [
-        { at: "2026-07-15T01:00:00Z", type: "habit_result", taskName: "M", completed: true },
-        { at: "2026-07-15T02:00:00Z", type: "habit_result", taskName: "M", completed: false },
+        {
+          at: "2026-07-15T01:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: true,
+        },
+        {
+          at: "2026-07-15T02:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: false,
+        },
       ];
 
       const first = foldEvents(emptySummary("2026-07"), events);
@@ -723,8 +949,18 @@ describe("TaskArchive event log", () => {
     test("splits a batch across the months it belongs to", async () => {
       const { ArchiveSummary } = require("../src/models/ArchiveSummary");
       await ArchiveSummary.foldAll([
-        { at: "2026-06-30T23:00:00Z", type: "habit_result", taskName: "M", completed: true },
-        { at: "2026-07-01T01:00:00Z", type: "habit_result", taskName: "M", completed: true },
+        {
+          at: "2026-06-30T23:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: true,
+        },
+        {
+          at: "2026-07-01T01:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: true,
+        },
       ]);
 
       const stored = await summaries();
@@ -735,8 +971,18 @@ describe("TaskArchive event log", () => {
     test("GET /archive/summary returns the months oldest first", async () => {
       const { ArchiveSummary } = require("../src/models/ArchiveSummary");
       await ArchiveSummary.foldAll([
-        { at: "2026-07-02T00:00:00Z", type: "habit_result", taskName: "M", completed: true },
-        { at: "2026-06-02T00:00:00Z", type: "habit_result", taskName: "M", completed: true },
+        {
+          at: "2026-07-02T00:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: true,
+        },
+        {
+          at: "2026-06-02T00:00:00Z",
+          type: "habit_result",
+          taskName: "M",
+          completed: true,
+        },
       ]);
 
       const res = await request(app).get("/archive/summary").expect(200);
@@ -749,14 +995,20 @@ describe("TaskArchive event log", () => {
     });
 
     test("retention can never be set inside the insights window", async () => {
-      const { DEFAULT_PERIOD_DAYS } = require("../src/services/insightsService");
+      const {
+        DEFAULT_PERIOD_DAYS,
+      } = require("../src/services/insightsService");
       const original = process.env.ARCHIVE_RETENTION_DAYS;
       const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
       process.env.ARCHIVE_RETENTION_DAYS = "1";
 
       // 20 days old: inside the 28-day insights window, so it must survive
       // even though the configured retention says 1 day.
-      await seedAged(20, { type: "habit_result", taskName: "Recent", completed: true });
+      await seedAged(20, {
+        type: "habit_result",
+        taskName: "Recent",
+        completed: true,
+      });
 
       try {
         const res = await runCron();
@@ -775,8 +1027,16 @@ describe("TaskArchive event log", () => {
     test("a shorter-than-default but still safe window is honoured", async () => {
       const original = process.env.ARCHIVE_RETENTION_DAYS;
       process.env.ARCHIVE_RETENTION_DAYS = "29";
-      await seedAged(40, { type: "habit_result", taskName: "Old", completed: true });
-      await seedAged(20, { type: "habit_result", taskName: "Recent", completed: true });
+      await seedAged(40, {
+        type: "habit_result",
+        taskName: "Old",
+        completed: true,
+      });
+      await seedAged(20, {
+        type: "habit_result",
+        taskName: "Recent",
+        completed: true,
+      });
 
       try {
         const res = await runCron();

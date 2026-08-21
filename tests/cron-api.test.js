@@ -46,6 +46,7 @@ describe("Cron API Endpoints", () => {
       const res = await request(app).post("/cron/run").expect(200);
 
       expect(res.body).toHaveProperty("ranAt");
+      expect(res.body).toHaveProperty("onVacation");
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
@@ -200,6 +201,7 @@ describe("Cron API Endpoints", () => {
       const res = await request(app).get("/cron/run").expect(200);
 
       expect(res.body).toHaveProperty("ranAt");
+      expect(res.body).toHaveProperty("onVacation");
       expect(res.body).toHaveProperty("tasksDeleted");
       expect(res.body).toHaveProperty("tasksMarkedUndone");
       expect(res.body).toHaveProperty("tasksClamped");
@@ -295,6 +297,92 @@ describe("Cron API Endpoints", () => {
     });
   });
 
+  describe("POST /cron/run — vacation", () => {
+    async function seedVacation(startDate, endDate) {
+      const db = await getDatabase();
+      await db
+        .collection("Vacations-Test")
+        .insertOne({ startDate, endDate, note: "" });
+    }
+
+    async function clearVacations() {
+      const db = await getDatabase();
+      await db.collection("Vacations-Test").deleteMany({});
+    }
+
+    beforeEach(clearVacations);
+    afterAll(clearVacations);
+
+    test("reports onVacation=false with nothing booked", async () => {
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ skipInsights: true })
+        .expect(200);
+      expect(res.body.onVacation).toBe(false);
+    });
+
+    test("reports onVacation=true when the run's day falls inside a range", async () => {
+      await seedVacation("2026-03-01", "2026-03-31");
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-08T00:00:00.000Z", skipInsights: true })
+        .expect(200);
+      expect(res.body.onVacation).toBe(true);
+    });
+
+    test("every other cron step still runs while away — vacation is a lens, not a pause", async () => {
+      await seedVacation("2026-03-01", "2026-03-31");
+      const header = await request(app)
+        .post("/headers")
+        .send({ name: "Health" });
+      await request(app)
+        .post("/tasks")
+        .send({
+          name: "Meditate",
+          headerId: header.body._id,
+          ecd: { type: "day_of_week", value: ["Sun"] },
+        });
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-03-08T00:00:00.000Z", skipInsights: true })
+        .expect(200);
+
+      expect(res.body.onVacation).toBe(true);
+      // 2026-03-08 is a Sunday, so the habit is reset for the day as usual.
+      expect(res.body).toHaveProperty("tasksMarkedUndone");
+      expect(res.body.statsRefreshed).toBe(true);
+      expect(res.body).toHaveProperty("headersReordered");
+
+      await request(app).delete(`/headers/${header.body._id}`);
+    });
+
+    test("skips the AI report with insightSkipped='vacation'", async () => {
+      await seedVacation("2026-03-01", "2026-03-31");
+      const originalEnv = process.env.NODE_ENV;
+      const originalKey = process.env.GEMINI_API_KEY;
+      process.env.NODE_ENV = "development";
+      process.env.GEMINI_API_KEY = "test-key";
+      generateInsights.mockClear();
+
+      try {
+        const res = await request(app)
+          .post("/cron/run")
+          .send({ date: "2026-03-08T00:00:00.000Z" })
+          .expect(200);
+
+        expect(res.body.insightGenerated).toBe(false);
+        expect(res.body.insightSkipped).toBe("vacation");
+        expect(generateInsights).not.toHaveBeenCalled();
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+        if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = originalKey;
+      }
+    });
+  });
+
   describe("POST /cron/run — archive retention (step 10)", () => {
     beforeEach(async () => {
       const db = await getDatabase();
@@ -313,9 +401,11 @@ describe("Cron API Endpoints", () => {
 
     test("archiveCutoff is null when nothing was old enough to prune", async () => {
       const db = await getDatabase();
-      await db
-        .collection("TaskArchive-Test")
-        .insertOne({ type: "habit_result", taskName: "Recent", at: new Date() });
+      await db.collection("TaskArchive-Test").insertOne({
+        type: "habit_result",
+        taskName: "Recent",
+        at: new Date(),
+      });
 
       const res = await request(app).post("/cron/run").expect(200);
       expect(res.body.archiveEventsPruned).toBe(0);
@@ -370,8 +460,26 @@ describe("Cron API Endpoints", () => {
     test("streaks are updated with no API key and no report generated", async () => {
       const db = await getDatabase();
       await db.collection("TaskArchive-Test").insertMany([
-        { type: "habit_result", at: new Date(), taskId: "h1", taskName: "Stretch", headerName: "Health", scheduledDays: ["Mon"], dueDate: "2026-07-06", completed: true },
-        { type: "habit_result", at: new Date(), taskId: "h1", taskName: "Stretch", headerName: "Health", scheduledDays: ["Mon"], dueDate: "2026-07-13", completed: true },
+        {
+          type: "habit_result",
+          at: new Date(),
+          taskId: "h1",
+          taskName: "Stretch",
+          headerName: "Health",
+          scheduledDays: ["Mon"],
+          dueDate: "2026-07-06",
+          completed: true,
+        },
+        {
+          type: "habit_result",
+          at: new Date(),
+          taskId: "h1",
+          taskName: "Stretch",
+          headerName: "Health",
+          scheduledDays: ["Mon"],
+          dueDate: "2026-07-13",
+          completed: true,
+        },
       ]);
 
       // Thursday: no AI report, but the streak must still be current

@@ -228,9 +228,7 @@ async function step0ArchiveYesterdayResults(tasksCol, headerNames, today) {
   // Recurring tasks: day_of_month due yesterday. Values are resolved against
   // yesterday's month, so a task set to the 31st is picked up on Feb 28.
   const yYear = yesterday.getUTCFullYear();
-  const monthly = await tasksCol
-    .find({ "ecd.type": "day_of_month" })
-    .toArray();
+  const monthly = await tasksCol.find({ "ecd.type": "day_of_month" }).toArray();
   for (const task of monthly) {
     const { days } = effectiveDaysOfMonth(task.ecd.value, yYear, yMonth);
     if (!days.includes(yDom)) continue;
@@ -386,7 +384,11 @@ async function step4DeleteDoneDateTasks(tasksCol, headerNames) {
     .toArray();
 
   if (tasks.length === 0)
-    return { tasksDeleted: 0, projectTasksCompleted: 0, lifeEventsCompleted: 0 };
+    return {
+      tasksDeleted: 0,
+      projectTasksCompleted: 0,
+      lifeEventsCompleted: 0,
+    };
 
   await Archive.logMany(
     tasks.map((task) =>
@@ -700,9 +702,10 @@ async function step10PruneArchive() {
   const { DEFAULT_PERIOD_DAYS } = require("../services/insightsService");
 
   const configured = Number.parseInt(process.env.ARCHIVE_RETENTION_DAYS, 10);
-  const requested = Number.isInteger(configured) && configured > 0
-    ? configured
-    : DEFAULT_ARCHIVE_RETENTION_DAYS;
+  const requested =
+    Number.isInteger(configured) && configured > 0
+      ? configured
+      : DEFAULT_ARCHIVE_RETENTION_DAYS;
   const retentionDays = Math.max(requested, DEFAULT_PERIOD_DAYS);
   if (retentionDays !== requested) {
     console.warn(
@@ -724,7 +727,8 @@ async function step10PruneArchive() {
     return { eventsPruned: 0, eventsFolded: 0, monthsTouched: 0, cutoff: null };
   }
 
-  const { monthsTouched, eventsFolded } = await ArchiveSummary.foldAll(expiring);
+  const { monthsTouched, eventsFolded } =
+    await ArchiveSummary.foldAll(expiring);
 
   const result = await archiveCol.deleteMany({
     _id: { $in: expiring.map((event) => event._id) },
@@ -824,6 +828,13 @@ async function runCron(now, { skipInsights = false } = {}) {
 
   const stats = {
     ranAt: today.toISOString(),
+    // Nothing in steps 0–11 behaves differently on a vacation day — vacation
+    // is a lens on the history, not a pause button. It is reported because it
+    // explains why the AI report below did not run, and why the stats
+    // snapshot stopped moving.
+    onVacation: Boolean(
+      await require("../models/Vacation").activeOn(utcDayString(today)),
+    ),
     tasksDeleted,
     tasksMarkedUndone: markedUndoneDoy + markedUndoneDow + markedUndoneDom,
     tasksClamped: clampedDoy + clampedDom,
@@ -846,7 +857,8 @@ async function runCron(now, { skipInsights = false } = {}) {
   // Generate the AI insight report (skipped in tests / without an API key /
   // when the caller opts out via skipInsights). It fires once per UTC day —
   // `insightSkipped: "not-due"` says the run reached this step and
-  // deliberately passed because today's report already exists.
+  // deliberately passed because today's report already exists, and
+  // `insightSkipped: "vacation"` that the user is away and none is wanted.
   if (
     !skipInsights &&
     process.env.NODE_ENV !== "test" &&
@@ -857,9 +869,24 @@ async function runCron(now, { skipInsights = false } = {}) {
         generateInsights,
         isInsightDue,
       } = require("../services/insightsService");
-      if (await isInsightDue(today)) {
+      // `isInsightDue` refuses on a vacation day as well as a second run of
+      // the same day, so the reason is resolved here — "you are away" and
+      // "already written today" are different answers to the user.
+      if (stats.onVacation) {
+        stats.insightGenerated = false;
+        stats.insightSkipped = "vacation";
+      } else if (await isInsightDue(today)) {
         const insight = await generateInsights();
-        stats.insightGenerated = Boolean(insight);
+        // `generateInsights` runs its own vacation check against the *real*
+        // clock, so a run with a `date` override can disagree with the flag
+        // above. Trust its answer rather than counting the refusal object as
+        // a generated report.
+        if (insight && insight.onVacation) {
+          stats.insightGenerated = false;
+          stats.insightSkipped = "vacation";
+        } else {
+          stats.insightGenerated = Boolean(insight);
+        }
       } else {
         stats.insightGenerated = false;
         stats.insightSkipped = "not-due";
