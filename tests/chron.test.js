@@ -1299,4 +1299,40 @@ describe("Cron Job", () => {
       expect(await getCallResultEvents()).toHaveLength(0);
     });
   });
+
+  // The daily run only happens if something actually fires it. On Vercel no
+  // in-process timer survives between requests, so scheduleCron must decline
+  // rather than log a schedule that will never run — the platform cron
+  // (vercel.json -> crons -> GET /cron/run) is the trigger there.
+  describe("scheduleCron — where the daily run comes from", () => {
+    const { scheduleCron, isServerless } = require("../src/cron/cronJob");
+
+    afterEach(() => {
+      delete process.env.VERCEL;
+      delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+      // A registered schedule is a live timer; leaving one behind would hold
+      // the Jest worker open.
+      for (const task of require("node-cron").getTasks().values()) {
+        task.destroy();
+      }
+    });
+
+    test("registers an in-process schedule on a long-lived server", () => {
+      expect(isServerless()).toBe(false);
+      expect(scheduleCron()).toBe(true);
+      expect(require("node-cron").getTasks().size).toBe(1);
+    });
+
+    test("declines on Vercel", () => {
+      process.env.VERCEL = "1";
+      expect(isServerless()).toBe(true);
+      expect(scheduleCron()).toBe(false);
+    });
+
+    test("declines on Lambda", () => {
+      process.env.AWS_LAMBDA_FUNCTION_NAME = "taskathand";
+      expect(isServerless()).toBe(true);
+      expect(scheduleCron()).toBe(false);
+    });
+  });
 });

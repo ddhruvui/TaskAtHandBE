@@ -92,6 +92,7 @@ TaskAtHandBE/
 ├── wiki/                       # Utility-layer wiki (start at Home.md)
 ├── scripts/
 │   └── cleartest.js            # Wipe test collections
+├── vercel.json                 # Daily cron trigger (GET /cron/run at 00:00 UTC)
 ├── .env
 └── package.json
 ```
@@ -150,6 +151,34 @@ Server listens on **port 3002** by default.
 | `GEMINI_MODEL` | `gemini-3.7-flash` | Which Gemini model writes the daily report. Read per call, so a restart switches it — no deploy. Set to `gemini-3.1-pro-preview` once billing is enabled (Pro has no free-tier quota) |
 | `INSIGHT_RETENTION_COUNT` | `100` | How many stored AI reports survive cron step 11. Floored at the `/insights/history` ceiling (`Insight.MAX_HISTORY`), so it can only ever be raised |
 | `ARCHIVE_RETENTION_DAYS` | `30` | How long raw `TaskArchive` events survive before cron step 10 folds them into `ArchiveSummary` and deletes them. Clamped **up** to the 28-day insights window — a smaller value is logged and ignored |
+
+## Scheduling the daily run
+
+Everything the app does overnight — habit resets, the archive, the `InsightStats`
+snapshot and the AI insight report — happens inside one `runCron` call. **Something
+has to trigger it**, and which "something" depends on where the API runs:
+
+| Host | Trigger |
+| ---- | ------- |
+| Long-lived server (`npm start`, `npm run dev`) | `scheduleCron()` registers an in-process `node-cron` schedule at `0 0 * * *` in `Etc/UTC`, with a UTC `setInterval` fallback |
+| **Serverless (Vercel — the deployed target)** | [`vercel.json`](vercel.json) → `crons` calls `GET /cron/run` at 00:00 UTC |
+
+On a serverless host the instance is frozen the moment a response is written, so
+a timer set for midnight is never reached. `scheduleCron()` detects that
+(`VERCEL` / `AWS_LAMBDA_FUNCTION_NAME`), declines, and says so in the logs
+instead of claiming a schedule that will never fire.
+
+**Deploying to Vercel** needs two things beyond `vercel.json`:
+
+1. Set `GEMINI_API_KEY` in the project's environment variables.
+2. Give the function room for the run: cron steps 0–11 plus one Gemini call can
+   exceed the default function timeout, and the AI report is last, so a short
+   timeout loses exactly that. Raise **Max Duration** in the project's Function
+   settings (60s is ample).
+
+To verify a night later: `GET /insights/latest` should carry today's
+`generatedAt`, and `GET /insights/stats/latest` a fresh `computedAt`. If the
+report is missing, `insightSkipped` in the cron response names the reason.
 
 ## API Endpoints
 
@@ -315,8 +344,8 @@ npm run cleartest
 | `projects.test.js`       | Projects CRUD, task validation, dated-first/done-last task sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
-| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot, the once-per-day report gate, and the vacation report skip) |
-| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) |
+| `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot, the once-per-day report gate, every `insightSkipped` reason, and the vacation report skip) |
+| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) and `scheduleCron`'s serverless detection |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive`, and vacation rules surviving the permanent monthly fold |
@@ -330,7 +359,7 @@ npm run cleartest
 - `.env` is gitignored — never commit credentials
 - `headerId` is immutable after task creation
 - Priority values are 0-based and always kept contiguous by the model layer (`src/utils/priority.js` — see [`wiki/Priority.md`](wiki/Priority.md))
-- Cron runs daily at UTC midnight via `node-cron` (`Etc/UTC` timezone) with a UTC setInterval fallback
+- Cron runs daily at UTC midnight — via in-process `node-cron` on a long-lived server, via `vercel.json` → `crons` calling `GET /cron/run` on serverless (see [Scheduling the daily run](#scheduling-the-daily-run))
 - Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events — a postpone (one-time date pushed later) can carry an optional `reason`, and the AI treats a reason-less postpone as procrastination but a valid reason as a legitimate deferral. Manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
 - The archive is bounded: cron step 10 summarises raw events older than `ARCHIVE_RETENTION_DAYS` into monthly `ArchiveSummary` documents and then deletes them. Monthly totals are kept forever, **per-day detail is not recoverable once pruned**, and `GET /archive?days=` can only ever return what is still inside the window
-- Insight generation runs at the end of a cron run when `GEMINI_API_KEY` is set (skipped in tests) — once per UTC day; a second run the same day reports `insightGenerated: false` with `insightSkipped: "not-due"`. Archive writes never throw, so they can't break task operations
+- Insight generation runs at the end of a cron run when `GEMINI_API_KEY` is set (skipped in tests) — once per UTC day. Every run reports `insightGenerated`, and when it is `false` an `insightSkipped` reason (`opted-out`, `test-env`, `no-api-key`, `vacation`, `not-due`, `no-data`, `error`) says why. Archive writes never throw, so they can't break task operations

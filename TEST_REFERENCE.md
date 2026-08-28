@@ -587,6 +587,17 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | does not double-log call_result when cron re-runs for the same date | Step 8: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
 | logs no call_result mid-month                                   | Step 8: run on `2026-03-10` → zero `call_result` events                        |
 
+### scheduleCron — where the daily run comes from
+
+Nothing in the table above happens unless something fires `runCron`, so the
+trigger itself is tested.
+
+| Test                                                  | What it checks                                                                       |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| registers an in-process schedule on a long-lived server | No serverless env vars → `isServerless()` false, `scheduleCron()` returns `true`, one node-cron task registered |
+| declines on Vercel                                    | `VERCEL=1` → `isServerless()` true and `scheduleCron()` returns `false`; the platform cron (`vercel.json`) owns the run |
+| declines on Lambda                                    | `AWS_LAMBDA_FUNCTION_NAME` set → same, so the check is not Vercel-specific            |
+
 ---
 
 ## tests/cron-api.test.js
@@ -614,9 +625,12 @@ Tests the four cron HTTP endpoints.
 | GET /cron/details returns 404 before any run            | Same 404 behaviour as `/cron/status` when cron has never run                                    |
 | GET /cron/details does not expose ranAt key             | Response has `lastRanAt` but not `ranAt`                                                        |
 | every run refreshes the snapshot and reports statsRefreshed | No `GEMINI_API_KEY` set → `statsRefreshed: true` and `GET /insights/stats/latest` returns a snapshot with `computedAt` and `periodDays: 28` |
-| streaks are updated with no API key and no report generated | Two archived habit hits + a run with no API key → no `insightGenerated` key, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
+| streaks are updated with no API key and no report generated | Two archived habit hits + a run with no API key → `insightGenerated: false` with `insightSkipped: "test-env"`, but the snapshot shows `currentStreak: 2`, `completionRate: 100` |
 | skipInsights does not suppress the snapshot             | `{ skipInsights: true }` → `statsRefreshed: true` and the snapshot endpoint still answers 200 (the flag only avoids the paid API call) |
-| skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ date: Fri 2026-07-24, skipInsights: true }` → `generateInsights` not called, no `insightGenerated`/`insightSkipped` keys |
+| skipInsights: true suppresses the insight report        | With env flipped to reach the insight branch (mocked service), `{ date: Fri 2026-07-24, skipInsights: true }` → `generateInsights` not called, `insightGenerated: false`, `insightSkipped: "opted-out"` |
+| a missing API key is reported, not silently omitted     | No `GEMINI_API_KEY` → `insightSkipped: "no-api-key"`, so a misconfigured deployment is visible from `/cron/status` instead of looking like a quiet night |
+| a model failure is reported as insightSkipped='error'   | `generateInsights` rejects → `insightSkipped: "error"`, `insightError` carries the message, and the rest of the run still succeeded (`statsRefreshed: true`) |
+| an empty archive window is reported as insightSkipped='no-data' | `generateInsights` resolves `null` → `insightSkipped: "no-data"`, distinguishing "nothing to write about" from "the call blew up" |
 | without skipInsights the insight step runs               | Same env, no stored report → `generateInsights` called once, `insightGenerated: true`, no `insightSkipped` |
 | runs on a weekday too — the report is no longer Friday-only | Thursday 2026-07-23 → `generateInsights` called once, `insightGenerated: true` |
 | skips a second run on a day that already reported       | Report seeded the same day → `generateInsights` not called, `insightSkipped: "not-due"` (no second API call) |
@@ -638,6 +652,7 @@ Tests the four cron HTTP endpoints.
 | reports onVacation=false with nothing booked          | The run stats always carry the flag                                 |
 | reports onVacation=true when the run's day falls inside a range | The flag explains the two things vacation does change     |
 | every other cron step still runs while away           | Habits still reset, stats still refresh, headers still reorder — vacation is a lens, not a pause button |
+
 | skips the AI report with insightSkipped='vacation'    | `generateInsights` is never called; the reason is distinguishable from `"not-due"` |
 
 ---

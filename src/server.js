@@ -117,6 +117,9 @@ app.use("/insights", require("./routes/insightRoutes"));
  *   get:
  *     tags: [Cron]
  *     summary: Manually trigger the cron job (GET, no body required)
+ *     description: >
+ *       The daily production trigger — Vercel Cron Jobs (`vercel.json` → `crons`)
+ *       call this path at 00:00 UTC.
  *     responses:
  *       200:
  *         description: Cron ran successfully
@@ -226,6 +229,8 @@ const startServer = async () => {
     // Idempotent; the archive reads and the retention prune both need them.
     await require("./models/Archive").ensureIndexes();
     await require("./models/ArchiveSummary").ArchiveSummary.ensureIndexes();
+    // Returns false on a serverless runtime, where no in-process timer can
+    // survive between requests and `vercel.json` → `crons` owns the daily run.
     scheduleCron();
     app.listen(PORT, () => {
       console.log(

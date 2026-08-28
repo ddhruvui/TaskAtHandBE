@@ -1348,7 +1348,15 @@ unlinked (`projectId: null`) so it leaves the project block.
 
 ## Cron Job
 
-The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/UTC` timezone) and performs the following steps to maintain task state and history.
+The cron job runs daily at UTC midnight and performs the following steps to maintain task state and history.
+
+**What fires it depends on the host.** On a long-lived server (`npm start`, `npm run dev`) `scheduleCron()` registers an in-process `node-cron` schedule in the `Etc/UTC` timezone, with a UTC `setInterval` fallback. On a **serverless** host — which is where this API is deployed — no timer survives between requests, so `scheduleCron()` declines and the schedule lives in [`vercel.json`](vercel.json):
+
+```json
+{ "crons": [{ "path": "/cron/run", "schedule": "0 0 * * *" }] }
+```
+
+Vercel Cron Jobs issue a **GET** to that path.
 
 ### Cron Steps
 
@@ -1366,7 +1374,7 @@ The cron job runs daily at UTC midnight (scheduled via `node-cron` in the `Etc/U
 | 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `GEMINI_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
 | 10   | Every day          | **Summarise, then prune the archive**: fold `TaskArchive` events older than `ARCHIVE_RETENTION_DAYS` (default 30) into `ArchiveSummary` — one document per calendar month, kept forever — then delete the raw events. The cutoff is a **UTC day boundary** (only whole days are pruned) measured from the **real** clock, not the run's `date` override; the fold is idempotent per source day. Retention is clamped up to the 28-day insights window. Reports `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised`, `archiveCutoff` |
 | 11   | Every day          | **Trim stored insight reports**: keep only the newest `INSIGHT_RETENTION_COUNT` (default 100 — the `/insights/history` ceiling, so older reports are unreachable anyway). No roll-up: a report is prose derived from `TaskArchive`, whose numbers survive in `ArchiveSummary`. Retention is floored at the ceiling. Reports `insightReportsPruned` |
-| —    | Every day          | Generate the AI insight report — once per **UTC day**; a second run the same day carries `insightGenerated: false` + `insightSkipped: "not-due"`. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. `POST /insights/generate` bypasses the gate |
+| —    | Every day          | Generate the AI insight report — once per **UTC day**. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. Every run reports `insightGenerated`, plus an `insightSkipped` reason whenever it is `false` (see the table under `POST /cron/run`). `POST /insights/generate` bypasses the once-per-day gate |
 
 #### Resolving "next upcoming ECD" for step 7
 
@@ -1455,10 +1463,18 @@ Manually triggers the cron job with an optional date override in the request bod
 }
 ```
 
-`insightGenerated` is only present when the run reached the insight step
-(`skipInsights` unset, not test mode, `GEMINI_API_KEY` configured). The
-report fires once per UTC day: on a day it already ran for it is `false` and
-the response also carries `"insightSkipped": "not-due"`.
+`insightGenerated` is **always present**, and whenever it is `false` an
+`insightSkipped` reason says why:
+
+| `insightSkipped` | Meaning                                                                       |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `opted-out`      | The caller passed `skipInsights: true`                                         |
+| `test-env`       | `NODE_ENV=test`                                                                |
+| `no-api-key`     | No `GEMINI_API_KEY` configured on the server                                   |
+| `vacation`       | The run's day falls inside a booked vacation — no report is wanted             |
+| `not-due`        | Today's report already exists (the report fires once per UTC day)              |
+| `no-data`        | The archive window is empty, so there is nothing to write about                |
+| `error`          | The model call failed; `insightError` carries the message and the run still succeeded |
 
 **Error `500`:**
 
@@ -1470,7 +1486,8 @@ the response also carries `"insightSkipped": "not-due"`.
 
 ### `GET /cron/run`
 
-Manually triggers the cron job. No request body needed.
+Triggers the cron job. No request body needed. **This is the production daily
+trigger** — the Vercel Cron Job defined in `vercel.json` calls it at 00:00 UTC.
 
 **Response `200`:**
 
@@ -1498,6 +1515,8 @@ Manually triggers the cron job. No request body needed.
   "insightGenerated": true
 }
 ```
+
+Same `insightGenerated` / `insightSkipped` contract as `POST /cron/run` above.
 
 **Error `500`:**
 

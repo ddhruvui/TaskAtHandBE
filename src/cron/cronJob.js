@@ -854,16 +854,31 @@ async function runCron(now, { skipInsights = false } = {}) {
     insightReportsPruned,
   };
 
-  // Generate the AI insight report (skipped in tests / without an API key /
-  // when the caller opts out via skipInsights). It fires once per UTC day —
-  // `insightSkipped: "not-due"` says the run reached this step and
-  // deliberately passed because today's report already exists, and
-  // `insightSkipped: "vacation"` that the user is away and none is wanted.
-  if (
-    !skipInsights &&
-    process.env.NODE_ENV !== "test" &&
-    process.env.GEMINI_API_KEY
-  ) {
+  // Generate the AI insight report. It fires once per UTC day, and every run
+  // now records *why* it did not — `insightGenerated` and `insightSkipped` are
+  // always both present.
+  //
+  // They used to be omitted entirely on the three pre-conditions below, which
+  // made "no report today" and "no report step at all" look identical from
+  // `/cron/status`. That silence is the reason a missing API key or a run that
+  // never happened could go a month without anyone noticing.
+  //
+  // Reasons: `opted-out` (the caller passed skipInsights), `test-env`,
+  // `no-api-key`, `vacation` (the user is away and none is wanted),
+  // `not-due` (today's report already exists), `no-data` (the archive window
+  // is empty, so there is nothing to write about) and `error`.
+  const insightBlockedBy = skipInsights
+    ? "opted-out"
+    : process.env.NODE_ENV === "test"
+      ? "test-env"
+      : !process.env.GEMINI_API_KEY
+        ? "no-api-key"
+        : null;
+
+  if (insightBlockedBy) {
+    stats.insightGenerated = false;
+    stats.insightSkipped = insightBlockedBy;
+  } else {
     try {
       const {
         generateInsights,
@@ -884,8 +899,14 @@ async function runCron(now, { skipInsights = false } = {}) {
         if (insight && insight.onVacation) {
           stats.insightGenerated = false;
           stats.insightSkipped = "vacation";
+        } else if (insight) {
+          stats.insightGenerated = true;
         } else {
-          stats.insightGenerated = Boolean(insight);
+          // `generateInsights` returns null when the archive window is empty —
+          // there is nothing to coach on yet. Named, because "no data" and
+          // "the model call blew up" both used to read as a bare false.
+          stats.insightGenerated = false;
+          stats.insightSkipped = "no-data";
         }
       } else {
         stats.insightGenerated = false;
@@ -894,6 +915,8 @@ async function runCron(now, { skipInsights = false } = {}) {
     } catch (error) {
       console.error("[Cron] Insight generation failed:", error.message);
       stats.insightGenerated = false;
+      stats.insightSkipped = "error";
+      stats.insightError = error.message;
     }
   }
 
@@ -908,14 +931,45 @@ function getLastRun() {
 }
 
 /**
- * Schedule the cron job to run every day at midnight using setInterval or node-cron if available.
- * This function should only be called in production (non-test) mode.
+ * Whether this process is a serverless function rather than a long-lived server.
+ *
+ * This app is deployed to Vercel, where the instance is frozen the moment a
+ * response is written and reclaimed shortly after. A timer set for midnight is
+ * never reached — neither node-cron nor `setInterval` ticks between requests —
+ * so `scheduleCron` cannot work there **and registering one anyway is worse
+ * than doing nothing**: it logs "Scheduled daily at UTC midnight" and then
+ * nothing ever runs, which is exactly how a month of missing insight reports,
+ * archive events and stats snapshots went unnoticed.
+ *
+ * On a function runtime the daily run has to come from the platform scheduler
+ * (`vercel.json` → `crons`), which calls `GET /cron/run`.
+ */
+function isServerless() {
+  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+/**
+ * Schedule the cron job to run every day at midnight using node-cron, or a
+ * setInterval fallback. Only called in production (non-test) mode.
+ *
+ * @returns {boolean} Whether an in-process schedule was actually registered.
+ *   `false` on a serverless runtime, where the platform scheduler owns the
+ *   daily run — see `isServerless`.
  */
 function scheduleCron() {
+  if (isServerless()) {
+    console.log(
+      "[Cron] Serverless runtime detected — in-process scheduling cannot work here. " +
+        "The daily run must come from the platform scheduler: vercel.json → crons → GET /cron/run",
+    );
+    return false;
+  }
+
   try {
     const cron = require("node-cron");
     cron.schedule("0 0 * * *", () => runCron(), { timezone: "Etc/UTC" });
     console.log("[Cron] Scheduled daily at UTC midnight via node-cron");
+    return true;
   } catch (_err) {
     // node-cron not installed — fall back to a simple interval check (UTC)
     const MS_PER_MINUTE = 60000;
@@ -937,7 +991,8 @@ function scheduleCron() {
     console.log(
       "[Cron] Scheduled via UTC interval fallback (install node-cron for precision)",
     );
+    return true;
   }
 }
 
-module.exports = { runCron, scheduleCron, getLastRun };
+module.exports = { runCron, scheduleCron, getLastRun, isServerless };

@@ -637,7 +637,32 @@ into them — the two sets are disjoint, so they add without double-counting).
 
 ## Cron Job
 
-**Schedule:** Runs once daily at UTC midnight (`node-cron`, `Etc/UTC` timezone; UTC setInterval fallback). All day computations use UTC.
+**Schedule:** Runs once daily at UTC midnight. All day computations use UTC.
+
+**What fires it depends on the host, and this is not a detail.** Every nightly
+behaviour below — the habit resets, the archive, the stats snapshot, the AI
+report — exists only if something calls `runCron`:
+
+- **Long-lived server** (`npm start`, `npm run dev`): `scheduleCron()` registers
+  an in-process `node-cron` schedule (`Etc/UTC`), with a UTC `setInterval`
+  fallback if node-cron is unavailable.
+- **Serverless** (Vercel, Lambda — where this API is deployed): the instance is
+  frozen the moment a response is written, so **no in-process timer ever
+  fires**. `scheduleCron()` detects this via `VERCEL` /
+  `AWS_LAMBDA_FUNCTION_NAME`, declines, and logs that the platform scheduler
+  owns the run. The schedule lives in `vercel.json`:
+
+  ```json
+  { "crons": [{ "path": "/cron/run", "schedule": "0 0 * * *" }] }
+  ```
+
+  Vercel Cron Jobs issue a **GET** to that path.
+
+`scheduleCron()` returning `false` is the honest answer, and it matters:
+registering a timer that can never tick used to log
+`"Scheduled daily at UTC midnight"` on a host where nothing ran, which is how a
+deployment sat for a month with an empty `TaskArchive`, no `InsightStats`
+snapshot and no insight reports.
 
 ### Step-by-step Execution Order
 
@@ -842,6 +867,13 @@ each period boundary:
   - Store the result in the `Insights` collection
 - Failures here never fail the cron run (logged, `insightGenerated: false` in stats)
 - `POST /insights/generate` ignores the daily gate — an explicit user request always generates a fresh report, and consumes that day's scheduled run
+- **`insightGenerated` is always reported, and a false always has a reason.**
+  `insightSkipped` is one of `opted-out` (the caller passed `skipInsights`),
+  `test-env`, `no-api-key`, `vacation`, `not-due`, `no-data` (the archive window
+  is empty) or `error` (with `insightError` carrying the message). The three
+  pre-conditions used to omit both fields entirely, which made "no report today"
+  and "the report step never ran" indistinguishable from `/cron/status` — the
+  silence that let a misconfigured deployment go unnoticed
 
 ---
 
@@ -1580,13 +1612,16 @@ Manually triggers the cron job. Accepts optional `date` (run as if it were that 
 
 On a night the report is not due (a day already reported on), the same
 response carries
-`"insightGenerated": false` plus `"insightSkipped": "not-due"`.
+`"insightGenerated": false` plus `"insightSkipped": "not-due"`. Other reasons:
+`opted-out`, `test-env`, `no-api-key`, `vacation`, `no-data`, `error`.
 
 ---
 
 #### `GET /cron/run`
 
-Manually triggers the cron job. No request body required. Runs the same steps as `POST /cron/run` using the current UTC date.
+Triggers the cron job. No request body required. Runs the same steps as `POST /cron/run` using the current UTC date.
+
+**This is the production daily trigger**: the Vercel Cron Job in `vercel.json` calls it at 00:00 UTC.
 
 **Response `200`**
 

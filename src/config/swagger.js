@@ -418,13 +418,28 @@ const options = {
               type: "boolean",
               example: true,
               description:
-                "Whether the AI report was generated on this run. Absent when skipInsights was set, in test mode, or without an GEMINI_API_KEY.",
+                "Whether the AI report was generated on this run. Always present; when false, insightSkipped names the reason.",
             },
             insightSkipped: {
               type: "string",
+              enum: [
+                "opted-out",
+                "test-env",
+                "no-api-key",
+                "vacation",
+                "not-due",
+                "no-data",
+                "error",
+              ],
               example: "not-due",
               description:
-                'Present as "not-due" when the run reached the insight step but today\'s report already exists — the report fires once per UTC day, so a second run (a manual /cron/run, a redeploy, or a prior POST /insights/generate today) passes on it.',
+                'Why no report was written, present whenever insightGenerated is false. "opted-out" = skipInsights was set; "test-env" = NODE_ENV=test; "no-api-key" = no GEMINI_API_KEY; "vacation" = the user is away; "not-due" = today\'s report already exists (the report fires once per UTC day, so a second run — a manual /cron/run, a redeploy, or a prior POST /insights/generate today — passes on it); "no-data" = the archive window is empty; "error" = the model call failed and insightError carries the message.',
+            },
+            insightError: {
+              type: "string",
+              example: "No text output in model response",
+              description:
+                'Only present with insightSkipped: "error" — the failure message. The run itself still succeeded.',
             },
             archiveEventsPruned: {
               type: "integer",

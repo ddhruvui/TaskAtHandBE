@@ -488,7 +488,9 @@ describe("Cron API Endpoints", () => {
         .send({ date: "2026-07-23T00:00:00.000Z" })
         .expect(200);
       expect(res.body.statsRefreshed).toBe(true);
-      expect(res.body).not.toHaveProperty("insightGenerated");
+      // No API key under NODE_ENV=test: the report is skipped, and says so
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("test-env");
 
       const snapshot = await request(app)
         .get("/insights/stats/latest")
@@ -555,8 +557,48 @@ describe("Cron API Endpoints", () => {
         .expect(200);
 
       expect(generateInsights).not.toHaveBeenCalled();
-      expect(res.body).not.toHaveProperty("insightGenerated");
-      expect(res.body).not.toHaveProperty("insightSkipped");
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("opted-out");
+    });
+
+    test("a missing API key is reported, not silently omitted", async () => {
+      delete process.env.GEMINI_API_KEY;
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
+
+      expect(generateInsights).not.toHaveBeenCalled();
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("no-api-key");
+    });
+
+    test("a model failure is reported as insightSkipped='error'", async () => {
+      generateInsights.mockRejectedValueOnce(new Error("model exploded"));
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
+
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("error");
+      expect(res.body.insightError).toBe("model exploded");
+      // The rest of the run still completed
+      expect(res.body.statsRefreshed).toBe(true);
+    });
+
+    test("an empty archive window is reported as insightSkipped='no-data'", async () => {
+      generateInsights.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: FRIDAY })
+        .expect(200);
+
+      expect(res.body.insightGenerated).toBe(false);
+      expect(res.body.insightSkipped).toBe("no-data");
     });
 
     test("without skipInsights the insight step runs", async () => {
