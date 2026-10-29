@@ -92,7 +92,7 @@ TaskAtHandBE/
 ├── wiki/                       # Utility-layer wiki (start at Home.md)
 ├── scripts/
 │   └── cleartest.js            # Wipe test collections
-├── vercel.json                 # Daily cron trigger (GET /cron/run at 00:00 UTC)
+├── vercel.json                 # Vercel project config (no crons — see Scheduling the daily run)
 ├── .env
 └── package.json
 ```
@@ -161,14 +161,19 @@ has to trigger it**, and which "something" depends on where the API runs:
 | Host | Trigger |
 | ---- | ------- |
 | Long-lived server (`npm start`, `npm run dev`) | `scheduleCron()` registers an in-process `node-cron` schedule at `0 0 * * *` in `Etc/UTC`, with a UTC `setInterval` fallback |
-| **Serverless (Vercel — the deployed target)** | [`vercel.json`](vercel.json) → `crons` calls `GET /cron/run` at 00:00 UTC |
+| **Serverless (Vercel — the deployed target)** | GitHub Actions [`.github/workflows/daily-cron.yml`](.github/workflows/daily-cron.yml) calls `GET /cron/run` at 12:05 AM America/New_York (EST/EDT aware) |
 
 On a serverless host the instance is frozen the moment a response is written, so
 a timer set for midnight is never reached. `scheduleCron()` detects that
 (`VERCEL` / `AWS_LAMBDA_FUNCTION_NAME`), declines, and says so in the logs
 instead of claiming a schedule that will never fire.
 
-**Deploying to Vercel** needs two things beyond `vercel.json`:
+The workflow schedules both 04:05 and 05:05 UTC and skips whichever one isn't
+midnight in New York, so the run follows daylight saving. It can also be run by
+hand from the repo's Actions tab. Don't add a `crons` entry to `vercel.json` —
+a second trigger would run the job twice a day.
+
+**Deploying to Vercel** needs two things:
 
 1. Set `GEMINI_API_KEY` in the project's environment variables.
 2. Give the function room for the run: cron steps 0–11 plus one Gemini call can
@@ -359,7 +364,7 @@ npm run cleartest
 - `.env` is gitignored — never commit credentials
 - `headerId` is immutable after task creation
 - Priority values are 0-based and always kept contiguous by the model layer (`src/utils/priority.js` — see [`wiki/Priority.md`](wiki/Priority.md))
-- Cron runs daily at UTC midnight — via in-process `node-cron` on a long-lived server, via `vercel.json` → `crons` calling `GET /cron/run` on serverless (see [Scheduling the daily run](#scheduling-the-daily-run))
+- Cron runs daily at UTC midnight — via in-process `node-cron` on a long-lived server, via the GitHub Actions workflow calling `GET /cron/run` at 12:05 AM New York time on serverless (see [Scheduling the daily run](#scheduling-the-daily-run))
 - Tasks carry a `doneAt` timestamp (set when marked done, cleared on undo/reset); ECD changes are logged to `TaskArchive` as `task_rescheduled` events — a postpone (one-time date pushed later) can carry an optional `reason`, and the AI treats a reason-less postpone as procrastination but a valid reason as a legitimate deferral. Manually deleting an **undone** task logs a `task_deleted` event with the user's `reason` (surfaced to AI insights as `deletionInsights`)
 - The archive is bounded: cron step 10 summarises raw events older than `ARCHIVE_RETENTION_DAYS` into monthly `ArchiveSummary` documents and then deletes them. Monthly totals are kept forever, **per-day detail is not recoverable once pruned**, and `GET /archive?days=` can only ever return what is still inside the window
 - Insight generation runs at the end of a cron run when `GEMINI_API_KEY` is set (skipped in tests) — once per UTC day. Every run reports `insightGenerated`, and when it is `false` an `insightSkipped` reason (`opted-out`, `test-env`, `no-api-key`, `vacation`, `not-due`, `no-data`, `error`) says why. Archive writes never throw, so they can't break task operations

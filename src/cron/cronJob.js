@@ -941,8 +941,9 @@ function getLastRun() {
  * nothing ever runs, which is exactly how a month of missing insight reports,
  * archive events and stats snapshots went unnoticed.
  *
- * On a function runtime the daily run has to come from the platform scheduler
- * (`vercel.json` → `crons`), which calls `GET /cron/run`.
+ * On a function runtime the daily run has to come from an external scheduler:
+ * the GitHub Actions workflow `.github/workflows/daily-cron.yml` calls
+ * `GET /cron/run` at 12:05 AM America/New_York.
  */
 function isServerless() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -953,14 +954,14 @@ function isServerless() {
  * setInterval fallback. Only called in production (non-test) mode.
  *
  * @returns {boolean} Whether an in-process schedule was actually registered.
- *   `false` on a serverless runtime, where the platform scheduler owns the
+ *   `false` on a serverless runtime, where the external scheduler owns the
  *   daily run — see `isServerless`.
  */
 function scheduleCron() {
   if (isServerless()) {
     console.log(
       "[Cron] Serverless runtime detected — in-process scheduling cannot work here. " +
-        "The daily run must come from the platform scheduler: vercel.json → crons → GET /cron/run",
+        "The daily run comes from GitHub Actions: .github/workflows/daily-cron.yml → GET /cron/run",
     );
     return false;
   }

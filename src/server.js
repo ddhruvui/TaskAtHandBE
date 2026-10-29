@@ -118,8 +118,9 @@ app.use("/insights", require("./routes/insightRoutes"));
  *     tags: [Cron]
  *     summary: Manually trigger the cron job (GET, no body required)
  *     description: >
- *       The daily production trigger — Vercel Cron Jobs (`vercel.json` → `crons`)
- *       call this path at 00:00 UTC.
+ *       The daily production trigger — the GitHub Actions workflow
+ *       (`.github/workflows/daily-cron.yml`) calls this path at 12:05 AM
+ *       America/New_York.
  *     responses:
  *       200:
  *         description: Cron ran successfully
@@ -230,7 +231,7 @@ const startServer = async () => {
     await require("./models/Archive").ensureIndexes();
     await require("./models/ArchiveSummary").ArchiveSummary.ensureIndexes();
     // Returns false on a serverless runtime, where no in-process timer can
-    // survive between requests and `vercel.json` → `crons` owns the daily run.
+    // survive between requests and the GitHub Actions workflow owns the daily run.
     scheduleCron();
     app.listen(PORT, () => {
       console.log(

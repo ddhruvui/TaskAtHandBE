@@ -595,7 +595,7 @@ trigger itself is tested.
 | Test                                                  | What it checks                                                                       |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | registers an in-process schedule on a long-lived server | No serverless env vars → `isServerless()` false, `scheduleCron()` returns `true`, one node-cron task registered |
-| declines on Vercel                                    | `VERCEL=1` → `isServerless()` true and `scheduleCron()` returns `false`; the platform cron (`vercel.json`) owns the run |
+| declines on Vercel                                    | `VERCEL=1` → `isServerless()` true and `scheduleCron()` returns `false`; the GitHub Actions workflow owns the run |
 | declines on Lambda                                    | `AWS_LAMBDA_FUNCTION_NAME` set → same, so the check is not Vercel-specific            |
 
 ---

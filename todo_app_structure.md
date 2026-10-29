@@ -649,14 +649,10 @@ report — exists only if something calls `runCron`:
 - **Serverless** (Vercel, Lambda — where this API is deployed): the instance is
   frozen the moment a response is written, so **no in-process timer ever
   fires**. `scheduleCron()` detects this via `VERCEL` /
-  `AWS_LAMBDA_FUNCTION_NAME`, declines, and logs that the platform scheduler
-  owns the run. The schedule lives in `vercel.json`:
-
-  ```json
-  { "crons": [{ "path": "/cron/run", "schedule": "0 0 * * *" }] }
-  ```
-
-  Vercel Cron Jobs issue a **GET** to that path.
+  `AWS_LAMBDA_FUNCTION_NAME`, declines, and logs that an external scheduler
+  owns the run: the GitHub Actions workflow `.github/workflows/daily-cron.yml`
+  issues a **GET** to `/cron/run` at 12:05 AM America/New_York (both 04:05 and
+  05:05 UTC are scheduled; the one that isn't midnight in New York skips).
 
 `scheduleCron()` returning `false` is the honest answer, and it matters:
 registering a timer that can never tick used to log
@@ -1621,7 +1617,7 @@ response carries
 
 Triggers the cron job. No request body required. Runs the same steps as `POST /cron/run` using the current UTC date.
 
-**This is the production daily trigger**: the Vercel Cron Job in `vercel.json` calls it at 00:00 UTC.
+**This is the production daily trigger**: the GitHub Actions workflow `.github/workflows/daily-cron.yml` calls it at 12:05 AM America/New_York.
 
 **Response `200`**
 

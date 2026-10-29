@@ -1350,13 +1350,7 @@ unlinked (`projectId: null`) so it leaves the project block.
 
 The cron job runs daily at UTC midnight and performs the following steps to maintain task state and history.
 
-**What fires it depends on the host.** On a long-lived server (`npm start`, `npm run dev`) `scheduleCron()` registers an in-process `node-cron` schedule in the `Etc/UTC` timezone, with a UTC `setInterval` fallback. On a **serverless** host — which is where this API is deployed — no timer survives between requests, so `scheduleCron()` declines and the schedule lives in [`vercel.json`](vercel.json):
-
-```json
-{ "crons": [{ "path": "/cron/run", "schedule": "0 0 * * *" }] }
-```
-
-Vercel Cron Jobs issue a **GET** to that path.
+**What fires it depends on the host.** On a long-lived server (`npm start`, `npm run dev`) `scheduleCron()` registers an in-process `node-cron` schedule in the `Etc/UTC` timezone, with a UTC `setInterval` fallback. On a **serverless** host — which is where this API is deployed — no timer survives between requests, so `scheduleCron()` declines and the schedule lives in the GitHub Actions workflow [`.github/workflows/daily-cron.yml`](.github/workflows/daily-cron.yml), which issues a **GET** to `/cron/run` at 12:05 AM America/New_York (it schedules both 04:05 and 05:05 UTC and skips whichever isn't midnight in New York, so it follows EST/EDT).
 
 ### Cron Steps
 
@@ -1487,7 +1481,8 @@ Manually triggers the cron job with an optional date override in the request bod
 ### `GET /cron/run`
 
 Triggers the cron job. No request body needed. **This is the production daily
-trigger** — the Vercel Cron Job defined in `vercel.json` calls it at 00:00 UTC.
+trigger** — the GitHub Actions workflow `.github/workflows/daily-cron.yml` calls
+it at 12:05 AM America/New_York.
 
 **Response `200`:**
 

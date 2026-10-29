@@ -1302,8 +1302,8 @@ describe("Cron Job", () => {
 
   // The daily run only happens if something actually fires it. On Vercel no
   // in-process timer survives between requests, so scheduleCron must decline
-  // rather than log a schedule that will never run — the platform cron
-  // (vercel.json -> crons -> GET /cron/run) is the trigger there.
+  // rather than log a schedule that will never run — the GitHub Actions
+  // workflow (.github/workflows/daily-cron.yml -> GET /cron/run) is the trigger there.
   describe("scheduleCron — where the daily run comes from", () => {
     const { scheduleCron, isServerless } = require("../src/cron/cronJob");
 
