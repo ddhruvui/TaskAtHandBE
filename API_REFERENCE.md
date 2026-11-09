@@ -159,6 +159,32 @@ once; cron step 8 clears the `done` checkmark at each period boundary (the
 
 ---
 
+### OnCall
+
+```typescript
+interface OnCall {
+  _id: string; // MongoDB ObjectId
+  date: string; // "YYYY-MM-DD" — the day the shift starts
+  start: string; // "HH:mm" local time, "00:00"–"23:59"
+  end: string; // "HH:mm" local time, "00:00"–"24:00"; at or before start = runs past midnight
+  type: "primary" | "secondary"; // default "primary"
+  note: string; // Optional free text (default: "")
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
+}
+```
+
+An on-call shift. **Recorded separately — it never affects tasks**: nothing in
+the cron, archive, stats or insights reads it. An `end` at or before `start`
+means the shift runs into the next day (`"22:00"`–`"06:00"`), and `"24:00"` is
+an end meaning midnight at the close of `date`. Shifts **may not overlap**,
+whatever their type (back-to-back is fine). A `date` before yesterday (UTC) is
+rejected, and cron step 12 deletes shifts dated before yesterday — yesterday is
+kept because an overnight shift that started then may still be running in the
+user's timezone. Clients hide a shift once its end has passed on their clock.
+
+---
+
 ### Vacation
 
 ```typescript
@@ -1143,6 +1169,51 @@ events carry no vacation flag of their own.
 
 ---
 
+## On-call API
+
+Base path: `/oncall`. Shifts are a record only — see the `OnCall` model.
+
+### `GET /oncall`
+
+Shifts dated yesterday (UTC) or later, ordered by `date` then `start`.
+
+**Response `200`:** `OnCall[]`
+
+### `POST /oncall`
+
+```json
+{ "date": "2026-11-16", "start": "09:00", "end": "22:00", "type": "primary", "note": "" }
+```
+
+`date`, `start` and `end` are required; `type` defaults to `"primary"`;
+`note` is optional.
+
+**Response `201`:** the created `OnCall`.
+
+**Error `400`:** malformed date/time/type, `start` equal to `end`, a `date`
+before yesterday, or an overlap with an existing shift
+(`"Shift overlaps an existing one (2026-11-16 09:00–22:00)"`).
+
+### `PUT /oncall/:id`
+
+Partial update of any of `date`, `start`, `end`, `type`, `note`. The resulting
+shift is validated as a whole (same rules as create; the shift never overlaps
+itself).
+
+**Response `200`:** the updated `OnCall`. **Error `400`** / **`404`**.
+
+### `DELETE /oncall/:id`
+
+**Response `200`:**
+
+```json
+{ "deleted": "..." }
+```
+
+**Error `404`:** shift not found.
+
+---
+
 ## Goals API
 
 Base path: `/goals`
@@ -1368,6 +1439,7 @@ The cron job runs daily at UTC midnight and performs the following steps to main
 | 9    | Every day          | Refresh the `InsightStats` snapshot: recompute habit streaks/rates, on-time vs late tasks, reschedules, deletions, per-header rollups and call results over the last 28 days of `TaskArchive` and replace the stored document. **No AI, no `GEMINI_API_KEY`, not suppressed by `skipInsights`** — streaks stay current nightly. Failure never fails the run (`statsRefreshed: false`) |
 | 10   | Every day          | **Summarise, then prune the archive**: fold `TaskArchive` events older than `ARCHIVE_RETENTION_DAYS` (default 30) into `ArchiveSummary` — one document per calendar month, kept forever — then delete the raw events. The cutoff is a **UTC day boundary** (only whole days are pruned) measured from the **real** clock, not the run's `date` override; the fold is idempotent per source day. Retention is clamped up to the 28-day insights window. Reports `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised`, `archiveCutoff` |
 | 11   | Every day          | **Trim stored insight reports**: keep only the newest `INSIGHT_RETENTION_COUNT` (default 100 — the `/insights/history` ceiling, so older reports are unreachable anyway). No roll-up: a report is prose derived from `TaskArchive`, whose numbers survive in `ArchiveSummary`. Retention is floored at the ceiling. Reports `insightReportsPruned` |
+| 12   | Every day          | **Delete ended on-call shifts**: remove `OnCalls` dated before yesterday (relative to the run's day). Yesterday is kept because an overnight shift may still be running in the user's timezone. Nothing else in the cron reads on-call. Reports `onCallPruned` |
 | —    | Every day          | Generate the AI insight report — once per **UTC day**. Requires `GEMINI_API_KEY`; skipped in tests; failure never fails the run. Every run reports `insightGenerated`, plus an `insightSkipped` reason whenever it is `false` (see the table under `POST /cron/run`). `POST /insights/generate` bypasses the once-per-day gate |
 
 #### Resolving "next upcoming ECD" for step 7
@@ -1453,6 +1525,7 @@ Manually triggers the cron job with an optional date override in the request bod
   "archiveMonthsSummarised": 1,
   "archiveCutoff": "2026-07-20",
   "insightReportsPruned": 1,
+  "onCallPruned": 0,
   "insightGenerated": true
 }
 ```
@@ -1507,6 +1580,7 @@ it at 12:05 AM America/New_York.
   "archiveMonthsSummarised": 1,
   "archiveCutoff": "2026-07-20",
   "insightReportsPruned": 1,
+  "onCallPruned": 0,
   "insightGenerated": true
 }
 ```

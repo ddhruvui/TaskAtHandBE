@@ -232,6 +232,33 @@ Vacations CRUD and the re-date flow — booked time off, where a missed day is n
 
 ---
 
+## tests/oncall.test.js
+
+On-call shifts CRUD — a record kept apart from tasks. Times are local `HH:mm`, an end at or before the start runs past midnight, `"24:00"` is a legal end, shifts may not overlap whatever their type, and a date before yesterday is rejected.
+
+| Test                                                  | What it checks                                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| creates a shift, defaulting type to primary           | `POST /oncall` → 201 with `type: "primary"`, `note: ""`, timestamps            |
+| accepts a secondary shift                             | `type: "secondary"` is stored                                                  |
+| accepts an overnight shift (end before start)         | `22:00`–`06:00` → 201                                                          |
+| accepts "24:00" as an end but not as a start          | `09:00`–`24:00` → 201; start `24:00` → 400                                     |
+| accepts yesterday (an overnight shift may still be running) | `date` = yesterday → 201                                                 |
+| rejects %o                                            | Missing/malformed `date`, `start`, `end`, an unknown `type`, and `start === end` → 400 naming the field |
+| rejects a date before yesterday                       | Two days ago → 400 "past"                                                      |
+| rejects an overlap, whatever the type                 | A secondary shift inside a primary one → 400 "overlaps"                        |
+| rejects an overlap with yesterday's overnight shift   | `22:00`–`06:00` then `05:00`–`09:00` next day → 400                            |
+| allows back-to-back shifts                            | `09:00`–`17:00` then `17:00`–`22:00` → both 201                                |
+| lists shifts from yesterday onward, by date then start | `GET /oncall` hides older rows and sorts by `date`, `start`                   |
+| updates only the fields sent                          | `PUT { type }` leaves times alone                                              |
+| validates the resulting shift, not just the fields sent | `PUT { end }` equal to the stored start → 400                               |
+| does not count the shift as overlapping itself        | Shortening a shift → 200                                                       |
+| 404 for a missing or malformed id                     | Unknown and invalid ids → 404                                                  |
+| deletes a shift                                       | `DELETE` → `{ deleted: id }`, gone from the list                               |
+| 404 for a missing id (DELETE)                         | Unknown id → 404                                                               |
+| creating and deleting shifts leaves headers and tasks alone | On-call never touches the todo                                           |
+
+---
+
 ## tests/goals.test.js
 
 Goals CRUD — habit backlogs built one step at a time (roadmaps only; starting/finishing a step happens client-side). Each step also carries the weekdays it runs on (`days`), which clients mirror onto its task's `day_of_week` ECD and which the streak is therefore measured over.
@@ -586,6 +613,9 @@ Tests every step of the cron job using direct `runCron()` calls with a date over
 | archives call_result for ALL calls on the last day of the month | Step 8: run on `2026-03-31` → both biweekly and monthly calls logged with `dueDate: 2026-03-31` |
 | does not double-log call_result when cron re-runs for the same date | Step 8: two runs on `2026-03-15` → still exactly one `call_result` event (idempotency guard) |
 | logs no call_result mid-month                                   | Step 8: run on `2026-03-10` → zero `call_result` events                        |
+| deletes shifts dated before yesterday, keeps yesterday onward   | Step 12: run on `2026-11-17` → shifts on 11-14/11-15 deleted (`onCallPruned: 2`), 11-16 (may still be running overnight) and 11-17 kept |
+| is a no-op when nothing has ended                               | Step 12: a future shift survives, `onCallPruned: 0`                            |
+| leaves tasks untouched                                          | Step 12: pruning a shift never touches headers or tasks                        |
 
 ### scheduleCron — where the daily run comes from
 
@@ -642,6 +672,7 @@ Tests the four cron HTTP endpoints.
 | Test                                                  | What it checks                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------- |
 | reports the retention counters on every run           | `archiveEventsPruned`, `archiveEventsFolded`, `archiveMonthsSummarised` are always numbers |
+| reports onCallPruned as a number                      | Step 12's counter is always present                               |
 | archiveCutoff is null when nothing was old enough to prune | A fresh event leaves `archiveCutoff: null`                     |
 | archiveCutoff is the UTC day events had to predate    | A 60-day-old event is pruned and the cutoff is a `YYYY-MM-DD` string |
 
@@ -1096,3 +1127,13 @@ The arithmetic behind every vacation rule, shared by the live stats and the perm
 | adjustedSlippage never turns lateness negative          | Floored at 0                                                         |
 | adjustedSlippage passes early and on-the-day completions through | Negative and zero are untouched                             |
 | adjustedSlippage: null stays null                       | No `plannedFor` → no slippage                                        |
+
+### utils/oncall
+
+| Test                                                  | What it checks                                                       |
+| ----------------------------------------------------- | -------------------------------------------------------------------- |
+| startMinutes parses HH:mm and rejects 24:00 and malformed values | `"09:30"` → 570; `"24:00"`, `"9:00"`, numbers → null       |
+| endMinutes also accepts "24:00"                       | `"24:00"` → 1440                                                     |
+| shiftMinutes handles same-day, overnight, end-of-day and empty shifts | 780 / 480 / 900 / 1440 / 0                           |
+| shiftsOverlap compares across midnight and treats touching as no overlap | Overnight vs next-morning clash; back-to-back is fine |
+| oldestKeptDate is yesterday, across a month boundary  | `2026-03-01` → `2026-02-28`                                          |

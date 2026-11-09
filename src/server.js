@@ -79,6 +79,7 @@ app.use("/lifeevents", require("./routes/lifeEventRoutes"));
 app.use("/affirmations", require("./routes/affirmationRoutes"));
 app.use("/calls", require("./routes/callRoutes"));
 app.use("/vacations", require("./routes/vacationRoutes"));
+app.use("/oncall", require("./routes/onCallRoutes"));
 app.use("/goals", require("./routes/goalRoutes"));
 app.use("/projects", require("./routes/projectRoutes"));
 app.use("/archive", require("./routes/archiveRoutes"));

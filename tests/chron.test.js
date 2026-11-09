@@ -1300,6 +1300,69 @@ describe("Cron Job", () => {
     });
   });
 
+  describe("Step 12 — Delete ended on-call shifts", () => {
+    async function seedShifts(dates) {
+      const db = await getDatabase();
+      await db.collection("OnCalls-Test").deleteMany({});
+      await db.collection("OnCalls-Test").insertMany(
+        dates.map((date) => ({
+          date,
+          start: "22:00",
+          end: "06:00",
+          type: "primary",
+          note: "",
+        })),
+      );
+    }
+
+    async function remainingDates() {
+      const db = await getDatabase();
+      const rows = await db
+        .collection("OnCalls-Test")
+        .find({})
+        .sort({ date: 1 })
+        .toArray();
+      return rows.map((r) => r.date);
+    }
+
+    test("deletes shifts dated before yesterday, keeps yesterday onward", async () => {
+      await seedShifts(["2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"]);
+
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-11-17" })
+        .expect(200);
+
+      expect(res.body.onCallPruned).toBe(2);
+      // Nov 16's overnight shift may still be running on Nov 17 local time.
+      expect(await remainingDates()).toEqual(["2026-11-16", "2026-11-17"]);
+    });
+
+    test("is a no-op when nothing has ended", async () => {
+      await seedShifts(["2026-11-20"]);
+      const res = await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-11-17" })
+        .expect(200);
+      expect(res.body.onCallPruned).toBe(0);
+      expect(await remainingDates()).toEqual(["2026-11-20"]);
+    });
+
+    test("leaves tasks untouched", async () => {
+      const header = await createHeader("On-call isolation");
+      await createTask({ headerId: header._id, name: "Unrelated" });
+      await seedShifts(["2026-01-01"]);
+
+      await request(app)
+        .post("/cron/run")
+        .send({ date: "2026-11-17" })
+        .expect(200);
+
+      const tasks = await getTasksForHeader(header._id);
+      expect(tasks.map((t) => t.name)).toEqual(["Unrelated"]);
+    });
+  });
+
   // The daily run only happens if something actually fires it. On Vercel no
   // in-process timer survives between requests, so scheduleCron must decline
   // rather than log a schedule that will never run — the GitHub Actions

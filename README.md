@@ -10,6 +10,7 @@ Node.js/Express REST API backend for the TaskAtHand application, backed by Mongo
 - **Affirmations** — single short lines the user reads daily (e.g. "Thank you blessing"); completely independent of tasks and headers
 - **Calls** — people the user must call biweekly or monthly (e.g. "Grandma"); completely independent of tasks and headers, with the "called" checkmark auto-reset by the cron at each period boundary (the 15th and the last day of the month)
 - **Vacation** — periods the user booked off (`{ startDate, endDate }`, both inclusive, no overlaps, bookable in advance and editable after the fact). Vacation is a **lens on the history, not a pause button**: every cron step runs unchanged and anything ticked off while away still counts, but a scheduled day that passed on holiday is read as *paused* rather than missed — out of completion rates, `missedByDow` and per-header misses, with slippage, postpones, deletions and call periods each getting their own rule. **Streaks restart on return rather than spanning the break.** While away the stats freeze at the day before departure and the AI report is skipped entirely; the first report back opens with "returned from an N-day break" and a restart plan
+- **On-call** — on-call shifts (`{ date, start, end, type }`, local `HH:mm` times, `type` `primary` (default) or `secondary`). **Recorded separately and never affects tasks** — nothing in the cron, archive, stats or insights reads it. An end at or before the start runs past midnight; shifts may not overlap. Cron step 12 deletes shifts that have ended (dated before yesterday), so only upcoming shifts are kept
 - **Goals** — long-term aims (e.g. "Improve Health") broken into small steps/habits, each `pending` (backlog/paused) or `under_progress` (a lifelong habit) with the weekdays it runs on (`days`, default all seven); clients start one step at a time as a recurring task on those days under a header named "One Step At A Time" (reused if it exists, created otherwise) and keep the two views in sync client-side. Because the nightly archive only records a result on scheduled days, the habit's streak counts only the days the step is set to
 - **Projects** — long-term projects (e.g. "Automated Stock Market") broken into ordered tasks, with header-style priority ordering, a done/undone barrier inside each project and dated steps ranked above undated ones; giving a task a date mirrors it into the todo under the project's own header (created via `POST /headers` with a `projectId`), and the cron marks the project task done when it deletes the completed todo task — done steps are retained in the project
 - **Server-owned header ordering** — headers linked to a project (`projectId`) are kept in the projects' priority order as one contiguous block, re-applied atomically on header create, project move/rename/delete and nightly by the cron; clients never reorder them
@@ -43,10 +44,11 @@ TaskAtHandBE/
 │   │   ├── goalController.js
 │   │   ├── projectController.js
 │   │   ├── lifeEventController.js
+│   │   ├── onCallController.js
 │   │   ├── vacationController.js
 │   │   └── insightController.js
 │   ├── cron/
-│   │   └── cronJob.js          # Daily cron logic (steps 0–11 + daily AI report)
+│   │   └── cronJob.js          # Daily cron logic (steps 0–12 + daily AI report)
 │   ├── models/
 │   │   ├── BaseModel.js        # Collection plumbing every model inherits
 │   │   ├── OrderedModel.js     # BaseModel + collection-wide priority ordering
@@ -56,6 +58,7 @@ TaskAtHandBE/
 │   │   ├── LifeEvent.js        # Annually recurring life events (cron adds them to the todo)
 │   │   ├── Affirmation.js      # Daily short lines (independent of tasks)
 │   │   ├── Call.js             # Biweekly/monthly call reminders (independent of tasks)
+│   │   ├── OnCall.js           # On-call shifts; a record only, pruned nightly once ended
 │   │   ├── Vacation.js         # Booked time off; the ranges every vacation rule derives from
 │   │   ├── Goal.js             # Habit backlogs built one step at a time
 │   │   ├── Project.js          # Long-term projects with ordered task lists
@@ -83,6 +86,7 @@ TaskAtHandBE/
 │       ├── lifeEventRoutes.js
 │       ├── affirmationRoutes.js
 │       ├── callRoutes.js
+│       ├── onCallRoutes.js
 │       ├── vacationRoutes.js
 │       ├── goalRoutes.js
 │       ├── projectRoutes.js
@@ -146,7 +150,7 @@ Server listens on **port 3002** by default.
 | `MONGO_URI`   | —             | MongoDB connection string (required)                   |
 | `PORT`        | `3002`        | HTTP port                                              |
 | `NODE_ENV`    | `development` | `development` / `production` / `test`                  |
-| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Vacations, Goals, Projects, TaskArchive, ArchiveSummary, Insights, InsightStats) |
+| `USE_TEST_DB` | `false`       | `true` → use `*-Test` collections (Headers, Tasks, Events, LifeEvents, Affirmations, Calls, Vacations, OnCalls, Goals, Projects, TaskArchive, ArchiveSummary, Insights, InsightStats) |
 | `GEMINI_API_KEY` | —          | Google Gemini API key for AI insight generation (optional; insights are skipped without it) |
 | `GEMINI_MODEL` | `gemini-3.7-flash` | Which Gemini model writes the daily report. Read per call, so a restart switches it — no deploy. Set to `gemini-3.1-pro-preview` once billing is enabled (Pro has no free-tier quota) |
 | `INSIGHT_RETENTION_COUNT` | `100` | How many stored AI reports survive cron step 11. Floored at the `/insights/history` ceiling (`Insight.MAX_HISTORY`), so it can only ever be raised |
@@ -176,7 +180,7 @@ a second trigger would run the job twice a day.
 **Deploying to Vercel** needs two things:
 
 1. Set `GEMINI_API_KEY` in the project's environment variables.
-2. Give the function room for the run: cron steps 0–11 plus one Gemini call can
+2. Give the function room for the run: cron steps 0–12 plus one Gemini call can
    exceed the default function timeout, and the AI report is last, so a short
    timeout loses exactly that. Raise **Max Duration** in the project's Function
    settings (60s is ample).
@@ -259,6 +263,15 @@ report is missing, `insightSkipped` in the cron response names the reason.
 | `POST`   | `/vacations`             | Book a vacation (`{ startDate, endDate, note? }`, both inclusive)|
 | `PUT`    | `/vacations/:id`         | Correct a vacation's dates or note                               |
 | `DELETE` | `/vacations/:id`         | Delete a vacation (and the forgiveness it granted)               |
+
+### On-call
+
+| Method   | Path          | Description                                                                 |
+| -------- | ------------- | --------------------------------------------------------------------------- |
+| `GET`    | `/oncall`     | Upcoming shifts (dated yesterday or later), by date then start              |
+| `POST`   | `/oncall`     | Add a shift (`{ date, start, end, type?, note? }`, type defaults to primary) |
+| `PUT`    | `/oncall/:id` | Update a shift (validated as a whole)                                       |
+| `DELETE` | `/oncall/:id` | Delete a shift                                                              |
 
 ### Goals
 
@@ -344,20 +357,21 @@ npm run cleartest
 | `lifeevents.test.js`     | Life Events CRUD, date validation, lastAddedYear baselining, priority moves |
 | `affirmations.test.js`   | Affirmations CRUD, validation, trimming, and sorting       |
 | `calls.test.js`          | Calls CRUD, validation, doneAt lifecycle, and sorting      |
+| `oncall.test.js`         | On-call CRUD, time/type validation, overnight and `24:00` shifts, overlap rejection, the yesterday cutoff, and isolation from tasks |
 | `vacation.test.js`       | Vacations CRUD, inclusive/overlap validation, `/status`, the re-date task list, and the `vacationMove` reschedule flag |
 | `goals.test.js`          | Goals CRUD, step status/days validation, trimming, and priority ordering |
 | `projects.test.js`       | Projects CRUD, task validation, dated-first/done-last task sorting, priority moves, project↔header ordering cascades |
 | `business-logic.test.js` | Priority reordering, done/undone toggling                  |
 | `ecd-validation.test.js` | ECD type/value validation rules                            |
 | `cron-api.test.js`       | `/cron/run`, `/cron/details`, and `/cron/status` endpoints (incl. the nightly stats snapshot, the once-per-day report gate, every `insightSkipped` reason, and the vacation report skip) |
-| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync) and `scheduleCron`'s serverless detection |
+| `chron.test.js`          | Cron step logic (recurring resets, short-month resolution, delete, empty-header deletion + project header order, life event add/complete, task reorder, call resets, project task sync, on-call prune) and `scheduleCron`'s serverless detection |
 | `collections.test.js`    | Test/production collection switching                       |
 | `error-handling.test.js` | 400/404/500 error responses                                |
 | `archive.test.js`        | TaskArchive event log: cron archiving, reschedule + deletion logging, `GET /archive`, and vacation rules surviving the permanent monthly fold |
 | `insights.test.js`       | Stats computation (incl. deletions, on-time vs late, and every vacation rule: paused days, streak restart, the display freeze, adjusted slippage, call exemption, lifetime totals), the once-per-day report gate, and the four `/insights` endpoints |
 | `done-at.test.js`        | `doneAt` lifecycle (set on done, cleared on undo/cron reset) |
 | `system.test.js`         | `GET /` and `GET /health` endpoints                        |
-| `utils.test.js`          | The shared utility layer: ordering, priority arithmetic, collection/document helpers, validation, the route wrapper, UTC dates, stats maths, vacation arithmetic |
+| `utils.test.js`          | The shared utility layer: ordering, priority arithmetic, collection/document helpers, validation, the route wrapper, UTC dates, stats maths, vacation arithmetic, on-call shift arithmetic |
 
 ## Notes
 

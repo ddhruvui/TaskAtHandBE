@@ -256,6 +256,37 @@ a project is backfilled, and a header pointing at a deleted project has its
 
 ---
 
+### OnCall (an on-call shift — a record only, never affects tasks)
+
+```json
+{
+  "_id": "ObjectId",
+  "date": "YYYY-MM-DD (the day the shift starts)",
+  "start": "HH:mm (local, 00:00–23:59)",
+  "end": "HH:mm (local, 00:00–24:00; at or before start = runs past midnight)",
+  "type": "primary | secondary (default primary)",
+  "note": "string (optional, default \"\")",
+  "createdAt": "ISO string",
+  "updatedAt": "ISO string"
+}
+```
+
+- **Kept apart from the todo.** Nothing in the cron (except step 12), the
+  archive, the stats or the insights reads `OnCalls`; a shift never changes a
+  task.
+- Times are wall-clock in the user's own timezone. `"22:00"`–`"06:00"` is one
+  overnight shift; `"24:00"` is a legal end (midnight at the close of `date`),
+  never a start. `start === end` is rejected.
+- Shifts **may not overlap**, whatever their type — compared on one absolute
+  minute axis, so an overnight shift clashes with an early shift the next day.
+  Back-to-back shifts are fine.
+- A `date` before yesterday (UTC) is rejected on create/update, and **cron step
+  12 deletes shifts dated before yesterday**. Unlike `Vacations` these rows are
+  disposable — no rule is re-derived from a past shift. Arithmetic lives in
+  `src/utils/oncall.js`.
+
+---
+
 ### Vacation (a period off, where missed work is not procrastination)
 
 ```json
@@ -671,7 +702,7 @@ outcome is only knowable at the following midnight:
 - For every `day_of_month` / `day_of_year` task due **yesterday**: log a `task_result` event the same way
 - Idempotent: tasks already archived for that `dueDate` are skipped, so manual cron runs don't double-log
 
-> **Vacation changes nothing in steps 0–11.** Vacation is a lens on the
+> **Vacation changes nothing in steps 0–12.** Vacation is a lens on the
 > history, not a pause button: habits still reset, done one-off tasks are
 > still deleted, life events are still added, priorities are still re-sorted,
 > and outcomes are still archived. The run reports `onVacation` so the two
@@ -852,6 +883,18 @@ each period boundary:
   `MAX_HISTORY`: trimming inside the API's own ceiling would make
   `?limit=100` unservable. A smaller value is logged and ignored
 - Reports `insightReportsPruned`
+
+#### Step 12 — Delete ended on-call shifts _(every night)_
+
+- Deletes `OnCalls` whose `date` is before yesterday, measured from the run's
+  day (so `POST /cron/run { date }` drives it)
+- **Yesterday is kept on purpose**: the cron runs on UTC days while shifts are
+  in the user's local time, and an overnight shift that started yesterday may
+  still be running. The clients hide a shift the moment its end passes on
+  their own clock, so the user never sees the extra day
+- On-call is otherwise invisible to the cron — no task, header or archive
+  event is touched
+- Reports `onCallPruned`
 
 #### Final step — Generate the AI insight report
 
@@ -1320,6 +1363,27 @@ Deletes a call.
 ```
 
 ---
+
+### On-call
+
+#### `GET /oncall`
+
+Shifts dated yesterday (UTC) or later, by `date` then `start`.
+
+#### `POST /oncall`
+
+`{ date, start, end, type?, note? }` → **201** with the shift. `type`
+defaults to `"primary"`. **400** on a malformed field, `start === end`, a date
+before yesterday, or an overlap.
+
+#### `PUT /oncall/:id`
+
+Partial update; the resulting shift is validated as a whole. **200** / **400** /
+**404**.
+
+#### `DELETE /oncall/:id`
+
+**200** `{ "deleted": id }` / **404**.
 
 ### Vacations
 

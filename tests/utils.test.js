@@ -1130,3 +1130,56 @@ describe("utils/vacation", () => {
     });
   });
 });
+
+describe("utils/oncall", () => {
+  const {
+    startMinutes,
+    endMinutes,
+    shiftMinutes,
+    shiftsOverlap,
+    oldestKeptDate,
+  } = require("../src/utils/oncall");
+
+  test("startMinutes parses HH:mm and rejects 24:00 and malformed values", () => {
+    expect(startMinutes("00:00")).toBe(0);
+    expect(startMinutes("09:30")).toBe(570);
+    expect(startMinutes("23:59")).toBe(1439);
+    expect(startMinutes("24:00")).toBeNull();
+    expect(startMinutes("9:00")).toBeNull();
+    expect(startMinutes(9)).toBeNull();
+  });
+
+  test('endMinutes also accepts "24:00"', () => {
+    expect(endMinutes("24:00")).toBe(1440);
+    expect(endMinutes("22:00")).toBe(1320);
+  });
+
+  test("shiftMinutes handles same-day, overnight, end-of-day and empty shifts", () => {
+    expect(shiftMinutes({ start: "09:00", end: "22:00" })).toBe(780);
+    expect(shiftMinutes({ start: "22:00", end: "06:00" })).toBe(480);
+    expect(shiftMinutes({ start: "09:00", end: "24:00" })).toBe(900);
+    expect(shiftMinutes({ start: "00:00", end: "24:00" })).toBe(1440);
+    expect(shiftMinutes({ start: "09:00", end: "09:00" })).toBe(0);
+  });
+
+  test("shiftsOverlap compares across midnight and treats touching as no overlap", () => {
+    const overnight = { date: "2026-11-12", start: "22:00", end: "06:00" };
+    expect(
+      shiftsOverlap(overnight, { date: "2026-11-13", start: "05:00", end: "09:00" }),
+    ).toBe(true);
+    expect(
+      shiftsOverlap(overnight, { date: "2026-11-13", start: "06:00", end: "09:00" }),
+    ).toBe(false);
+    expect(
+      shiftsOverlap(
+        { date: "2026-11-12", start: "09:00", end: "17:00" },
+        { date: "2026-11-12", start: "17:00", end: "22:00" },
+      ),
+    ).toBe(false);
+  });
+
+  test("oldestKeptDate is yesterday, across a month boundary", () => {
+    expect(oldestKeptDate("2026-11-17")).toBe("2026-11-16");
+    expect(oldestKeptDate("2026-03-01")).toBe("2026-02-28");
+  });
+});

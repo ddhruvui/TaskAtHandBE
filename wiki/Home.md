@@ -39,6 +39,7 @@ internal, and are covered through the public function that wraps them.
 | `utils/dates.js` | UTC calendar arithmetic | [Dates and Stats](Dates-and-Stats.md) |
 | `utils/stats.js` | the arithmetic behind the insights numbers | [Dates and Stats](Dates-and-Stats.md) |
 | `utils/vacation.js` | what a booked day off does to every procrastination signal | [Vacation](Vacation.md) |
+| `utils/oncall.js` | on-call shift arithmetic: HH:mm parsing, overnight length, overlap, the yesterday cutoff | (documented in the file; on-call is a record only — see `todo_app_structure.md`) |
 | `models/BaseModel.js` | collection plumbing every model shares | [Model base classes](Model-Base-Classes.md) |
 | `models/OrderedModel.js` | `BaseModel` plus collection-wide priority ordering | [Model base classes](Model-Base-Classes.md) |
 

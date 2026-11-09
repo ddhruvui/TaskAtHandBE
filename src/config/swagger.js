@@ -42,6 +42,11 @@ const options = {
         description:
           "Vacation range management — periods where missed work is not procrastination",
       },
+      {
+        name: "OnCall",
+        description:
+          "On-call shifts (primary/secondary) — a record only, never affects tasks",
+      },
       { name: "Cron", description: "Cron job trigger endpoint" },
       { name: "Archive", description: "Task history (TaskArchive) endpoints" },
       {
@@ -334,6 +339,36 @@ const options = {
               example: "2026-09-15",
             },
             note: { type: "string", example: "Kerala trip" },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        OnCall: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "507f1f77bcf86cd799439011" },
+            date: {
+              type: "string",
+              description: "Day the shift starts, YYYY-MM-DD",
+              example: "2026-11-16",
+            },
+            start: {
+              type: "string",
+              description: "Local start time, HH:mm (00:00–23:59)",
+              example: "09:00",
+            },
+            end: {
+              type: "string",
+              description:
+                "Local end time, HH:mm (00:00–24:00). At or before start = runs past midnight",
+              example: "22:00",
+            },
+            type: {
+              type: "string",
+              enum: ["primary", "secondary"],
+              example: "primary",
+            },
+            note: { type: "string", example: "" },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
           },

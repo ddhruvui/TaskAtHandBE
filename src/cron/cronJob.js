@@ -779,6 +779,26 @@ async function step11TrimInsightReports() {
   return Insight.pruneToNewest(keep);
 }
 
+/**
+ * Step 12 — Delete ended on-call shifts.
+ *
+ * On-call is a record kept apart from tasks; nothing else in the cron reads
+ * it. Shifts dated before yesterday are deleted. Yesterday's are kept because
+ * the run is on UTC days while shifts are in the user's local time, and an
+ * overnight shift that started yesterday may still be running — the clients
+ * hide a shift the moment its end passes on their own clock.
+ *
+ * Measured from the run's `today`, so `POST /cron/run { date }` can drive it.
+ *
+ * @param {Date} today  UTC midnight of the run
+ * @returns {Promise<number>} shifts deleted
+ */
+async function step12PruneOnCall(today) {
+  const OnCall = require("../models/OnCall");
+  const { oldestKeptDate } = require("../utils/oncall");
+  return OnCall.pruneBefore(oldestKeptDate(utcDayString(today)));
+}
+
 // ─── Main runner ──────────────────────────────────────────────────────────────
 
 /** Persisted result of the most recent cron run (in-memory). */
@@ -825,10 +845,11 @@ async function runCron(now, { skipInsights = false } = {}) {
   const statsRefreshed = await step9RefreshStatsSnapshot();
   const archivePruned = await step10PruneArchive();
   const insightReportsPruned = await step11TrimInsightReports();
+  const onCallPruned = await step12PruneOnCall(today);
 
   const stats = {
     ranAt: today.toISOString(),
-    // Nothing in steps 0–11 behaves differently on a vacation day — vacation
+    // Nothing in steps 0–12 behaves differently on a vacation day — vacation
     // is a lens on the history, not a pause button. It is reported because it
     // explains why the AI report below did not run, and why the stats
     // snapshot stopped moving.
@@ -852,6 +873,7 @@ async function runCron(now, { skipInsights = false } = {}) {
     archiveMonthsSummarised: archivePruned.monthsTouched,
     archiveCutoff: archivePruned.cutoff,
     insightReportsPruned,
+    onCallPruned,
   };
 
   // Generate the AI insight report. It fires once per UTC day, and every run

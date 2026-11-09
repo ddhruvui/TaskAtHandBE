@@ -13,6 +13,7 @@ const testCollections = [
   "Projects-Test",
   "Calls-Test",
   "Vacations-Test",
+  "OnCalls-Test",
   "TaskArchive-Test",
   "Insights-Test",
   "InsightStats-Test",

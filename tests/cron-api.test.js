@@ -399,6 +399,11 @@ describe("Cron API Endpoints", () => {
       });
     });
 
+    test("reports onCallPruned as a number", async () => {
+      const res = await request(app).post("/cron/run").expect(200);
+      expect(typeof res.body.onCallPruned).toBe("number");
+    });
+
     test("archiveCutoff is null when nothing was old enough to prune", async () => {
       const db = await getDatabase();
       await db.collection("TaskArchive-Test").insertOne({
